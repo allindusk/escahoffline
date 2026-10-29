@@ -1,99 +1,102 @@
-# ============================================================
-#  这个仓库只放「程序」，不放游戏素材。
-#  素材体积 20 GB+ 且版权不属于本项目，一律通过资源包分发。
-# ============================================================
+# ============================================================================
+#  白名单模式：**默认忽略一切，只显式放开「程序本体」**
+# ============================================================================
+# 为什么反过来写：
+#   以前是黑名单（忽略 media/、char_*、userdata/ …），结果是每新增一类运行时
+#   文件都要记得补一条规则。实际已经漏过 5 次，每次都把本机数据带进了仓库：
+#     · web/assets/i18n/zh-Hans   用户译文 → 新装剧情莫名变中文
+#     · web/data/imgmap.x2.js     超分记录 → 新环境以为"全都超分过了"
+#     · web/data/sfxmap.js        音频映射 → 有映射没文件
+#     · web/data/packs.json       旧 zip 清单
+#     · .git.old/                 重置历史时的旧仓库备份
+#
+#   现在反过来：**新文件默认不上传**，要上传必须在这里显式加一行。
+#   漏掉一条规则的代价从"泄露用户数据"变成"少提交一个文件"，后者一眼能发现。
+#
+# 配套：tools/verify_release.py 用同一份白名单构建"新用户视角"的干净目录并自检。
+# ============================================================================
 
-# ---------- 游戏素材（绝对不要提交） ----------
-web/media/**
-!web/media/.gitkeep
+/*
 
-# ---------- 资源清单（不随仓库分发） ----------
-# manifest 会随官方更新变化，打包进仓库只会让用户拿到过期数据；
-# 首次使用与「刷新资源清单」都会现拉最新的（约 5 MB，有进度条）。
-Manifest*Ex.json
-Manifest*Ex.prev.json
-Manifest*Ex.raw
-Manifest*Ex.tsv
-Manifest*Ex.names.txt
-server/cdn/data/*.raw
+# ---------- 仓库自身 ----------
+!/.github/
+!/.gitattributes
+!/.gitignore
 
-# ---------- 视频导出的中间产物 ----------
-# 每部剧情几百张 1080p PNG（几百 MB），导出成功后会自己清掉
-tools/video/out/
-tools/video/__pycache__/
+# ---------- 根目录程序文件 ----------
+!/VERSION
+!/LICENSE
+!/NOTICE.md
+!/README.md
+!/requirements.txt
+!/start.sh
+!/启动.bat
 
-# ---------- 剧情正文数据 ----------
-# 索引（names/index/advindex/imgmap/sfxmap/charmeta/cgmap/packs.json）要进仓库，
-# 播放器靠它画目录树；正文 char_*.js / adv_*.js 由 core 资源包分发。
-web/data/char_*.js
-web/data/adv_*.js
+# ---------- 程序目录 ----------
+!/server/
+!/tools/
+!/docs/
 
-# ---------- 用户数据 ----------
-userdata/
-!userdata/.gitkeep
+# ---------- web ----------
+# web 下只要：页面、前端资源、数据索引、媒体目录占位、两个开发脚本
+!/web/
+/web/*
+!/web/*.html
+!/web/assets/
+!/web/data/
+!/web/media/
+!/web/serve.py
+!/web/stop_server.ps1
+!/web/dev-preview.bat
+!/web/dev-stop.bat
 
-# ---------- 本地的资源构建/分析中间产物 ----------
-_manifest_analysis/
-_tools/
-_TRASH/
-_video/
-atvpn_subscription_extract/
-glossary/
-prompt.txt
+# ---------- web/data ----------
+# 只保留「随程序自带的索引」。以下全部属于本机数据，不进仓库：
+#   char_*.js / adv_*.js   已装剧情正文
+#   imgmap.x2.js           超分记录
+#   imgmap.base.js         WebP 覆盖层
+#   sfxmap.js|json         音频映射（依赖本机导出的 m4a）
+#   stand_slot.json        立绘落点缓存
+#   *.orig / *.bak         手工备份
+/web/data/*
+!/web/data/advindex.js
+!/web/data/app.json
+!/web/data/cgmap.js
+!/web/data/charmeta.js
+!/web/data/imgmap.js
+!/web/data/index.js
+!/web/data/names.js
+!/web/data/packs.links.js
+!/web/data/stand_layers.json
 
-# ---------- 备份与临时文件 ----------
+# ---------- web/media ----------
+# 解包出来的图片语音全在本机，仓库里只留一个空目录占位
+/web/media/*
+!/web/media/.gitkeep
+
+# ============================================================================
+#  细粒度排除：上面用 ! 放开了整个目录，目录内的这一类仍要挡掉
+#  （gitignore 的 ! 只到目录级，放开了 server/ 就等于放开它下面的一切）
+# ============================================================================
+
+# 编译缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 手工备份（改代码时留下的 .orig/.bak）
+*.orig
 *.bak
 *.bak2
-*.orig
-*.tmp
-*.part
-*.part.json
-*.log
-_check.txt
-_debug_raw.txt
-_prints.txt
-_snap_*.txt
 
-# ---------- Python ----------
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-*.egg-info/
+# 用户译文：属于用户自己攒的数据，不是程序
+# 放进发布包会让用户装完剧情莫名变中文
+/web/assets/i18n/zh-Hans/
+/web/assets/i18n/index.json
 
-# ---------- 编辑器 / 系统 ----------
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-desktop.ini
+# 视频导出的渲染中间产物
+/tools/video/out/
 
-# ---------- 本地覆盖 ----------
-web/data/packs.prev.json
-web/data/imgmap.pre_split.js.bak
+# 本机分析/逆向工作目录（体积几十 GB，绝不能进仓库）
+/_manifest_analysis/
 
-# ---------- 用户数据 / 运行时产物（不进仓库，也不进发布包） ----------
-# 剧情译文是用户自己攒的，不是程序的一部分：
-#   仓库和便携包里都不该有，否则用户装完剧情会莫名变成中文。
-web/assets/i18n/zh-Hans/
-web/assets/i18n/index.json
-web/assets/i18n/**/*.bak
-web/assets/i18n/**/*.bak2
-web/assets/i18n/**/*.e2ebak
-# sfxmap.json 是 export_sfx.py 的中间产物，网页读的是 sfxmap.js
-web/data/sfxmap.json
-web/data/*.orig
-
-# 音频映射是运行时产物（依赖本机已导出的 m4a），不该入库
-web/data/sfxmap.js
-web/data/sfxmap.json
-
-# ---------- 超分 / 合成产物（属于本机数据，不进仓库、不进发布包） ----------
-# imgmap.x2.js 记录"我本机超分过哪些图"。打进包会让新用户以为全都超分过了，
-# 画质页会显示"没有需要超分的图"，实际一张都没有。
-web/data/imgmap.x2.js
-web/data/imgmap.base.js
-web/data/stand_slot.json
-
-# 重置历史时的旧仓库备份（含旧的提交对象，别提交）
-.git.old/
