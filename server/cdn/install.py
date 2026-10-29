@@ -266,7 +266,7 @@ PUBLIC_PARTS = {
 
 
 def install_base(job=None, workers: int = 48,
-                 parts=("bg", "bgm", "sfx")) -> dict:
+                 parts=("bg", "bgm", "sfx", "avatar")) -> dict:
     """下载并解包「公共素材」：背景 / BGM / 音效。
 
     为什么值得单独做一个入口
@@ -276,8 +276,16 @@ def install_base(job=None, workers: int = 48,
     能精确反查到 ``bundle_music_89b98a79_...``（实测 10/10 命中），
     所以**全量下齐之后，所有剧情的 BGM 都能响**——这是"没音乐"的根治办法。
 
-    体积（清单实测）：背景 205 MB + BGM 539 MB + 音效 31 MB ≈ **775 MB**。
-    相对全量素材 20.75 GB 只占 3.7%，但之后装任何剧情都不用再补。
+    体积（清单实测）：背景 205 MB + BGM 539 MB + 音效 31 MB + 头像 20 MB ≈ **795 MB**。
+    相对全量素材 20.75 GB 只占 3.8%，但之后装任何剧情都不用再补。
+
+    关于头像（avatar）
+    ------------------
+    侧栏头像来自 ``bundle_chara_c-panel_<cid>``（角色面板的半身像）。剧本**不引用**
+    它，所以按剧本引用下载是拿不到的；但它只有 384 个 / 19.8 MB，且 dependencies 为空
+    （不跟任何包绑定），因此归入公共素材最合适：
+       · 体积可以忽略
+       · **没装的角色也能显示头像**，方便认人（若按剧情下载，未装角色就是空白）
     """
     config.ensure_dirs()
     mf = select.Manifest(ensure_manifest(job))
@@ -293,6 +301,8 @@ def install_base(job=None, workers: int = 48,
         _total += len([n for n in mf.index if n.startswith("bundle_music_")])
     if "sfx" in parts:
         _total += len([n for n in mf.index if n.startswith("bundle_sound_")])
+    if "avatar" in parts:
+        _total += len([n for n in mf.index if n.startswith("bundle_chara_c-panel_")])
     done_base = 0
     if job is not None and _total:
         job.set_total(_total, "个")
@@ -301,6 +311,10 @@ def install_base(job=None, workers: int = 48,
         if "bg" in parts:
             _bytes += sum(int((mf.index.get(mf.back_bundle(k)) or {}).get("size") or 0)
                           for k in ((_m.load_imgmap().get("back") or {})))
+        if "avatar" in parts:
+            _bytes += sum(int(e.get("size") or 0)
+                          for n, e in mf.index.items()
+                          if n.startswith("bundle_chara_c-panel_"))
         for _pref in ("bundle_music_", "bundle_sound_"):
             if (_pref == "bundle_music_" and "bgm" not in parts) or \
                (_pref == "bundle_sound_" and "sfx" not in parts):
@@ -351,6 +365,38 @@ def install_base(job=None, workers: int = 48,
         stages.regen_sfxmap()
         out[kind] = len(ents)
         out["bytes"] += sz
+
+    # ④ 角色头像：剧本不引用 c-panel，但它小又不依赖任何包，
+    #    放进公共素材后**未装的角色也有头像**，比"装剧情时才下"更实用。
+    if "avatar" in parts:
+        pref = "bundle_chara_c-panel_"
+        ents = [e for n, e in mf.index.items() if n.startswith(pref)]
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        if job is not None:
+            job.log(f"④ 角色头像 {len(ents)} 个包 / {sz / 1048576:.0f} MB")
+        stages.fetch(ents, workers, "角色头像", skip=True,
+                     pause_event=_pe(job), job=job, done_offset=done_base)
+        done_base += len(ents)
+        if job is not None:
+            job.progress(message=f"生成头像（{len(ents)} 个，这步比下载久）…")
+        n_ok = 0
+        for e in ents:
+            name = str(e.get("bundle_name") or "")
+            tail = name.rsplit("_", 1)[-1]
+            try:
+                if stages.export_avatar(int(tail)):
+                    n_ok += 1
+            except Exception:                                  # noqa: BLE001
+                pass
+        # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
+        try:
+            stages.regen_imgmap()
+        except Exception:                                      # noqa: BLE001
+            pass
+        out["avatar"] = n_ok
+        out["bytes"] += sz
+        if job is not None:
+            job.log(f"   头像生成完毕：{n_ok}/{len(ents)}")
 
     # 记录本次各类的清单包数，下次刷新清单据此判断"有没有新增"
     try:
@@ -404,6 +450,7 @@ def _cur_counts() -> dict:
         "bg": len([n for n in idx if n.startswith("bundle_bgimage_")]),
         "bgm": len([n for n in idx if n.startswith("bundle_music_")]),
         "sfx": len([n for n in idx if n.startswith("bundle_sound_")]),
+        "avatar": len([n for n in idx if n.startswith("bundle_chara_c-panel_")]),
     }
 
 
@@ -474,9 +521,14 @@ def public_status() -> dict:
     # 后来清过缓存，按缓存算会得出几百个虚假的"待下载"。判断是否齐全一律看
     # **解包产物**（上面的 back/music/sfx），官方新增时 backTotal 等会变大，
     # 前端自然显示成 601/620，用户点「更新」即可，不需要额外数字。
+    adir2 = os.path.join(config.IMG, "avatar")
+    n_avatar = _count(adir2, (".png", ".webp", ".jpg"))
+    avatar_total = len([n2 for n2 in idx if n2.startswith("bundle_chara_c-panel_")]) or 384
+
     return {"back": n_back, "backTotal": back_total,
             "music": min(n_music, music_total), "musicTotal": music_total,
             "sfx": min(n_sfx, sfx_total), "sfxTotal": sfx_total,
+            "avatar": min(n_avatar, avatar_total), "avatarTotal": avatar_total,
             "bytes": 0}
 
 
@@ -841,6 +893,16 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
             job.log("③ 导出语音")
         stages.export_voices(cid, workers=workers)
 
+    # 头像源：剧本**不引用** c-panel 包（它是角色面板的半身像），
+    # 但侧栏头像要靠它裁出来，所以这里单独下一个（几 KB ~ 几百 KB）。
+    # 名字同样要按补零格式试，否则清单里匹配不到。
+    cp_cands = [f"bundle_chara_c-panel_{int(cid):03d}",
+                f"bundle_chara_c-panel_{int(cid):02d}",
+                f"bundle_chara_c-panel_{cid}"]
+    cp_ents = _entries(mf, [n for n in cp_cands if n in mf.index])
+    if cp_ents:
+        stages.fetch(cp_ents, workers, "角色头像", skip=True,
+                     pause_event=_pe(job), job=job)
     stages.export_avatar(cid)
 
     nums = set()

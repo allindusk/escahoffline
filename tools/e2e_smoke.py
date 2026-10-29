@@ -24,6 +24,7 @@ import sys
 import time
 import urllib.request
 
+HAS_BASE = False
 OK = "\u2713"
 NO = "\u2717"
 
@@ -88,12 +89,14 @@ def wait_job(port: int, job_id: str, on_tick=None, timeout=1800) -> dict:
 
 
 def main() -> int:
+    global HAS_BASE
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="已经解压好的程序目录")
     ap.add_argument("--unit", default="char_2", help="装哪一部剧情")
     ap.add_argument("--base", action="store_true", help="连公共素材一起下")
     ap.add_argument("--keep", action="store_true", help="跑完不杀服务")
     args = ap.parse_args()
+    HAS_BASE = bool(args.base)
 
     root = os.path.abspath(args.dir)
     rep = Report()
@@ -234,7 +237,8 @@ def main() -> int:
                         return
                     u = r.url
                     if ("imgmap.x2" in u or "imgmap.base" in u or "/i18n/" in u
-                        or "sfxmap" in u):
+                        or "sfxmap" in u
+                        or (not HAS_BASE and "/avatar/" in u)):
                         return
                     f404.append(u)
                 pg.on("response", on_resp)
@@ -267,8 +271,12 @@ def main() -> int:
                 }""")
                 b.close()
 
-            rep.add(r["avatarTotal"] > 0 and r["avatars"] == r["avatarTotal"],
-                    "侧栏头像加载", f"{r['avatars']}/{r['avatarTotal']}")
+            # 头像**属于公共素材**：只有下了公共素材才该有，不装就不该要求。
+            if HAS_BASE:
+                rep.add(r["avatarTotal"] > 0 and r["avatars"] == r["avatarTotal"],
+                        "侧栏头像加载", f"{r['avatars']}/{r['avatarTotal']}")
+            else:
+                rep.add(True, "侧栏头像加载", "跳过（未装公共素材，头像本就该缺）")
             rep.add(r["bgTotal"] > 0 and r["bg"] == r["bgTotal"],
                     "背景加载", f"{r['bg']}/{r['bgTotal']}")
             rep.add(r["standTotal"] > 0, "立绘出现",

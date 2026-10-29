@@ -246,16 +246,19 @@
     // 背景允许 2% 缺口：官方源本身有 11 个 bgimage 包里没有图
     const near = (a, b) => (b ? (a || 0) >= b * 0.98 : true);
     const pubAll = ready && near(pub.back, pub.backTotal)
-      && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal);
-    const pubAny = (pub.back || 0) + (pub.music || 0) + (pub.sfx || 0) > 0;
+      && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal)
+      && near(pub.avatar, pub.avatarTotal);
+    const pubAny = (pub.back || 0) + (pub.music || 0) + (pub.sfx || 0)
+      + (pub.avatar || 0) > 0;
 
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');
 
     const pubLine = pubAny
       ? '背景 ' + (pub.back || 0) + '/' + (pub.backTotal || 0)
-        + ' · BGM ' + (pub.music || 0) + '/' + (pub.musicTotal || 0)
-        + ' · 音效 ' + (pub.sfx || 0) + '/' + (pub.sfxTotal || 0)
+      + ' · BGM ' + (pub.music || 0) + '/' + (pub.musicTotal || 0)
+      + ' · 音效 ' + (pub.sfx || 0) + '/' + (pub.sfxTotal || 0)
+      + ' · 头像 ' + (pub.avatar || 0) + '/' + (pub.avatarTotal || 0)
       : '约 <b>775 MB</b>（背景 205 + BGM 539 + 音效 31）';
 
     box.innerHTML =

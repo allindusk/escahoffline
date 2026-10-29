@@ -549,10 +549,20 @@ def export_avatar(cid, size: int = 96) -> bool:
     from PIL import Image
     import UnityPy
 
-    src = os.path.join(FILES_STORY, f"bundle_chara_c-panel_{cid}")
+    # **包名是补零的**：清单里叫 bundle_chara_c-panel_002，而 cid 是 2。
+    # 直接拼不补零的名字会永远找不到源文件（和立绘合成脚本同一个坑），
+    # 于是头像一个都导不出来 → 侧栏 384 个角色全是空白占位。
+    src = None
+    for n in (f"bundle_chara_c-panel_{int(cid):03d}",
+              f"bundle_chara_c-panel_{int(cid):02d}",
+              f"bundle_chara_c-panel_{cid}"):
+        p = os.path.join(FILES_STORY, n)
+        if os.path.exists(p):
+            src = p
+            break
     out = os.path.join(IMG, "avatar", f"{cid}.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    if os.path.exists(out) or not os.path.exists(src):
+    if os.path.exists(out) or not src:
         return os.path.exists(out)
     try:
         env = UnityPy.load(src)
