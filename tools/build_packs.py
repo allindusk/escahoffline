@@ -74,7 +74,13 @@ UNIT_RE = r"^(char_\d+|adv_(?:main|event|other|side|tutorial|op)(?:_\d+)?)$"
 
 # ---------------------------------------------------------------- 读 JS 数据
 def load_js(path: str):
-    """解析 ``window.__X={...};`` 形式的纯数据文件。"""
+    """解析 ``window.__X={...};`` 形式的纯数据文件。
+
+    文件不存在时返回空 dict：`sfxmap.js` 是运行时产物（装完音效才生成），
+    仓库和 CI 里都没有它，不该让校验直接崩掉。
+    """
+    if not os.path.exists(path):
+        return {}
     with open(path, encoding="utf-8-sig") as f:
         s = f.read()
     i = s.find("=")

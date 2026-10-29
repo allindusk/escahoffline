@@ -177,8 +177,11 @@ jobs:
           # 若 embeddable 的 ._pth 没删干净，`python -m server` 会报
           # "No module named server"，用户双击 启动.bat 直接失败。
           # 在这里拦下，避免把起不来的包发出去。
+          # 注意：Push-Location 之后当前目录变了，$dst 是相对路径会找不到，
+          # 所以**先取绝对路径**再切换目录（上一版就是踩了这个坑导致构建中止）。
+          $pyExe = (Resolve-Path "$dst/python/python.exe").Path
           Push-Location $dst
-          & "$dst/python/python.exe" -c "import server; print('import server ok')"
+          & $pyExe -c "import server; print('import server ok')"
           $rc = $LASTEXITCODE
           Pop-Location
           if ($rc -ne 0) { throw "便携包自检失败：找不到 server 包（._pth 未删除？）" }
