@@ -179,32 +179,72 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ESCAH-Offline-v${{ steps.ver.outputs.version }}
-          path: dist/*.zip
+          # 明确两个成品：不要 dist/py.zip（那是下载的 embedded Python 原始压缩包）
+          path: |
+            dist/ESCAH-Offline-v${{ steps.ver.outputs.version }}-win64-portable.zip
+            dist/ESCAH-Offline-v${{ steps.ver.outputs.version }}-update.zip
+
+      # ---------------- 发布 ----------------
+      # 注意：本 workflow 是**手动触发**，github.ref 是 refs/heads/main，
+      # 不是 refs/tags/v…。所以不能用 "if: startsWith(github.ref,'refs/tags/v')"
+      # 那种条件（会永远跳过，产物只进 Artifacts，Releases 里没有文件）。
+      # 这里改用 gh CLI，按 VERSION 里的版本号打 tag 并发 Release；
+      # 若该版本的 Release 已存在，就覆盖上传其中的附件。
+      - name: 准备 Release 说明
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          @"
+          ## 超昂大战 · 角色个人剧情离线阅读器 v$v
+
+          ### 下载哪个
+
+          | 文件 | 说明 |
+          |---|---|
+          | `ESCAH-Offline-v$v-win64-portable.zip` | **给普通用户**。内置 Python 3.11 与全部依赖，解压后双击 `启动.bat` 即用 |
+          | `ESCAH-Offline-v$v-update.zip` | **给程序内自动更新用**，也适合已装用户手动覆盖。只有代码与文档 |
+
+          > 想二次开发请直接 `git clone` 仓库（`pip install -r requirements.txt`）。
+
+          ### 第一次用
+
+          1. 解压 portable 包，双击 `启动.bat`
+          2. 「资源管理」页 → 下载**基础数据**（资源清单 + 公共素材）
+          3. 再到「剧情安装」勾想看的角色，点「开始安装」
+
+          ### 注意
+
+          - **本包不含任何游戏素材**，需按上述步骤自行从官方 CDN 下载并在本机解包
+          - 已有安装：用新包覆盖旧目录即可（`userdata/`、`web/media/`、剧情正文不会被覆盖），
+            也可以直接用程序内的「检查更新」
+          - 请勿传播素材、请勿高调宣传，详见 `NOTICE.md`
+          "@ | Set-Content dist/notes.md -Encoding UTF8
 
       - name: 发布到 Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.zip
-          name: v${{ steps.ver.outputs.version }}
-          draft: false
-          body: |
-            ## 超昂大战 · 角色剧情离线阅读器 v${{ steps.ver.outputs.version }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $tag = "v$v"
+          # 明确只发这两个成品（排除 dist/py.zip：那是 embedded Python 的原始压缩包）
+          $files = @(
+            "dist/ESCAH-Offline-v$v-win64-portable.zip",
+            "dist/ESCAH-Offline-v$v-update.zip"
+          ) | Where-Object { Test-Path $_ }
 
-            ### 下载哪个
-            | 文件 | 说明 |
-            |---|---|
-            | `ESCAH-Offline-v${{ steps.ver.outputs.version }}-win64-portable.zip` | **给用户**。内置 Python 3.11 与全部依赖，解压双击 `启动.bat` 即用 |
-            | `ESCAH-Offline-v${{ steps.ver.outputs.version }}-update.zip` | **给程序内自动更新用**（也适合已装用户手动覆盖）。只有代码与文档，3–5 MB |
+          # 打 tag（已存在就忽略错误）
+          git tag $tag 2>$null
+          git push origin $tag 2>$null
 
-            > 想二次开发请直接 `git clone` 仓库（`pip install -r requirements.txt`），
-            > 不再单独提供"只有代码、要自己装 Python"的包。
-
-            ### 注意
-            - **本包不含任何游戏素材**，首次打开后在「资源管理」里装资源（约 1 GB 起）
-            - 已有安装：把新包解压后，用 `启动.bat` 覆盖旧目录（`userdata/`、`web/media/`、
-              `web/data/` 里的剧情正文不会被覆盖，也可以直接用程序内「检查更新」）
-            - 请勿传播素材、请勿高调宣传，详见仓库 `NOTICE.md`
-
-            ### 更新日志
-            <!-- 在这里补充本版改动 -->
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在，覆盖上传附件"
+            gh release upload $tag $files --clobber
+          } else {
+            Write-Host "创建 Release $tag"
+            gh release create $tag $files --title "v$v" --notes-file dist/notes.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw "发布 Release 失败" }
+          gh release view $tag
