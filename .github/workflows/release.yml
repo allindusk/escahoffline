@@ -151,7 +151,7 @@ jobs:
           # 缺任何一个用户都会卡在"安装剧情"这一步。
           New-Item -ItemType Directory -Force -Path "$dst/python/Lib/site-packages" | Out-Null
           python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
-            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography
+            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
 
           # 便携版的启动脚本：直接用内置解释器
           @'
@@ -163,7 +163,7 @@ jobs:
           '@ | Set-Content "$dst/启动.bat" -Encoding oem
 
           # 验证内置解释器 + 全部依赖都能跑（这是便携版唯一的验收点）
-          & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"
+          & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy, playwright; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"
           if ($LASTEXITCODE -ne 0) { throw "便携版 Python 环境不可用（解包依赖缺失）" }
 
       - name: 打 portable + update zip

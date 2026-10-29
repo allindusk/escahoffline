@@ -1541,6 +1541,9 @@ function renderSidebar(filter = '') {
     const d = document.createElement('div');
     d.className = 'char-btn' + (S.key === 'char_' + c.id ? ' on' : '')
       + (st === 'missing' ? ' nodl' : '');
+    // 带上标识：自动化测试和调试时不用靠 title 去猜是哪一行
+    d.dataset.id = c.id;
+    d.dataset.key = 'char_' + c.id;
     d.title = `${nm}${m.zh ? ' / ' + m.zh : ''}\n` +
       `ID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}` +
       (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '') +

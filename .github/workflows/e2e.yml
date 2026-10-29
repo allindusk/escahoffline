@@ -1,0 +1,115 @@
+name: e2e-clean-install
+
+# 模拟「新用户下载便携包 → 解压 → 启动 → 装一部剧情 → 播放」的完整链路。
+# 只在手动触发：跑一次约 8–15 分钟（含下载素材），不适合每次提交都跑。
+on:
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: '装哪一部剧情（如 char_2）'
+        required: false
+        default: 'char_2'
+      with_base:
+        description: '连公共素材一起下（775 MB，用来验 BGM/背景）'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装运行依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -c "import UnityPy, lz4, PIL, numpy; print('deps ok')"
+
+      # 与 release.yml 相同的便携版组装逻辑：内置 embedded Python + 全部依赖。
+      # 这一步顺带验证打包脚本本身没坏。
+      - name: 组装便携版（内置 Python）
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $dst = "dist/ESCAH-Offline"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item server, tools, docs -Destination $dst -Recurse
+          Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $dst
+          New-Item -ItemType Directory -Force -Path "$dst/web/data" | Out-Null
+          Copy-Item web/*.html, web/serve.py -Destination "$dst/web"
+          Copy-Item web/assets -Destination "$dst/web" -Recurse
+          Get-ChildItem web/data/* | Where-Object {
+            $_.Name -notlike 'char_*.js' -and $_.Name -notlike 'adv_*.js'
+          } | Copy-Item -Destination "$dst/web/data"
+          New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
+
+          # 内置 Python 3.11 + 依赖
+          $pyVer = "3.11.9"
+          $url = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "dist/py.zip"
+          Expand-Archive "dist/py.zip" -DestinationPath "$dst/python" -Force
+          $pth = Get-ChildItem "$dst/python/python*._pth" | Select-Object -First 1
+          (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' |
+            Set-Content $pth.FullName -Encoding ascii
+          New-Item -ItemType Directory -Force -Path "$dst/python/Lib/site-packages" | Out-Null
+          python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
+            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
+
+          # 便携版启动脚本（直接调内置解释器）
+          @'
+          @echo off
+          chcp 65001 >nul
+          cd /d "%~dp0"
+          "%~dp0python\python.exe" -m server --open
+          if errorlevel 1 pause
+          '@ | Set-Content "$dst/启动.bat" -Encoding oem
+
+          & "$dst/python/python.exe" -c "import sys, UnityPy, PIL, numpy; print('embedded ok', sys.version.split()[0])"
+
+      # 关键：**真的打成 zip 再解压**，这样连"解压后能不能跑"一起验了
+      - name: 打包并解压到干净目录（模拟用户下载）
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/ESCAH-Offline/* `
+            -DestinationPath dist/portable.zip -CompressionLevel Optimal
+          $mb = [math]::Round((Get-Item dist/portable.zip).Length / 1MB, 1)
+          "portable.zip: $mb MB"
+          New-Item -ItemType Directory -Force -Path D:\e2e | Out-Null
+          Expand-Archive dist/portable.zip -DestinationPath D:\e2e\ESCAH-Offline -Force
+          "解压后文件数: $((Get-ChildItem D:\e2e\ESCAH-Offline -Recurse -File | Measure-Object).Count)"
+
+      - name: 端到端冒烟测试
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          # 用**便携包里的**解释器跑测试脚本，确保用的是用户那套环境
+          $py = "D:\e2e\ESCAH-Offline\python\python.exe"
+          $unit = "${{ inputs.unit }}"
+          $extra = @()
+          if ("${{ inputs.with_base }}" -eq "true") { $extra += "--base" }
+          & $py D:\e2e\ESCAH-Offline\tools\e2e_smoke.py `
+            --dir D:\e2e\ESCAH-Offline --unit $unit @extra
+          if ($LASTEXITCODE -ne 0) { throw "端到端测试未通过（exit $LASTEXITCODE）" }
+
+      - name: 上传日志（失败也传）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            D:\e2e\ESCAH-Offline\userdata\logs\*.log
+            D:\e2e\ESCAH-Offline\userdata\cdn\*.json
+          if-no-files-found: ignore
+          retention-days: 7

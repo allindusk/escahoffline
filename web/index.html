@@ -230,9 +230,14 @@
 <script src="data/charmeta.js"></script>
 <script src="data/index.js"></script>
 <script src="data/advindex.js"></script>
-<script src="data/imgmap.js"></script>
-<script src="data/imgmap.x2.js"></script>
-<script src="data/imgmap.base.js"></script>
+<!-- 数据映射表。必须带版本号：imgmap.js 由 gen_imgmap.py 在装完剧情后重新生成，
+     不带版本号会被浏览器一直用旧缓存（表现为头像/立绘明明有了却找不到） -->
+<script src="data/imgmap.js?v=1029a"></script>
+<!-- 这两个是**可选覆盖层**（超分记录 / WebP 覆盖），不存在属正常，仅静默失败 -->
+<script src="data/imgmap.x2.js?v=1029a"
+        onerror="window.__IMGX2=window.__IMGX2||{}"></script>
+<script src="data/imgmap.base.js?v=1029a"
+        onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
 <script src="data/sfxmap.js"></script>
 <script src="assets/js/common.js?v=1030a"></script>
 <script src="assets/js/header.js?v=1030a"></script>

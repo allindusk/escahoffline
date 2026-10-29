@@ -23,9 +23,13 @@ def rel_p(sub, fname):
     return f"{REL}/{sub}/{fname}"
 
 # 实际存在的文件
-have = {"stand": set(os.listdir(os.path.join(IMG, "stand"))),
-        "back": set(os.listdir(os.path.join(IMG, "back"))),
-        "cg": set(os.listdir(os.path.join(IMG, "cg")))}
+def _ls(sub):
+    d = os.path.join(IMG, sub)
+    return set(os.listdir(d)) if os.path.isdir(d) else set()
+
+
+have = {"stand": _ls("stand"), "back": _ls("back"), "cg": _ls("cg"),
+        "avatar": _ls("avatar")}
 full = set(os.listdir(os.path.join(IMG, "standfull"))) \
     if os.path.isdir(os.path.join(IMG, "standfull")) else set()
 
@@ -48,8 +52,16 @@ for fn in os.listdir(os.path.join(WEB, "data")):
             if m.get("StandImage"):
                 ids["stand"].add(m["StandImage"])
 
-out = {"stand": {}, "back": {}, "cg": {}}
+out = {"stand": {}, "back": {}, "cg": {}, "avatar": {}}
 miss = {"stand": 0, "back": 0, "cg": 0}
+
+# 头像：<角色id>.<扩展名>。导出的是 **.png**，前端以前只硬编码找 .webp，
+# 全新环境 384 个角色会刷出上百个 404。这里从映射里给出真实路径，
+# 前端 avatarCands() 就会优先用它，不再靠试扩展名。
+for fn in sorted(have["avatar"], key=lambda f: (not f.lower().endswith(".png"), f)):
+    stem, ext = os.path.splitext(fn)
+    if stem.isdigit() and ext.lower() in (".png", ".webp", ".jpg", ".jpeg"):
+        out["avatar"].setdefault(stem, rel_p("avatar", fn))
 
 for s in ids["stand"]:
     m = re.match(r"stand_(\d+)_([0-9A-Fa-f]+)_", s)
