@@ -173,6 +173,16 @@ jobs:
           & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy, playwright; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"
           if ($LASTEXITCODE -ne 0) { throw "便携版 Python 环境不可用（解包依赖缺失）" }
 
+          # 关键自检：**在项目根能 import server**。
+          # 若 embeddable 的 ._pth 没删干净，`python -m server` 会报
+          # "No module named server"，用户双击 启动.bat 直接失败。
+          # 在这里拦下，避免把起不来的包发出去。
+          Push-Location $dst
+          & "$dst/python/python.exe" -c "import server; print('import server ok')"
+          $rc = $LASTEXITCODE
+          Pop-Location
+          if ($rc -ne 0) { throw "便携包自检失败：找不到 server 包（._pth 未删除？）" }
+
       - name: 打 portable + update zip
         shell: pwsh
         run: |
