@@ -727,6 +727,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "engine": media.find_engine(),
             "meta": updater.app_meta(),
             "trans": exports.trans_stats(),
+            # 已下载解压、等你点重启的新版本号（空串 = 没有待装更新）
+            # health.js 每 60s 读一次，有值就顶部挂条
+            "updateReady": updater.pending_version(),
             # 路径含中文时的提示（前端顶部条显示），以及日志位置
             "warn": paths.path_warning(),
             "logPath": os.path.join(paths.USERDATA, "logs", "app.log"),
@@ -759,20 +762,33 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     return 0
 
 
+#: **不设任何定时检查**：只有用户点了「检查程序更新」才发一次外网请求。
+#:
+#: 为什么要这么较真：这是个本地离线用工具，偷偷每隔几小时去 GitHub 发请求，
+#: 用户（还有他的网络环境）完全不知情 —— 也不该由我们来决定什么时候联网。
+#: 想查就在控制台点一下，查完想装再点一下，全程用户自己掌握。
+
+
 def _do_update(job, url: str) -> dict:
     job.log("检查更新…")
-    info = updater.check()
-    if not url:
-        url = info.get("url") or ""
-    if not url:
-        raise RuntimeError(info.get("error") or "没有可下载的更新包")
-    try:
-        staging = updater.stage(url, job)
-    except updater.ManualDownload as e:
-        # 不是错误，是兜底：把"去 GitHub 手动下载"的结构化信息交给前端渲染
-        job.detail["manual"] = e.payload()
-        job.log("自动下载失败，已切换到手动下载引导")
-        raise
+    # 已经后台下载好的直接用：省掉二次下载，也让"点一下就重启"真的只要一秒
+    ready = updater.pending_version()
+    staging = updater.staging_dir()
+    if ready and os.path.isdir(staging):
+        job.log(f"使用已下载的 v{ready}，跳过下载")
+    else:
+        info = updater.check()
+        if not url:
+            url = info.get("url") or ""
+        if not url:
+            raise RuntimeError(info.get("error") or "没有可下载的更新包")
+        try:
+            staging = updater.stage(url, job)
+        except updater.ManualDownload as e:
+            # 不是错误，是兜底：把"去 GitHub 手动下载"的结构化信息交给前端渲染
+            job.detail["manual"] = e.payload()
+            job.log("自动下载失败，已切换到手动下载引导")
+            raise
     job.log(f"已解压到暂存区：{staging}")
     res = updater.apply_update(staging, job)
     job.log("即将退出，更新器会自动覆盖文件并重启")

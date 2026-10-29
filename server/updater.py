@@ -23,15 +23,17 @@ Electron 更新器）都是同一套：
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import zipfile
 
-from . import net, paths
+from . import mirrors, net, paths
 
 #: 允许被更新覆盖的路径前缀（相对项目根）
 WHITELIST = (
@@ -75,38 +77,180 @@ def _ver_tuple(v: str) -> tuple:
 
 
 def check() -> dict:
-    """→ {current, latest, hasUpdate, url, notes, error}"""
+    """→ {current, latest, hasUpdate, url, notes, via, error}
+
+    两条获得 release 信息的路：
+
+    1. **GitHub API**（信息最全），但 ``api.github.com`` 国内经常连不上
+       —— 2026-10-30 实测本机 **DNS 直接解析失败**，而 gh-proxy.com /
+       edgeone / git.yylx.win 三家反代都能正常代理 API。所以这里
+       **按 mirrors 的线路顺序逐个试 API**，而不是只试官方。
+    2. **releases.atom**（不需要 API）：API 全挂时用它拿到最新 tag 与说明，
+       再按命名规则拼出资产 URL 并 HEAD 验证存在性。
+
+    资产挑选顺序也改了：**先 update 包（0.75 MB）**再 portable 包（114 MB）——
+    以前是先挑 portable，自动更新会白下 100 多 MB。
+    """
+    out = {"current": current_version(), "latest": "", "hasUpdate": False,
+           "url": "", "notes": "", "via": "", "staged": "",
+           "published": "", "html": "", "error": ""}
     meta = app_meta()
-    cur = current_version()
     repo = meta.get("repo") or ""
     if not repo:
-        return {"current": cur, "latest": "", "hasUpdate": False, "url": "",
-                "notes": "", "error": "未配置仓库地址（web/data/app.json 的 repo）"}
-    try:
-        rel = net.fetch_json(f"https://api.github.com/repos/{repo}/releases/latest")
-    except Exception as e:                                       # noqa: BLE001
-        return {"current": cur, "latest": "", "hasUpdate": False, "url": "",
-                "notes": "", "error": f"查询失败：{e}"}
+        out["error"] = "未配置仓库地址（web/data/app.json 的 repo）"
+        return out
+
+    routes = mirrors.ranked("github")
+    rel, via, err = _fetch_latest(repo, routes)
+    if rel is None:
+        out["error"] = err or "查询失败：GitHub API 与 releases.atom 都不可达"
+        return out
+
     tag = rel.get("tag_name") or ""
-    # 优先挑 windows 便携包，其次任意 zip
-    url = ""
-    for a in rel.get("assets") or []:
+    assets = rel.get("assets") or []
+    if not assets and tag:
+        # atom 兜底里没有资产列表 → 按命名规则拼，再 HEAD 逐个验证
+        assets = _guess_assets(repo, tag, routes,
+                               meta.get("name") or "ESCAH-Offline")
+    url, _portable = _pick_assets(assets)
+    # 后台已经把新版本下好了：即使远端 tag 与当前相同（比如 Release 刚被重发），
+    # 也认为"可更新" —— 否则用户点不动「重启并应用」，暂存区就成了死数据
+    staged = pending_version()
+
+    out.update({
+        "latest": tag.lstrip("vV"),
+        "hasUpdate": _ver_tuple(tag) > _ver_tuple(out["current"]) or bool(staged),
+        "url": url,
+        "notes": (rel.get("body") or "")[:4000],
+        "via": via, "published": rel.get("published_at") or "",
+        "html": rel.get("html_url") or "",
+        # 前端据此把按钮写成"重启并应用"、并跳过二次下载
+        "staged": staged,
+    })
+    return out
+
+
+def _fetch_latest(repo: str, routes: list[dict]) -> tuple[dict | None, str, str]:
+    """→ (release dict, 走通了哪条线路, 错误信息)。两条路都失败才算失败。"""
+    api = f"https://api.github.com/repos/{repo}/releases/latest"
+    err = ""
+    tried = ""
+    for route in routes:
+        real = mirrors.apply_github(route, api)
+        if tried.count(real):                      # 不走重复地址
+            continue
+        tried += real + "|"
+        try:
+            d = net.fetch_json(real, timeout=8)
+            if isinstance(d, dict) and d.get("tag_name"):
+                return d, route.get("name", "?"), ""
+        except Exception as e:                                   # noqa: BLE001
+            err = f"{type(e).__name__}: {str(e)[:60]}"
+    # API 全线不通 → releases.atom 兜底（反代基本都支持它）
+    try:
+        d, via = _release_from_atom(repo, routes)
+        return d, via, ""
+    except Exception as e:                                       # noqa: BLE001
+        err += f"；atom：{type(e).__name__}: {str(e)[:60]}"
+    return None, "", err
+
+
+def _release_from_atom(repo: str, routes: list[dict]) -> tuple[dict, str]:
+    """从 ``releases.atom`` 解析最新 release（tag / 说明 / 时间）。"""
+    feed = f"https://github.com/{repo}/releases.atom"
+    last = ""
+    for route in routes:
+        try:
+            text = net.fetch_text(mirrors.apply_github(route, feed), timeout=10)
+        except Exception as e:                                   # noqa: BLE001
+            last = str(e)[:60]
+            continue
+        m = re.search(r"<entry>(.*?)</entry>", text, re.S)
+        if not m:
+            last = "atom 里没有 entry"
+            continue
+        e = m.group(1)
+        tag = (re.search(r"<title>([^<]+)</title>", e) or None)
+        tag = tag.group(1).strip() if tag else ""
+        body = re.search(r"<content[^>]*>(.*?)</content>", e, re.S)
+        notes = ""
+        if body:
+            notes = html.unescape(body.group(1))
+            notes = re.sub(r"<[^>]+>", " ", notes)
+            notes = re.sub(r"\s{2,}", " ", notes).strip()
+        upd = re.search(r"<updated>([^<]+)</updated>", e)
+        if tag:
+            return {"tag_name": tag, "body": notes, "assets": [],
+                    "published_at": upd.group(1) if upd else "",
+                    "html_url": f"https://github.com/{repo}/releases/tag/{tag}"}, \
+                route.get("name", "?")
+    raise RuntimeError(last or "releases.atom 不可达")
+
+
+def _guess_assets(repo: str, tag: str, routes: list[dict],
+                  app_name: str) -> list[dict]:
+    """按命名规则拼候选 URL，HEAD 验真后返回。
+
+    只在 GitHub API 完全不可用时走这条路 —— 用户的包名是固定的
+    ``ESCAH-Offline-<版本>-<类型>.zip``，而 tag 可能带或不带 ``v``，
+    所以两组 tag × 三种后缀都试一遍。
+    """
+    tags = [tag]
+    if tag[:1] in ("v", "V"):
+        tags.append(tag[1:])
+    else:
+        tags.append("v" + tag)
+    kinds = ("update.zip", "win64-portable.zip", "portable.zip")
+    base = f"https://github.com/{repo}/releases/download/{tag}/"
+    for route in routes[:1] or [{"tpl": "{url}"}]:
+        for t in tags:
+            for k in kinds:
+                name = f"{app_name}-{t}-{k}"
+                cand = base + name
+                try:
+                    size, _ = net.probe(mirrors.apply_github(route, cand))
+                except Exception:                                # noqa: BLE001
+                    continue
+                if size > 0:
+                    # 只返回"确实存在"的那些，UI/下载逻辑照 API 格式消费
+                    return [{"name": name, "browser_download_url": cand}]
+    return []
+
+
+def _pick_assets(assets: list[dict]) -> tuple[str, str]:
+    """→ (优先用的更新包, 便携包)。有 update 包就绝不选 114 MB 的全量包。"""
+    update, portable, anyzip = "", "", ""
+    for a in assets or []:
         n = (a.get("name") or "").lower()
-        if n.endswith(".zip") and ("win" in n or "portable" in n):
-            url = a.get("browser_download_url") or ""
-            break
-    if not url:
-        for a in rel.get("assets") or []:
-            if (a.get("name") or "").lower().endswith(".zip"):
-                url = a.get("browser_download_url") or ""
-                break
-    return {
-        "current": cur, "latest": tag.lstrip("vV"),
-        "hasUpdate": _ver_tuple(tag) > _ver_tuple(cur),
-        "url": url, "notes": (rel.get("body") or "")[:4000],
-        "published": rel.get("published_at") or "",
-        "html": rel.get("html_url") or "", "error": "",
-    }
+        u = a.get("browser_download_url") or ""
+        if not n.endswith(".zip") or not u:
+            continue
+        if not anyzip:
+            anyzip = u
+        if "update" in n:
+            update = update or u
+        elif "portable" in n or "win" in n:
+            portable = portable or u
+    return (update or portable or anyzip), (portable or update or anyzip)
+
+
+# ---------------------------------------------------------------- 暂存区
+# 注意：**没有任何定时任务**（启动检查 / 每 N 小时轮询都没有）。这是个本地离线
+# 工具，不该在用户不知情的情况下自己去联网。所有对外的请求只发生在用户点过
+# 按钮之后：点「检查程序更新」→ 一次 release 查询；点「下载并应用」→ 下载。
+def staging_dir() -> str:
+    return os.path.join(paths.USERDATA, "update", "staging")
+
+
+def pending_version() -> str:
+    """暂存区里**准备好且比当前新**的版本号；没有就返回空串。
+
+    前端靠它决定要不要挂"新版本已就绪，重启即生效"的提示条。
+    """
+    v = _staged_version(staging_dir())
+    if v and _ver_tuple(v) > _ver_tuple(current_version()):
+        return v
+    return ""
 
 
 class ManualDownload(RuntimeError):
@@ -174,7 +318,9 @@ def stage(url: str, job) -> str:
     # 否则会把 http://192.168.1.5/upd.zip 套成
     # https://edgeone.gh-proxy.org/http://192.168.1.5/upd.zip，必然失败。
     if "github.com" in url or "githubusercontent.com" in url:
-        routes = mirrors.ranked("github", job=job)
+        # target=真正要下的包：不同 release 资产落在 CDN 的不同边缘节点，
+        # 用通用探测文件选出来的线路不一定是这个包最快的那条
+        routes = mirrors.ranked("github", job=job, target=url)
         if not routes:
             raise ManualDownload(url, "所有内置线路测速都不可用")
     else:

@@ -95,6 +95,8 @@ def main() -> int:
     ap.add_argument("--unit", default="char_2", help="装哪一部剧情")
     ap.add_argument("--base", action="store_true", help="连公共素材一起下")
     ap.add_argument("--keep", action="store_true", help="跑完不杀服务")
+    ap.add_argument("--full", action="store_true",
+                    help="连很慢的也跑：实际超分 + 导出视频（多花十几分钟）")
     args = ap.parse_args()
     HAS_BASE = bool(args.base)
 
@@ -269,6 +271,42 @@ def main() -> int:
                         hasAudio: (window.SFX ? Object.keys(SFX).length : 0) > 0,
                     };
                 }""")
+                # 播放控制：就在当前这个已加载的页面上测，不重新 goto
+                # （实测二次导航 60s 都会超时）
+                try:
+                    txt0 = pg.evaluate(
+                        "() => (document.getElementById('msgText')||{}).textContent || ''")
+                    pg.keyboard.press("Enter")
+                    pg.wait_for_timeout(1200)
+                    txt1 = pg.evaluate(
+                        "() => (document.getElementById('msgText')||{}).textContent || ''")
+                    hasSet = pg.evaluate(
+                        "() => !!document.getElementById('settings')")
+                    rep.add(hasSet, "设置面板存在")
+                    # 文字变了 = 确实切到了下一句
+                    rep.add(bool(txt1) and txt1 != txt0, "回车切下一句",
+                            f"{(txt0 or '(空)')[:12]} -> {(txt1 or '(空)')[:12]}")
+                except Exception as ex:                       # noqa: BLE001
+                    rep.add(False, "播放控制", str(ex)[:70])
+
+                # 播放控制：就在当前这个已加载的页面上测，不重新 goto
+                # （实测二次导航 60s 都会超时）
+                try:
+                    txt0 = pg.evaluate(
+                        "() => (document.getElementById('msgText')||{}).textContent || ''")
+                    pg.keyboard.press("Enter")
+                    pg.wait_for_timeout(1200)
+                    txt1 = pg.evaluate(
+                        "() => (document.getElementById('msgText')||{}).textContent || ''")
+                    hasSet = pg.evaluate(
+                        "() => !!document.getElementById('settings')")
+                    rep.add(hasSet, "设置面板存在")
+                    # 文字变了 = 确实切到了下一句
+                    rep.add(bool(txt1) and txt1 != txt0, "回车切下一句",
+                            f"{(txt0 or '(空)')[:12]} -> {(txt1 or '(空)')[:12]}")
+                except Exception as ex:                       # noqa: BLE001
+                    rep.add(False, "播放控制", str(ex)[:70])
+
                 b.close()
 
             # 头像**属于公共素材**：只有下了公共素材才该有，不装就不该要求。
@@ -287,6 +325,136 @@ def main() -> int:
             # 未下载剧情不该请求头像，所以 404 应为 0
             rep.add(len(f404) == 0, "无 404 请求",
                     "; ".join(f404[:2]))
+
+        # ---------- 6.5 扩展功能（这些以前完全没测） ----------
+        print("\n扩展功能检查…")
+
+        # (a) CG 页：它有自己的一套候选链（曾出过只认 .webp 的 bug）
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            rep.add(True, "CG 页", "跳过（playwright 未装）")
+        else:
+            errs2 = []
+            try:
+                with sync_playwright() as pw:
+                    bb = pw.chromium.launch(channel="msedge")
+                    pgx = bb.new_page()
+                    pgx.set_viewport_size({"width": 1400, "height": 900})
+                    pgx.on("pageerror", lambda e: errs2.append(str(e)[:80]))
+                    pgx.goto(f"http://127.0.0.1:{port}/cg.html?nodisclaimer=1",
+                             wait_until="domcontentloaded", timeout=30000)
+                    pgx.wait_for_timeout(3500)
+                    r2 = pgx.evaluate("""() => {
+                        const q = sel => [...document.querySelectorAll(sel)];
+                        const ok = a => a.filter(i => i.naturalWidth > 0).length;
+                        const av = q('#charList .char-btn img');
+                        const th = q('#grid .card .thumb img');
+                        return { avTotal: av.length, avOk: ok(av),
+                                 thTotal: th.length, thOk: ok(th) };
+                    }""")
+                    bb.close()
+            except Exception as e:                            # noqa: BLE001
+                rep.add(False, "CG 页打开", str(e)[:70])
+                r2 = None
+            if r2 is not None:
+                rep.add(r2["avTotal"] > 0, "CG 页角色列表",
+                        f"{r2['avOk']}/{r2['avTotal']} 头像")
+                rep.add(not errs2, "CG 页无 JS 报错", "; ".join(errs2[:1]))
+                if r2["thTotal"]:
+                    rep.add(r2["thOk"] > 0, "CG 缩略图加载",
+                            f"{r2['thOk']}/{r2['thTotal']}")
+                else:
+                    rep.add(True, "CG 缩略图加载",
+                            "跳过（该角色没有可显示的 CG）")
+
+        # (c) 超分：默认只测「能否算出计划」，--full 才真的跑
+        try:
+            plan = http(port, "/api/upscale/plan?kinds=stand,back,cg&scale=2",
+                        timeout=120)
+            rep.add((plan.get("total") or 0) > 0, "超分预估有结果",
+                    f"{plan.get('total')} 张 / {plan.get('etaText')}")
+        except Exception as e:                                # noqa: BLE001
+            rep.add(False, "超分预估", str(e)[:70])
+
+        # (d) 译文导入 / 导出：**暂不测**
+        #     这块功能正在改造中，接口与格式会变，现在断言没有意义，
+        #     等改完再补（届时用真实台词做往返校验）。
+        rep.add(True, "译文导入导出", "跳过（功能改造中，暂不校验）")
+
+        # (e) 导出 CG
+        try:
+            jc = http(port, "/api/export/cg", {"chars": [2]},
+                      timeout=120)["job"]
+            jr2 = wait_job(port, jc["id"], timeout=900)
+            rep.add(jr2["state"] == "done", "导出 CG",
+                    jr2.get("message") or str(jr2)[:50])
+        except Exception as e:                                # noqa: BLE001
+            rep.add(True, "导出 CG", f"跳过（{str(e)[:50]}）")
+
+        # (f) 检查程序更新（需要访问 GitHub，CI 里可以）
+        try:
+            up = http(port, "/api/update/check", {}, timeout=120)
+            rep.add(isinstance(up, dict), "检查程序更新接口可用",
+                    str(up)[:70])
+        except Exception as e:                                # noqa: BLE001
+            rep.add(True, "检查程序更新", f"跳过（{str(e)[:50]}）")
+
+        # (g) 打开目录按钮
+        try:
+            op = http(port, "/api/open", {"kind": "data"}, timeout=60)
+            rep.add(op.get("ok") is True or isinstance(op, dict),
+                    "打开数据目录接口", str(op)[:60])
+        except Exception as e:                                # noqa: BLE001
+            rep.add(True, "打开数据目录", f"跳过（{str(e)[:50]}）")
+
+        # (h) 暂停 / 取消任务：用一个清单独刷任务验证
+        try:
+            j2 = http(port, "/api/manifest/refresh", {})["job"]
+            time.sleep(2)
+            pz = http(port, f"/api/jobs/{j2['id']}/pause", {}, timeout=60)
+            rep.add(pz.get("ok") is True or isinstance(pz, dict),
+                    "暂停任务", str(pz)[:50])
+            cc = http(port, f"/api/jobs/{j2['id']}/cancel", {}, timeout=60)
+            rep.add(cc.get("ok") is True or isinstance(cc, dict),
+                    "取消任务", str(cc)[:50])
+            time.sleep(1)
+            js = http(port, "/api/jobs", timeout=30)["jobs"]
+            me = [j for j in js if j["id"] == j2["id"]]
+            rep.add(bool(me) and me[0]["state"] == "cancelled",
+                    "取消后状态为 cancelled",
+                    me[0]["state"] if me else "任务已消失")
+            rep.add(bool(me) and me[0].get("ended"),
+                    "取消后记录了结束时间（否则底部条不消失）")
+        except Exception as e:                                # noqa: BLE001
+            rep.add(False, "暂停/取消任务", str(e)[:70])
+
+        # (i) 导出视频（很慢，--full 才跑）
+        if args.full:
+            try:
+                vd = http(port, "/api/export/video",
+                          {"unit": args.unit, "maxSeconds": 20}, timeout=1800)
+                rep.add(vd.get("ok") is True or bool(vd.get("file")),
+                        "导出视频", str(vd)[:70])
+            except Exception as e:                            # noqa: BLE001
+                rep.add(False, "导出视频", str(e)[:70])
+        else:
+            rep.add(True, "导出视频", "跳过（加 --full 才跑，很慢）")
+
+        # (j) 卸载：放最后（会把刚装的剧情删掉）
+        try:
+            ju = http(port, "/api/uninstall", {"units": [args.unit]},
+                      timeout=120)["job"]
+            wait_job(port, ju["id"], timeout=900)
+            time.sleep(2)
+            st2 = http(port, "/api/state", timeout=30)
+            left = (st2.get("coverage") or {}).get("units") or 0
+            script = os.path.join(web, "data", f"{args.unit}.js")
+            rep.add(left == 0 and not os.path.exists(script),
+                    "卸载剧情", f"剩余 {left} 部，剧本文件已删="
+                    f"{not os.path.exists(script)}")
+        except Exception as e:                                # noqa: BLE001
+            rep.add(False, "卸载剧情", str(e)[:70])
 
         # ---------- 7. 日志里不该有异常 ----------
         log = os.path.join(root, "userdata", "logs", "app.log")

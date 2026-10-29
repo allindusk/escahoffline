@@ -1100,11 +1100,20 @@
       const d = await api('update/check');
       if (d.error) { $('#updResult').textContent = '⚠ ' + d.error; return; }
       ST.updUrl = d.url || '';
-      $('#updResult').innerHTML = d.hasUpdate
-        ? `发现新版本 <b>${esc(d.latest)}</b>（当前 ${esc(d.current)}）`
-        : `已是最新（当前 ${esc(d.current)}${d.latest ? '，远端 ' + esc(d.latest) : ''}）`;
-      $('#btnApplyUpdate').disabled = !d.hasUpdate || !d.url;
-      if (d.notes) { $('#updNotes').hidden = false; $('#updNotes').textContent = d.notes; }
+      const ready = d.staged || '';
+      if (ready) {
+        $('#updResult').innerHTML =
+          `新版本 <b>v${esc(ready)}</b> 已经下载好，点右侧按钮重启即生效（不用再等下载）`;
+      } else if (d.hasUpdate) {
+        $('#updResult').innerHTML =
+          `发现新版本 <b>${esc(d.latest)}</b>（当前 ${esc(d.current)}）`;
+      } else {
+        $('#updResult').innerHTML =
+          `已是最新（当前 ${esc(d.current)}${d.latest ? '，远端 ' + esc(d.latest) : ''}）`;
+      }
+      const applyBtn = $('#btnApplyUpdate');
+      applyBtn.textContent = ready ? '重启并应用' : '下载并应用';
+      applyBtn.disabled = !ready && !d.hasUpdate;
     } catch (e) {
       $('#updResult').textContent = '⚠ ' + e.message;
     }

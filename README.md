@@ -50,6 +50,23 @@
 | **下载 Release 里的全量包** | 大部分人 | `*-win64-portable.zip` 内置 Python + Pillow，解压后双击 `启动.bat` 即可，不用装任何东西 |
 | **git clone 源码** | 想改代码 / 非 Windows | 需要 Python 3.8+，`pip install -r requirements.txt`（只装 Pillow） |
 
+> **国内下载慢？** GitHub Release 落到 `objects.githubusercontent.com`，实测本机直连
+> 只有 **0.7 MB/s**（而且还时不时握手失败），套一层反代能快一个数量级 ——
+> 2026-10-30 用本项目自己的包实测（4 线程，取 4 轮中位）：
+>
+> | 线路 | portable 包 114 MB |
+> |---|---|
+> | `https://gh-proxy.com/` + 原链接 | **22.6 MB/s** |
+> | `https://git.yylx.win/` + 原链接 | 18.7 MB/s |
+> | `https://edgeone.gh-proxy.org/` + 原链接 | 16.6 MB/s |
+>
+> 把原链接**整个粘在斜杠后面**就行，例如：
+> `https://gh-proxy.com/https://github.com/allindusk/escahoffline/releases/download/v1.0.0/ESCAH-Offline-v1.0.0-win64-portable.zip`
+>
+> 三条快线下出来的 zip **sha256 与官方一致**。程序不会自己偷偷联网检查更新 ——
+> 想更新就在控制台点「检查程序更新」，看到有新版本再点「下载并应用」，装完会自动重启并提示刷新页面。
+> 便携包的下载地址记在 [`docs/资源包与发布.md`](docs/资源包与发布.md)。
+
 ```bash
 git clone https://github.com/<你的名字>/escalation-heroines-offline.git
 cd escalation-heroines-offline

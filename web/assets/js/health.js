@@ -16,6 +16,62 @@ window.HEALTH = (() => {
   let knownVer = null;
   let warnedPath = false;
   let busy = false;
+  // 已后台下载好、等用户点头的版本号；updateReady 变了才提示，避免每 60 秒弹一次
+  let knownReady = '';
+  let updating = false;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const reload = () => {
+    const u = new URL(location.href);
+    u.searchParams.set('v', Date.now());
+    location.replace(u.toString());
+  };
+
+  async function post(path, body) {
+    const r = await fetch('api/' + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}), cache: 'no-store',
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 140));
+    return r.json();
+  }
+
+  // 点「重启并完成更新」→ 后台替换 + 重启 → 等它回来再提示刷新
+  async function applyUpdate(ver) {
+    if (updating) return;
+    updating = true;
+    show('正在更新到 <b>v' + esc(ver) + '</b>：服务即将重启替换文件（素材 / 译文 / 设置都不受影响）',
+      null, null);
+    try {
+      await post('update/apply', {});
+    } catch (e) {
+      updating = false;
+      show('更新失败：' + esc(e.message), '知道了', null, true);
+      return;
+    }
+    const until = Date.now() + 180000;
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const r = await fetch('api/state', { cache: 'no-store' });
+        if (!r.ok) continue;
+        const d = await r.json();
+        if (d.version && d.version !== knownVer) {
+          knownVer = d.version;
+          updating = false;
+          knownReady = '';
+          show('更新完成，程序已是 <b>v' + esc(d.version) + '</b>，刷新页面即可生效',
+            '刷新页面', reload);
+          return;
+        }
+      } catch (e) { /* 重启中，继续等 */ }
+    }
+    updating = false;
+    show('没等到程序自动回来。<br>请刷新页面；若仍是旧版本，双击 <code>启动.bat</code> 即可。',
+      '刷新页面', () => location.reload());
+  }
 
   const CSS = `
 #hcBar{position:fixed;left:0;right:0;top:0;z-index:9600;display:flex;gap:12px;
@@ -78,13 +134,18 @@ body.hc-on{padding-top:44px}
       const d = await r.json();
       if (knownVer === null) {
         knownVer = d.version || '';
-      } else if (d.version && d.version !== knownVer) {
-        show('程序已更新到 <b>v' + d.version + '</b>，当前页面还是旧版本（新功能/修复还没生效）',
-          '强制刷新', () => {
-            const u = new URL(location.href);
-            u.searchParams.set('v', Date.now());
-            location.replace(u.toString());
-          });
+      } else if (d.version && d.version !== knownVer && !updating) {
+        show('程序已更新到 <b>v' + esc(d.version) + '</b>，当前页面还是旧版本（新功能/修复还没生效）',
+          '强制刷新', reload);
+        knownVer = d.version;
+      }
+      // 后台已把新版本下好 → 挂条让用户决定什么时候重启（绝不自动重启）
+      const ready = d.updateReady || '';
+      if (ready && ready !== knownReady && !updating) {
+        knownReady = ready;
+        show('发现新版本 <b>v' + esc(ready) + '</b>，已经下好了。重启并完成更新即可生效'
+          + '（<b>素材 / 译文 / 设置都不会动</b>）', '重启并完成更新',
+          () => applyUpdate(ready));
       }
       if (d.warn && !warnedPath) {
         warnedPath = true;

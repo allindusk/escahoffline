@@ -60,25 +60,36 @@ PIP_ROUTES = [
 
 #: GitHub 下载反代。``{url}`` 会被替换成原始 GitHub URL。
 #:
-#: 这份名单是**实测**出来的（2026-10-29，46 条候选）：
-#: 只有 edgeone 与 yylx 两条超过 1 MB/s，其余反代要么 <0.5 MB/s，要么
-#: 已经挂了（SSL 证书错、超时、DNS 解析失败）。所以：
-#:   · 前两条是主力；
-#:   · ghfast / boki 作为"全挂时的保命渠道"（慢但能用，0.1–0.6 MB/s）；
-#:   · 直连放最前——能连的话最省事（不经过第三方），连不上会自动跳过。
+#: **2026-10-30 用本项目自己的 release 资产实测**（update 0.75 MB /
+#: portable 114.6 MB，4 线程交错 4 轮取中位，单连接 8 MB）：
+#:
+#:   线路                     4 线程中位   单连接中位   结论
+#:   gh-proxy.com             22.6 MB/s    20.1 MB/s   ← 主力
+#:   git.yylx.win             18.7 MB/s    18.0 MB/s   ← 备一
+#:   edgeone.gh-proxy.org     16.6 MB/s    18.3 MB/s   ← 备二（旧主力）
+#:   ghfast.top                6.1 MB/s     4.8 MB/s   兜底
+#:   github.boki.moe           4.5 MB/s     4.4 MB/s   兜底
+#:   GitHub 直连               0.7 MB/s     断断续续   本机几乎不可用
+#:
+#: 三条主力下载出来的 zip **sha256 完全一致**，没有篡改风险。
+#: 直连实测经常被掐（有时握手失败、有时 4 线程只有 0.2–0.6 MB/s），
+#: 所以排最后 —— 但留着：国外网络或代理全挂时它仍可能是唯一能连的。
 #:
 #: 注意：**GitHub 官方没有中国大陆镜像**。release 资产实际落在
 #: objects.githubusercontent.com（Fastly/Cloudflare），国内经常被限速，
-#: 所以除了直连，只能靠社区反代，而这些节点生命周期很短 —— 本名单需要定期重测。
+#: 所以除了直连，只能靠社区反代，而这些节点生命周期很短 —— 本名单需要定期重测
+#: （重测脚本：``python tools/_gh_route_bench.py``）。
 GH_ROUTES = [
-    {"id": "direct", "name": "GitHub 直连", "tpl": "{url}"},
+    {"id": "ghproxy_com", "name": "gh-proxy.com",
+     "tpl": "https://gh-proxy.com/{url}"},
+    {"id": "yylx", "name": "git.yylx.win", "tpl": "https://git.yylx.win/{url}"},
     {"id": "edgeone", "name": "gh-proxy.org（EdgeOne）",
      "tpl": "https://edgeone.gh-proxy.org/{url}"},
-    {"id": "yylx", "name": "git.yylx.win", "tpl": "https://git.yylx.win/{url}"},
-    {"id": "boki", "name": "github.boki.moe（慢速兜底）",
-     "tpl": "https://github.boki.moe/{url}"},
     {"id": "ghfast", "name": "ghfast.top（慢速兜底）",
      "tpl": "https://ghfast.top/{url}"},
+    {"id": "boki", "name": "github.boki.moe（慢速兜底）",
+     "tpl": "https://github.boki.moe/{url}"},
+    {"id": "direct", "name": "GitHub 直连", "tpl": "{url}"},
 ]
 
 #: 探测用：一个真实的 release 小资产（1.7 KB），能同时验证"可代理 release"
@@ -150,15 +161,21 @@ def _probe_mbps(url: str, timeout: float = 20.0, limit: int = 2 << 20) -> float:
         return 0.0
 
 
-def _test_github(routes: list[dict], timeout: float,
-                 workers: int) -> list[dict]:
+def _test_github(routes: list[dict], timeout: float, workers: int,
+                 target: str | None = None) -> list[dict]:
     """两阶段：先小文件筛可达（快），再对前几名测真实吞吐（准）。
 
     只测握手会选错：实测 ghfast.top 握手 0.87s 但吞吐只有 0.06 MB/s，
     而 edgeone 握手 0.82s、吞吐 13.85 MB/s —— 差 200 倍。
+
+    ``target`` 给了就**直接拿真正要下的那个资产测**（更准：不同资产落在
+    objects.githubusercontent.com 的不同边缘节点，速度可能差很多）。
     """
+    small = target or GH_PROBE
+    big = target or GH_PROBE_BIG
+
     def one(route):
-        r = _probe_url(apply_github(route, GH_PROBE), "github", timeout)
+        r = _probe_url(apply_github(route, small), "github", timeout)
         out = dict(route)
         out.update(r)
         out["mbps"] = 0.0
@@ -167,11 +184,14 @@ def _test_github(routes: list[dict], timeout: float,
     with cf.ThreadPoolExecutor(max_workers=min(workers, len(routes))) as ex:
         res = list(ex.map(one, routes))
 
-    # 只对握手最快的 2 条测吞吐：测速本身要花用户十几秒，3 条会拖到 30 秒
-    reachable = sorted([r for r in res if r.get("ok")], key=lambda x: x["ttfb"])[:2]
+    # 只对握手最快的 3 条测吞吐（实测同一线路早晚抖动能到 2 倍，
+    # 只测 2 条容易把最快的那条漏掉；再多就得让用户干等了）
+    reachable = sorted([r for r in res if r.get("ok")], key=lambda x: x["ttfb"])[:3]
     for r in reachable:
-        r["mbps"] = _probe_mbps(apply_github(r, GH_PROBE_BIG),
-                                timeout=max(timeout * 2, 10), limit=512 << 10)
+        # 512 KB 太小：TCP 还没加速完就结束了，实测会低估好几倍
+        # （512 KB → 2.9 MB/s，同一条线路下 8 MB 是 20 MB/s）
+        r["mbps"] = _probe_mbps(apply_github(r, big),
+                                timeout=max(timeout * 2, 10), limit=2 << 20)
         # 吞吐定生死，握手只做同速时的次要依据
         r["score"] = round(r["mbps"] * 100 + 200.0 / max(r["ttfb"], 1), 2)
         r["slow"] = r["mbps"] < MIN_GOOD_MBPS
@@ -185,16 +205,18 @@ def _test_github(routes: list[dict], timeout: float,
 
 
 def test(kind: str = "pip", timeout: float = 5.0,
-         workers: int = 8, rounds: int = 1) -> list[dict]:
+         workers: int = 8, rounds: int = 1,
+         target: str | None = None) -> list[dict]:
     """并发测所有路线，返回按分数降序排列的结果（含不可用的，标 ok=False）。
 
     ``rounds=2`` 会重复测取最好成绩（网络抖动时更准，但慢一倍）。
+    ``target`` 只对 ``kind="github"`` 有效：拿真正要下的资产 URL 来测。
     """
     routes = _ROUTES.get(kind)
     if not routes:
         raise ValueError(f"未知线路类型：{kind}")
     if kind == "github":
-        return _test_github(routes, timeout, workers)
+        return _test_github(routes, timeout, workers, target)
 
     def one(route):
         best = None
@@ -216,17 +238,19 @@ def test(kind: str = "pip", timeout: float = 5.0,
 
 
 def ranked(kind: str = "github", refresh: bool = False,
-           job=None) -> list[dict]:
+           job=None, target: str | None = None) -> list[dict]:
     """按速度排好序的**可用**线路列表（给"下载失败自动换下一条"用）。
 
     快线路（≥ MIN_GOOD_MBPS）排在前面；慢线路留在后面兜底 ——
     如果只保留快线路，两条都挂了用户就彻底下不了。
+
+    ``target``：拿真正要下的 URL 测（比通用探测准）。
     """
     res = None if refresh else cached(kind)
     if not res:
         if job is not None:
             job.log(f"正在测速 {len(_ROUTES.get(kind, []))} 条{_label(kind)}线路…")
-        res = test(kind)
+        res = test(kind, target=target)
         save_cache(kind, res)
         if job is not None:
             for r in res:
@@ -265,7 +289,8 @@ def save_cache(kind: str, results: list[dict]) -> None:
         pass
 
 
-def best(kind: str = "pip", refresh: bool = False, job=None) -> dict:
+def best(kind: str = "pip", refresh: bool = False, job=None,
+         target: str | None = None) -> dict:
     """→ 选中的路线（含 ``id/name/index|tpl/score``）。
 
     有新鲜缓存就用缓存；否则测速并把结果写进缓存。
@@ -277,7 +302,7 @@ def best(kind: str = "pip", refresh: bool = False, job=None) -> dict:
             return c[0]
     if job is not None:
         job.log(f"正在测速 {len(_ROUTES.get(kind, []))} 条{_label(kind)}线路…")
-    results = test(kind)
+    results = test(kind, target=target)
     save_cache(kind, results)
     for r in results:
         if job is not None:

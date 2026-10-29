@@ -424,16 +424,16 @@
       <div class="panel">
         <h3>② 更新程序本体</h3>
         <p class="dim">
-          程序更新走「退出后替换」：下载新版本到暂存区 → 起一个独立更新器 →
-          本进程退出 → 覆盖<b>程序文件</b> → 自动重启。
-          <b>你的资源、译文、设置都不会被动到</b>（只替换程序白名单内的文件）。
+          更新 <b>只在你点的时候联网</b>（程序不会自己去查）：点「检查程序更新」看有没有新版，
+          有新版本再点右侧按钮 —— 下载 → 起独立更新器替换<b>程序文件</b> → 自动重启。
+          更新只覆盖 <code>server/</code> 等白名单，
+          <b>你的资源、译文、设置一个都不会丢</b>。
         </p>
         <div class="optrow">
           <button id="btnCheckUpdate">检查程序更新</button>
           <button class="primary" id="btnApplyUpdate" disabled>下载并应用</button>
           <span id="updResult" class="dim"></span>
         </div>
-        <pre id="updNotes" class="notes" hidden></pre>
       </div>
     </section>
 
