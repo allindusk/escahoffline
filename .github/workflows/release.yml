@@ -190,35 +190,16 @@ jobs:
       # 那种条件（会永远跳过，产物只进 Artifacts，Releases 里没有文件）。
       # 这里改用 gh CLI，按 VERSION 里的版本号打 tag 并发 Release；
       # 若该版本的 Release 已存在，就覆盖上传其中的附件。
+      # 说明文案放在 docs/release-notes.md（模板，{VERSION} 为占位符）。
+      # 不要写进 YAML 的 PowerShell here-string：那里反引号是转义字符，
+      # Markdown 里的 `userdata/` 会被当成 Unicode 转义序列，直接把构建搞挂。
       - name: 准备 Release 说明
         shell: pwsh
         run: |
           $v = (Get-Content VERSION -Raw).Trim()
-          @"
-          ## 超昂大战 · 角色个人剧情离线阅读器 v$v
-
-          ### 下载哪个
-
-          | 文件 | 说明 |
-          |---|---|
-          | `ESCAH-Offline-v$v-win64-portable.zip` | **给普通用户**。内置 Python 3.11 与全部依赖，解压后双击 `启动.bat` 即用 |
-          | `ESCAH-Offline-v$v-update.zip` | **给程序内自动更新用**，也适合已装用户手动覆盖。只有代码与文档 |
-
-          > 想二次开发请直接 `git clone` 仓库（`pip install -r requirements.txt`）。
-
-          ### 第一次用
-
-          1. 解压 portable 包，双击 `启动.bat`
-          2. 「资源管理」页 → 下载**基础数据**（资源清单 + 公共素材）
-          3. 再到「剧情安装」勾想看的角色，点「开始安装」
-
-          ### 注意
-
-          - **本包不含任何游戏素材**，需按上述步骤自行从官方 CDN 下载并在本机解包
-          - 已有安装：用新包覆盖旧目录即可（`userdata/`、`web/media/`、剧情正文不会被覆盖），
-            也可以直接用程序内的「检查更新」
-          - 请勿传播素材、请勿高调宣传，详见 `NOTICE.md`
-          "@ | Set-Content dist/notes.md -Encoding UTF8
+          $tpl = Get-Content docs/release-notes.md -Raw
+          Set-Content dist/notes.md -Value ($tpl -replace '\{VERSION\}', $v) -Encoding UTF8
+          "已生成 dist/notes.md（v$v）"
 
       - name: 发布到 Release
         shell: pwsh
