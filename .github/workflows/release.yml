@@ -1,12 +1,13 @@
 name: build-release
 
-# 什么时候跑
-#   · 推一个 v1.2.3 这样的 tag        → 自动构建并发布 Release
-#   · 手动在 Actions 页面点 Run       → 只构建，产物在 Artifacts 里
+# 什么时候跑：**只手动**
+#   · Actions 页面点 Run workflow → 构建出 portable / update 两个 zip，
+#     产物在本次运行的 Artifacts 里下载，不会自动发 Release。
+#   · 想恢复"打 tag 自动发版"，把下面注释的两行加回来即可。
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+  # push:
+  #   tags: ['v*']
 
 permissions:
   contents: write        # 创建 Release 需要
