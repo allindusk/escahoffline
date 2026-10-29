@@ -24,7 +24,7 @@ on:
         default: false
 
 permissions:
-  contents: read        # 只需读 Releases（写权限在 release.yml 里）
+  contents: read
 
 jobs:
   e2e:
@@ -38,8 +38,7 @@ jobs:
       # ============================================================
       #  默认走 release：下载**真实发布产物**。
       #  为什么不能用"现场再组装一遍"代替 —— 那样测的是 CI 自己拼出来的副本，
-      #  打包环节（漏文件 / 路径错 / 依赖没装全）根本没被验证，
-      #  只有解压真正的 portable.zip 才会暴露。
+      #  打包环节（漏文件 / 路径错 / 依赖没装全）根本没被验证。
       - name: 获取被测包
         shell: pwsh
         env:
@@ -49,10 +48,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
           function Build-Portable {
-            param([string]$Dst, [string]$Out)
-            Write-Host "::warning::现场组装便携包（说明：这**不是**真实发布产物）"
+            param([string]$Dst)
+
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
+
             New-Item -ItemType Directory -Force -Path $Dst | Out-Null
             Copy-Item server, tools, docs -Destination $Dst -Recurse
             Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $Dst
@@ -67,9 +67,17 @@ jobs:
             $pyVer = "3.11.9"
             Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip" -OutFile "dist/py.zip"
             Expand-Archive "dist/py.zip" -DestinationPath "$Dst/python" -Force
-            $pth = Get-ChildItem "$Dst/python/python*._pth" | Select-Object -First 1
-            (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' |
-              Set-Content $pth.FullName -Encoding ascii
+
+            # 关键：embeddable 自带 python*._pth，一旦存在就**接管 sys.path**，
+            # 其中 "." 指 python.exe 所在目录（python\）而非项目根，
+            # 于是 `python -m server` 报 "No module named server"。
+            # 只取消注释 import site 没用 —— 必须删掉它，回到标准路径规则。
+            Get-ChildItem "$Dst/python/python*._pth" -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Remove-Item $_.FullName -Force
+                Write-Host "已删除 $($_.Name)（改为标准 sys.path）"
+              }
+
             New-Item -ItemType Directory -Force -Path "$Dst/python/Lib/site-packages" | Out-Null
             python -m pip install --quiet --upgrade --target "$Dst/python/Lib/site-packages" `
               --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
@@ -78,13 +86,14 @@ jobs:
           @echo off
           chcp 65001 >nul
           cd /d "%~dp0"
+          set "PYTHONPATH=%~dp0"
           "%~dp0python\python.exe" -m server --open
           if errorlevel 1 pause
           '@ | Set-Content "$Dst/启动.bat" -Encoding oem
 
             & "$Dst/python/python.exe" -c "import sys, UnityPy, PIL, numpy, playwright; print('embedded ok', sys.version.split()[0])"
             if ($LASTEXITCODE -ne 0) { throw "内置 Python 环境不可用" }
-            Compress-Archive -Path $Dst/* -DestinationPath $Out -CompressionLevel Optimal
+            Compress-Archive -Path $Dst/* -DestinationPath dist/ESCAH-Offline-v0.0.0-win64-portable.zip -CompressionLevel Optimal
           }
 
           $got = $false
@@ -99,47 +108,12 @@ jobs:
           }
 
           if (-not $got) {
-            Build-Portable -Dst "dist/ESCAH-Offline" -Out "dist/ESCAH-Offline-v0.0.0-win64-portable.zip"
+            Build-Portable -Dst "dist/ESCAH-Offline"
           }
 
           Get-ChildItem dist/*win64-portable.zip | ForEach-Object {
             "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)
           }
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-
-          $dst = "dist/ESCAH-Offline"
-          New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          Copy-Item server, tools, docs -Destination $dst -Recurse
-          Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $dst
-          New-Item -ItemType Directory -Force -Path "$dst/web/data" | Out-Null
-          Copy-Item web/*.html, web/serve.py -Destination "$dst/web"
-          Copy-Item web/assets -Destination "$dst/web" -Recurse
-          Get-ChildItem web/data/* | Where-Object {
-            $_.Name -notlike 'char_*.js' -and $_.Name -notlike 'adv_*.js'
-          } | Copy-Item -Destination "$dst/web/data"
-          New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
-
-          $pyVer = "3.11.9"
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip" -OutFile "dist/py.zip"
-          Expand-Archive "dist/py.zip" -DestinationPath "$dst/python" -Force
-          $pth = Get-ChildItem "$dst/python/python*._pth" | Select-Object -First 1
-          (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' |
-            Set-Content $pth.FullName -Encoding ascii
-          New-Item -ItemType Directory -Force -Path "$dst/python/Lib/site-packages" | Out-Null
-          python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
-            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
-
-          @'
-          @echo off
-          chcp 65001 >nul
-          cd /d "%~dp0"
-          "%~dp0python\python.exe" -m server --open
-          if errorlevel 1 pause
-          '@ | Set-Content "$dst/启动.bat" -Encoding oem
-
-          & "$dst/python/python.exe" -c "import sys, UnityPy, PIL, numpy, playwright; print('embedded ok', sys.version.split()[0])"
-          Compress-Archive -Path $dst/* -DestinationPath dist/ESCAH-Offline-v0.0.0-win64-portable.zip -CompressionLevel Optimal
 
       # ============================================================
       #  2. 解压到干净目录（模拟用户下载后的操作）
@@ -164,7 +138,7 @@ jobs:
         env:
           PYTHONUTF8: '1'
         run: |
-          # 关键：**用解压出来的包里自带的解释器**跑，才能验证内置环境
+          # 用**解压出来的包里自带的**解释器跑，才能验证内置环境
           $py = "D:\e2e\ESCAH-Offline\python\python.exe"
           if (-not (Test-Path $py)) { throw "包里没有内置 Python: $py" }
           & $py -c "import sys, UnityPy, PIL, numpy, playwright; print('包内环境 ok', sys.version.split()[0])"

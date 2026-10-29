@@ -114,7 +114,9 @@ def main() -> int:
     srv = subprocess.Popen(
         [py, "-m", "server", "-p", str(port)], cwd=root,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env=dict(os.environ, PYTHONUTF8="1"))
+        # PYTHONPATH 指向项目根：embedded Python 若不删 ._pth 会接管 sys.path，
+        # 导致 "No module named server"。显式给一份，双保险。
+        env=dict(os.environ, PYTHONUTF8="1", PYTHONPATH=root))
     try:
         # ---------- 1. 服务能起来 ----------
         up = False
