@@ -145,7 +145,11 @@ jobs:
 
           $extra = @()
           if ("${{ inputs.with_base }}" -eq "true") { $extra += "--base" }
-          & $py D:\e2e\ESCAH-Offline\tools\e2e_smoke.py `
+          # 用**本次 checkout 的**脚本，而不是包里那份：
+          # 测试脚本属于"测试工具"，若从被测物里取，就永远验不到新写的检查逻辑
+          # （曾因此出现"源码已修好但 e2e 仍报旧错"的假失败）。
+          # 解释器仍用包内 python —— 被测环境不变，只是工具换成最新。
+          & $py tools/e2e_smoke.py `
             --dir D:\e2e\ESCAH-Offline --unit "${{ inputs.unit }}" @extra
           if ($LASTEXITCODE -ne 0) { throw "端到端测试未通过（exit $LASTEXITCODE）" }
 
