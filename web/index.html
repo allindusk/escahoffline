@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>超昂大战 · 角色个人剧情（演出模式）</title>
+<link rel="stylesheet" href="assets/css/player.css?v=1030a">
+<link rel="stylesheet" href="assets/css/extras.css?v=1030a">
+</head>
+<body>
+<div id="settings" hidden>
+  <button id="setClose" title="关闭设置（Esc）">✕</button>
+  <h4 data-i18n="sect.view">画面</h4>
+  <label data-i18n="set.fit">画面缩放
+    <select id="setFit">
+      <option value="1x" data-i18n="opt.fit.1x">原始 1x（最清晰）</option>
+      <option value="fit" data-i18n="opt.fit.fit">适应窗口（会放大）</option>
+      <option value="15" data-i18n="opt.fit.15">放大 1.5x</option>
+    </select>
+  </label>
+  <div class="row"><span data-i18n="set.stand">立绘尺寸</span>
+    <input type="range" id="setStand" min="70" max="110" value="100" style="width:110px">
+  </div>
+  <label data-i18n="set.standY">立绘纵向位置 <span id="valStandY">0px</span>
+    <input type="range" id="setStandY" min="-60" max="120" step="4" value="0">
+  </label>
+  <label data-i18n="set.standX">立绘水平偏移 <span id="valStandX">0px</span>
+    <input type="range" id="setStandX" min="-40" max="40" step="1" value="0">
+  </label>
+  <div style="font-size:10.5px;color:var(--fg3);margin:-8px 0 12px">
+    <span data-i18n="set.fitNote">正值向上，负值向下（负太多会切掉头部）</span>
+  </div>
+  <div class="row" style="margin-top:8px"><span title="约 10.7% 的特殊立绘在游戏里本身就是分层图，缺少脸部部件" data-i18n-title="set.partialNote" data-i18n="set.partial">显示不完整立绘</span>
+    <input type="checkbox" id="setPartial">
+  </div>
+  <div class="row"><span title="优先加载「资源管理」里超分生成的 img_x2 高清图；没超分过的会自动回退到原图，不会黑图" data-i18n-title="set.useX2Note" data-i18n="set.useX2">优先使用超分图</span>
+    <input type="checkbox" id="setUseX2" checked>
+  </div>
+
+  <h4 data-i18n="sect.window">文本框</h4>
+  <label data-i18n="set.alpha">背景不透明度 <span id="valA">90%</span>
+    <input type="range" id="setA" min="0" max="100" value="90">
+  </label>
+  <label data-i18n="set.msgBg">背景色
+    <select id="setMsgBg">
+      <option value="10,14,22" data-i18n="opt.bg.blue">深蓝</option>
+      <option value="0,0,0" data-i18n="opt.bg.black">纯黑</option>
+      <option value="22,16,34" data-i18n="opt.bg.purple">深紫</option>
+      <option value="24,24,28" data-i18n="opt.bg.gray">深灰</option>
+      <option value="8,24,20" data-i18n="opt.bg.green">墨绿</option>
+      <option value="40,30,14" data-i18n="opt.bg.gold">暗金</option>
+    </select>
+  </label>
+  <label data-i18n="set.msgColor">文字颜色
+    <select id="setMsgColor">
+      <option value="#f2f5fb" data-i18n="opt.color.white">纯白</option>
+      <option value="#f5ecd8" data-i18n="opt.color.cream">米黄</option>
+      <option value="#d8ecff" data-i18n="opt.color.blue">淡蓝</option>
+      <option value="#ffe4ee" data-i18n="opt.color.pink">淡粉</option>
+      <option value="#dcf5e0" data-i18n="opt.color.green">淡绿</option>
+    </select>
+  </label>
+  <label data-i18n="set.font">字体
+    <select id="setMsgFont">
+      <option value="sans" data-i18n="opt.font.sans">黑体（默认）</option>
+      <option value="serif" data-i18n="opt.font.serif">明朝（衬线）</option>
+      <option value="yu" data-i18n="opt.font.yu">游黑体</option>
+    </select>
+  </label>
+  <label data-i18n="set.fontSize">字号 <span id="valFS">21px</span>
+    <input type="range" id="setFS" min="16" max="34" value="21">
+  </label>
+  <label data-i18n="set.lineHeight">行距 <span id="valLH">1.62</span>
+    <input type="range" id="setLH" min="120" max="220" step="5" value="162">
+  </label>
+  <label>对话框高度 <span id="valMsgH">150px</span>
+    <input type="range" id="setMsgH" min="90" max="340" step="10" value="150">
+  </label>
+  <label>对话框垂直位置 <span id="valMsgY">26px</span>
+    <input type="range" id="setMsgY" min="0" max="570" step="6" value="26">
+  </label>
+  <label data-i18n="set.stroke">描边粗细 <span id="valStroke">1.2px</span>
+    <input type="range" id="setStroke" min="0" max="30" step="2" value="12">
+  </label>
+  <label data-i18n="set.align">文字对齐
+    <select id="setAlign">
+      <option value="left" data-i18n="opt.align.left">左对齐</option>
+      <option value="center" data-i18n="opt.align.center">居中</option>
+      <option value="right" data-i18n="opt.align.right">右对齐</option>
+      <option value="justify" data-i18n="opt.align.justify">两端对齐</option>
+    </select>
+  </label>
+  <label data-i18n="set.msgX">水平位移 <span id="valMsgX">0px</span>
+    <input type="range" id="setMsgX" min="-300" max="300" step="5" value="0">
+  </label>
+  <h4 data-i18n="sect.name">话者名</h4>
+  <label data-i18n="set.nameAlign">对齐
+    <select id="setNameAlign">
+      <option value="left" data-i18n="opt.align.left">左对齐</option>
+      <option value="center" data-i18n="opt.align.center">居中</option>
+      <option value="right" data-i18n="opt.align.right">右对齐</option>
+    </select>
+  </label>
+  <label data-i18n="set.nameX">水平位移 <span id="valNameX">0px</span>
+    <input type="range" id="setNameX" min="-300" max="300" step="5" value="0">
+  </label>
+  <label data-i18n="set.nameY">垂直位移 <span id="valNameY">0px</span>
+    <input type="range" id="setNameY" min="-60" max="40" step="2" value="0">
+  </label>
+
+  <h4 data-i18n="sect.text">文本节奏</h4>
+  <label data-i18n="set.textMode">显示方式
+    <select id="setTextMode">
+      <option value="type" data-i18n="opt.textMode.type">打字机逐字</option>
+      <option value="instant" data-i18n="opt.textMode.instant">立即显示整句</option>
+    </select>
+  </label>
+  <label data-i18n="set.typeSpeed">打字速度 <span id="valType">100%</span>
+    <input type="range" id="setType" min="30" max="300" value="100">
+  </label>
+  <label data-i18n="set.pausePerChar">每字停留（无配音时） <span id="valPpc">90ms</span>
+    <input type="range" id="setPpc" min="30" max="260" step="10" value="90">
+  </label>
+  <label data-i18n="set.pauseBase">整句基础停顿 <span id="valPb">400ms</span>
+    <input type="range" id="setPb" min="0" max="1600" step="50" value="400">
+  </label>
+  <label data-i18n="set.pauseAfterVoice">语音结束后停顿 <span id="valPav">250ms</span>
+    <input type="range" id="setPav" min="0" max="1200" step="50" value="250">
+  </label>
+
+  <h4 data-i18n="sect.audio">音量</h4>
+  <label data-i18n="set.bgm">BGM 音量 <span id="valBgm">70%</span>
+    <input type="range" id="setBgm" min="0" max="100" value="70">
+  </label>
+  <label data-i18n="set.se">音效音量 <span id="valSe">90%</span>
+    <input type="range" id="setSe" min="0" max="100" value="90">
+  </label>
+  <label data-i18n="set.voice">语音音量 <span id="valVoice">100%</span>
+    <input type="range" id="setVoice" min="0" max="100" value="100">
+  </label>
+  <div class="reset-row"><button id="btnReset" data-i18n="ctrl.reset">恢复默认</button></div>
+  </div>
+<div class="layout">
+  <aside id="sidebar">
+    <input id="search" placeholder="角色名 / ID…" autocomplete="off" data-i18n-ph="search.ph">
+    <div id="srcRow">
+      <button data-src="char" class="on" data-i18n="src.char">角色</button>
+      <button data-src="main" data-i18n="src.main">主线</button>
+      <button data-src="event" data-i18n="src.event">活动</button>
+      <button data-src="other" data-i18n="src.other">其他</button>
+    </div>
+    <div id="filters">
+      <select id="sortBy">
+        <option value="id" data-i18n="sort.id">按角色 ID</option>
+        <option value="name" data-i18n="sort.name">按名字（あいうえお）</option>
+        <option value="date-desc" data-i18n="sort.dateDesc">实装日期 新→旧</option>
+        <option value="date-asc" data-i18n="sort.dateAsc">实装日期 旧→新</option>
+      </select>
+      <select id="dlFilter" title="按资源状态筛选">
+        <option value="">全部剧情</option>
+        <option value="have">只看已下载</option>
+        <option value="miss">只看未下载</option>
+      </select>
+      <div class="rar-row">
+        <button data-r="SSR">SSR</button>
+        <button data-r="SR">SR</button>
+        <button data-r="R">R</button>
+        <button data-r="other" data-i18n="sort.other">其他</button>
+      </div>
+    </div>
+    <div id="hit"></div>
+    <div id="charList"></div>
+  </aside>
+  <main>
+    <div id="tabs"><div id="meta"></div></div>
+    <div id="mainBody">
+    <div id="stageWrap">
+      <div id="dbgFit"></div>
+      <div id="stage">
+        <div id="bgLayer"></div>
+        <div id="standLayer"></div>
+        <div id="cgLayer"></div>
+        <div id="fxLayer"></div>
+        <div id="placeLayer"><span></span></div>
+        <div id="flashLayer"></div>
+        <div id="msgWindow">
+          <div id="msgName"></div>
+          <div id="msgText"></div>
+        </div>
+        <div id="empty" data-i18n="empty.hint">从左侧选择角色，然后点击播放</div>
+      </div>
+    </div>
+    <aside id="history">
+      <div id="hHead"><span data-i18n="history.title">本段文本 <b id="hCount"></b></span>
+        <button id="hToggle" data-i18n="history.collapse">收起 ▸</button></div>
+      <div id="hList"></div>
+      <div id="hPager"></div>
+    </aside>
+    </div>
+    <div id="controls">
+      <button id="btnRestart" data-i18n="ctrl.restart">⏮ 重播</button>
+      <button id="btnPlay" class="primary">▶ 播放</button>
+      <button id="btnNext" data-i18n="ctrl.nextPart">下一段 ⏭</button>
+      <span class="vsep"></span>
+      <label class="ctl" data-i18n="ctrl.speed">倍速
+        <select id="speed">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+        </select>
+      </label>
+      <label class="ctl"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
+      <span class="vsep"></span>
+      <span class="kbd" data-i18n="ctrl.hotkeys" data-i18n-title="ctrl.hotkeys">空格/P/点画面 暂停 · 回车/↓→ 下一句 · ↑← 上一句 · 按住 K 快进</span>
+      <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
+      <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
+      <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
+      <button id="btnTrans" title="导出本剧情译文给 AI 翻译，或把译好的 txt 导回">译文</button>
+      <div id="progress"><i></i></div>
+      <div id="pinfo"></div>
+    </div>
+    <div id="dbg">调试</div>
+  </main>
+</div>
+<div id="hTab" data-i18n="history.tab">文本列表</div>
+<div id="toast"></div>
+<script src="data/names.js"></script>
+<script src="data/charmeta.js"></script>
+<script src="data/index.js"></script>
+<script src="data/advindex.js"></script>
+<script src="data/imgmap.js"></script>
+<script src="data/imgmap.x2.js"></script>
+<script src="data/imgmap.base.js"></script>
+<script src="data/sfxmap.js"></script>
+<script src="assets/js/common.js?v=1030a"></script>
+<script src="assets/js/header.js?v=1030a"></script>
+<script src="assets/js/i18n.js?v=1030a"></script>
+<script src="assets/js/packstate.js?v=1030a"></script>
+<script src="assets/js/player.js?v=1030a"></script>
+<script src="assets/js/transui.js?v=1030a"></script>
+<script src="assets/js/tour.js?v=1030a"></script>
+<script src="assets/js/disclaimer.js?v=1030a"></script>
+<script src="assets/js/health.js?v=1030a"></script>
+<script>
+/* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
+const TOUR_STEPS = [
+  { el: 'nav a[href="setup.html"]', title: '① 先去「资源管理」装资源',
+    text: '这个程序<b>本身不含</b>游戏图片和语音。第一次用要先去「资源管理」，'
+      + '先下<b>基础数据</b>（资源清单 + 公共素材），再挑你想看的剧情装上。'
+      + '没装的剧情点开会提示「未下载」。' },
+  { el: '#search', title: '② 搜索、排序、筛选',
+    text: '框里输角色名（日文或中文都行）或 ID 就能搜。下面两个下拉可以换<b>排序</b>，'
+      + '也能只看<b>已下载</b>或<b>未下载</b>的剧情。' },
+  { el: '#srcRow', title: '③ 剧情分类',
+    text: '<b>角色</b>是个人剧情 6 段；<b>主线 / 活动 / 其他</b>是公共章节（含开场动画、新手教程）。' },
+  { el: '#charList', title: '④ 点角色开始',
+    text: '点一下就开始播。<b>用鼠标点画面</b>可以暂停或继续，不用去找播放键。' },
+  { el: '#tabs', title: '⑤ 段落切换',
+    text: '每部角色剧情分 6 段，点这里换段。标题右边会显示<b>译文覆盖率</b>（已译 X/Y 句）。' },
+  { el: '#stage', title: '⑥ 画面区',
+    text: '背景、立绘、对话框都显示在这里。快捷键：<b>空格</b>暂停、<b>回车</b>下一句、按住 <b>K</b> 快进。' },
+  { el: '#controls', title: '⑦ 播放控制',
+    text: '重播、暂停、下一段、倍速、自动播放、进度条都在这一条上。最右边的 ⚙ 打开显示设置。' },
+  { el: '#btnTrans', title: '⑧ 译文导入 / 导出',
+    text: '导出「原文 ||| 译文」格式的 txt，交给任意 AI 翻译，再导回即可。<b>这是本项目的核心玩法之一</b>——翻译最需要 AI 帮忙。' },
+  { el: '#btnSet', title: '⑨ 显示设置',
+    text: '字号、行距、描边、对话框样式、立绘大小与偏移、音量、打字速度都在这里，改完立即生效并自动记住。' },
+];
+
+(function () {
+  const help = document.querySelector('#btnHelp');
+  if (help) help.onclick = () => TOUR.start(TOUR_STEPS, { key: 'escah_tour_index' });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'h' || e.key === 'H') {
+      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+      TOUR.start(TOUR_STEPS, { key: 'escah_tour_index' });
+    }
+  });
+  /* 免责声明优先于新手引导：先让用户知道边界，再教怎么用 */
+  DISCLAIMER.auto();
+  HEALTH.start();
+  document.addEventListener('disclaimer:accepted', () => {
+    TOUR.auto({
+      key: 'escah_tour_index',
+      steps: TOUR_STEPS,
+      title: '欢迎使用 · 超昂大战 角色剧情离线阅读器',
+      intro: '这里把游戏里的角色剧情做成了可离线翻阅 + 可翻译 + 可导出的阅读器。默认不带资源包，先花 1 分钟认识界面。',
+    });
+  });
+})();
+</script>
+</body>
+</html>

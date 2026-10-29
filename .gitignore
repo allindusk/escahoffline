@@ -1,0 +1,99 @@
+# ============================================================
+#  这个仓库只放「程序」，不放游戏素材。
+#  素材体积 20 GB+ 且版权不属于本项目，一律通过资源包分发。
+# ============================================================
+
+# ---------- 游戏素材（绝对不要提交） ----------
+web/media/**
+!web/media/.gitkeep
+
+# ---------- 资源清单（不随仓库分发） ----------
+# manifest 会随官方更新变化，打包进仓库只会让用户拿到过期数据；
+# 首次使用与「刷新资源清单」都会现拉最新的（约 5 MB，有进度条）。
+Manifest*Ex.json
+Manifest*Ex.prev.json
+Manifest*Ex.raw
+Manifest*Ex.tsv
+Manifest*Ex.names.txt
+server/cdn/data/*.raw
+
+# ---------- 视频导出的中间产物 ----------
+# 每部剧情几百张 1080p PNG（几百 MB），导出成功后会自己清掉
+tools/video/out/
+tools/video/__pycache__/
+
+# ---------- 剧情正文数据 ----------
+# 索引（names/index/advindex/imgmap/sfxmap/charmeta/cgmap/packs.json）要进仓库，
+# 播放器靠它画目录树；正文 char_*.js / adv_*.js 由 core 资源包分发。
+web/data/char_*.js
+web/data/adv_*.js
+
+# ---------- 用户数据 ----------
+userdata/
+!userdata/.gitkeep
+
+# ---------- 本地的资源构建/分析中间产物 ----------
+_manifest_analysis/
+_tools/
+_TRASH/
+_video/
+atvpn_subscription_extract/
+glossary/
+prompt.txt
+
+# ---------- 备份与临时文件 ----------
+*.bak
+*.bak2
+*.orig
+*.tmp
+*.part
+*.part.json
+*.log
+_check.txt
+_debug_raw.txt
+_prints.txt
+_snap_*.txt
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本地覆盖 ----------
+web/data/packs.prev.json
+web/data/imgmap.pre_split.js.bak
+
+# ---------- 用户数据 / 运行时产物（不进仓库，也不进发布包） ----------
+# 剧情译文是用户自己攒的，不是程序的一部分：
+#   仓库和便携包里都不该有，否则用户装完剧情会莫名变成中文。
+web/assets/i18n/zh-Hans/
+web/assets/i18n/index.json
+web/assets/i18n/**/*.bak
+web/assets/i18n/**/*.bak2
+web/assets/i18n/**/*.e2ebak
+# sfxmap.json 是 export_sfx.py 的中间产物，网页读的是 sfxmap.js
+web/data/sfxmap.json
+web/data/*.orig
+
+# 音频映射是运行时产物（依赖本机已导出的 m4a），不该入库
+web/data/sfxmap.js
+web/data/sfxmap.json
+
+# ---------- 超分 / 合成产物（属于本机数据，不进仓库、不进发布包） ----------
+# imgmap.x2.js 记录"我本机超分过哪些图"。打进包会让新用户以为全都超分过了，
+# 画质页会显示"没有需要超分的图"，实际一张都没有。
+web/data/imgmap.x2.js
+web/data/imgmap.base.js
+web/data/stand_slot.json
+
+# 重置历史时的旧仓库备份（含旧的提交对象，别提交）
+.git.old/

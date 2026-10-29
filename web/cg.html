@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>超昂大战 · 角色 CG 查看</title>
+<link rel="stylesheet" href="assets/css/cg.css?v=1030a">
+</head>
+<body>
+<div class="layout">
+  <aside id="sidebar">
+    <!-- 搜索框放在角色列表正上方（和播放器一致）：
+         列表在左、搜索在右会让人先往右看再往左点，很别扭 -->
+    <input id="q" placeholder="搜索角色 / 中文名 / 事件…" autocomplete="off">
+    <div id="filters">
+      <select id="sortBy">
+        <option value="id">按角色 ID</option>
+        <option value="name">按名字（あいうえお）</option>
+        <option value="count">按 CG 数</option>
+        <option value="date-desc">实装日期 新→旧</option>
+        <option value="date-asc">实装日期 旧→新</option>
+      </select>
+      <select id="dlFilter" title="按资源状态筛选">
+        <option value="">全部角色</option>
+        <option value="have">只看已下载</option>
+        <option value="miss">只看未下载</option>
+      </select>
+    </div>
+    <div id="charList"></div>
+  </aside>
+
+  <main>
+    <div id="bar">
+      <span id="barInfo"></span>
+      <button class="primary" id="btnExportCg"
+              title="把当前角色（未选角色时为全部）的 CG 打包成 zip">⬇ 导出 CG</button>
+      <span class="sizes">
+        <span>卡片大小</span>
+        <button class="sz" data-sz="180">小</button>
+        <button class="sz" data-sz="240">中</button>
+        <button class="sz" data-sz="320">大</button>
+        <button class="sz" data-sz="440">特大</button>
+      </span>
+    </div>
+    <div id="grid"></div>
+  </main>
+</div>
+
+<div id="lb">
+  <div id="lbTop">
+    <span id="lbTitle"></span>
+    <span id="lbCount" style="color:var(--fg3)"></span>
+    <span id="lbGroup" style="color:var(--fg3)"></span>
+    <button id="lbClose">关闭 Esc</button>
+  </div>
+  <div id="lbBody">
+    <button id="lbPrev" title="上一张 ←">‹</button>
+    <img id="lbImg" alt="">
+    <button id="lbNext" title="下一张 →">›</button>
+  </div>
+  <div id="lbBottom"></div>
+  <div id="lbHint">
+    <kbd>←</kbd><kbd>→</kbd> 切换张数 ·
+    <kbd>↑</kbd><kbd>↓</kbd> 切换事件组 ·
+    <kbd>Esc</kbd> 关闭
+  </div>
+</div>
+
+<script src="data/names.js"></script>
+<script src="data/charmeta.js"></script>
+<script src="data/cgmap.js"></script>
+<script src="data/imgmap.js"></script>
+<script src="data/imgmap.x2.js"></script>
+<script src="data/imgmap.base.js"></script>
+<script src="assets/js/common.js?v=1030a"></script>
+<script src="assets/js/header.js?v=1030a"></script>
+<script src="assets/js/packstate.js?v=1030a"></script>
+<script src="assets/js/cg.js?v=1030a"></script>
+<script src="assets/js/cgexport.js?v=1030a"></script>
+<script src="assets/js/disclaimer.js?v=1030a"></script>
+<script src="assets/js/health.js?v=1030a"></script>
+<script>DISCLAIMER.auto(); HEALTH.start();</script>
+</body>
+</html>

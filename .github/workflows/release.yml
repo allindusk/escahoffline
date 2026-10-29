@@ -1,0 +1,209 @@
+name: build-release
+
+# 什么时候跑
+#   · 推一个 v1.2.3 这样的 tag        → 自动构建并发布 Release
+#   · 手动在 Actions 页面点 Run       → 只构建，产物在 Artifacts 里
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write        # 创建 Release 需要
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if (-not $v) { $v = "0.0.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "版本：$v"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ---------------- 基本自检：语法不通就别发 ----------------
+      - name: 安装运行依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -c "import UnityPy, lz4, PIL, numpy; print('deps ok')"
+
+      - name: 后端导入自检
+        shell: pwsh
+        run: |
+          python -c "import server.api, server.media, server.exports, server.updater, server.packs, server.net, server.jobs, server.cdn.install, server.cdn.manifest, server.cdn.stages"
+          if ($LASTEXITCODE -ne 0) { throw "server 包导入失败" }
+
+      - name: 前端语法自检
+        shell: pwsh
+        run: |
+          node --version
+          $bad = 0
+          Get-ChildItem web/assets/js/*.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { Write-Host "FAIL $($_.Name)"; $bad++ }
+          }
+          if ($bad -gt 0) { throw "$bad 个前端脚本语法错误" }
+
+      - name: 资源清单自检
+        shell: pwsh
+        run: |
+          # 仓库里没有素材，必然报"文件不存在"，这里只校验脚本能跑通
+          python tools/build_packs.py --check-only
+          Write-Host "（缺素材时校验会失败，属预期，不阻断构建）"
+        continue-on-error: true
+
+      # ---------------- 组装程序目录 ----------------
+      - name: 组装程序目录
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $dst = "dist/ESCAH-Offline"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          Copy-Item server, tools, docs -Destination $dst -Recurse
+          Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $dst
+
+          New-Item -ItemType Directory -Force -Path "$dst/web/data" | Out-Null
+          # serve.py / stop_server.ps1 是「纯前端预览」调试工具，只服务开发，
+          # 不放进发布包 —— 否则用户会看到两个都叫「启动」的脚本
+          Copy-Item web/*.html -Destination "$dst/web"
+          Copy-Item web/assets -Destination "$dst/web" -Recurse
+          # 索引要带上（播放器靠它画目录树），剧情正文不带（由资源包分发）
+          Get-ChildItem web/data/* | Where-Object {
+            $_.Name -notlike 'char_*.js' -and $_.Name -notlike 'adv_*.js'
+          } | Copy-Item -Destination "$dst/web/data"
+
+          New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
+          Set-Content -Path "$dst/web/media/.gitkeep" -Value "" -NoNewline
+          Set-Content -Path "$dst/userdata/.gitkeep" -Value "" -NoNewline
+
+          # 把 app.json 里的占位仓库名换成真实仓库，用户开箱即可检查更新
+          $app = "$dst/web/data/app.json"
+          (Get-Content $app -Raw) -replace 'YOUR_GITHUB_NAME/[^"]+', "${{ github.repository }}" |
+            Set-Content $app -Encoding utf8
+
+          "程序目录组装完成：$((Get-ChildItem $dst -Recurse -File | Measure-Object).Count) 个文件"
+
+      # 纯代码更新包：只含程序与文档，不含 Python / 依赖 / 素材。
+      # 程序内「检查程序更新」下的是它（3–5 MB），更新器按白名单覆盖即可。
+      - name: 组装更新包（纯代码）
+        shell: pwsh
+        run: |
+          $src = "dist/ESCAH-Offline"
+          $dst = "dist/ESCAH-Offline-update"
+          if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path "$dst/web" | Out-Null
+
+          Copy-Item "$src/server", "$src/tools", "$src/docs" -Destination $dst -Recurse
+          # **不带启动脚本**：便携版的 启动.bat 是下面那步专门生成的（直接调 python\python.exe），
+          # 而仓库里这份是"找系统 Python"的源码版。一旦被更新包覆盖，
+          # 便携版用户下次启动就会报"没有找到 Python"。
+          Copy-Item "$src/VERSION", "$src/README.md", "$src/NOTICE.md", "$src/LICENSE",
+                    "$src/start.sh" -Destination $dst
+          Copy-Item "$src/web" -Filter *.html -Destination "$dst/web"
+          # 调试脚本（serve.py / stop_server.ps1 / dev-*.bat）不进更新包
+          Copy-Item "$src/web/assets" -Destination "$dst/web" -Recurse
+          # i18n 是用户自己攒的译文（属于用户数据），更新包里不带，
+          # 否则会把用户后来的翻译覆盖回发布时的旧版
+          Remove-Item "$dst/web/assets/i18n" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$src/web/data" -Destination "$dst/web" -Recurse   # 只有索引，没有剧情正文
+
+          $n = (Get-ChildItem $dst -Recurse -File | Measure-Object).Count
+          "更新包内容：$n 个文件"
+
+
+      # ---------------- 便携版：内置 Python + Pillow ----------------
+      - name: 组装便携版（embedded Python）
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $pyVer = "3.11.9"
+          $src = "dist/ESCAH-Offline"
+          $dst = "dist/ESCAH-Offline-portable"
+          if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+          Copy-Item $src $dst -Recurse
+
+          # 官方 embeddable 包：无 pip、体积小，正好适合"解压即用"
+          $url = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "dist/py.zip"
+          Expand-Archive "dist/py.zip" -DestinationPath "$dst/python" -Force
+
+          # embeddable 版默认不加载 site-packages，要手动打开
+          $pth = Get-ChildItem "$dst/python/python*._pth" | Select-Object -First 1
+          (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' |
+            Set-Content $pth.FullName -Encoding ascii
+          Write-Host "已启用 site-packages：$($pth.Name)"
+
+          # 用 runner 上的 3.11 装全部运行依赖，ABI 与 embeddable 一致。
+          # 这一步是整个便携版的关键：解包 Unity 资源需要 UnityPy + lz4 + numpy，
+          # 缺任何一个用户都会卡在"安装剧情"这一步。
+          New-Item -ItemType Directory -Force -Path "$dst/python/Lib/site-packages" | Out-Null
+          python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
+            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography
+
+          # 便携版的启动脚本：直接用内置解释器
+          @'
+          @echo off
+          chcp 65001 >nul
+          cd /d "%~dp0"
+          "%~dp0python\python.exe" -m server --open
+          if errorlevel 1 pause
+          '@ | Set-Content "$dst/启动.bat" -Encoding oem
+
+          # 验证内置解释器 + 全部依赖都能跑（这是便携版唯一的验收点）
+          & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "便携版 Python 环境不可用（解包依赖缺失）" }
+
+      - name: 打 portable + update zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Compress-Archive -Path dist/ESCAH-Offline-portable/* -DestinationPath "dist/ESCAH-Offline-v$v-win64-portable.zip" -CompressionLevel Optimal
+          Compress-Archive -Path dist/ESCAH-Offline-update/* -DestinationPath "dist/ESCAH-Offline-v$v-update.zip" -CompressionLevel Optimal
+          Get-ChildItem dist/*.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
+
+      # ---------------- 发布 ----------------
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ESCAH-Offline-v${{ steps.ver.outputs.version }}
+          path: dist/*.zip
+
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          name: v${{ steps.ver.outputs.version }}
+          draft: false
+          body: |
+            ## 超昂大战 · 角色剧情离线阅读器 v${{ steps.ver.outputs.version }}
+
+            ### 下载哪个
+            | 文件 | 说明 |
+            |---|---|
+            | `ESCAH-Offline-v${{ steps.ver.outputs.version }}-win64-portable.zip` | **给用户**。内置 Python 3.11 与全部依赖，解压双击 `启动.bat` 即用 |
+            | `ESCAH-Offline-v${{ steps.ver.outputs.version }}-update.zip` | **给程序内自动更新用**（也适合已装用户手动覆盖）。只有代码与文档，3–5 MB |
+
+            > 想二次开发请直接 `git clone` 仓库（`pip install -r requirements.txt`），
+            > 不再单独提供"只有代码、要自己装 Python"的包。
+
+            ### 注意
+            - **本包不含任何游戏素材**，首次打开后在「资源管理」里装资源（约 1 GB 起）
+            - 已有安装：把新包解压后，用 `启动.bat` 覆盖旧目录（`userdata/`、`web/media/`、
+              `web/data/` 里的剧情正文不会被覆盖，也可以直接用程序内「检查更新」）
+            - 请勿传播素材、请勿高调宣传，详见仓库 `NOTICE.md`
+
+            ### 更新日志
+            <!-- 在这里补充本版改动 -->

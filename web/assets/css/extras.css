@@ -1,0 +1,120 @@
+/* 播放器扩展样式（资源状态标记 / 录制 HUD / 译文面板 / 帮助按钮）
+ *
+ * 单独一个文件而不是塞进 player.css：player.css 是原先就有的演出样式，
+ * 这里全是"资源管理改造"新增的东西，分开便于以后单独替换。
+ */
+
+/* ---------------- 资源未下载标记 ---------------- */
+.char-btn.nodl { opacity: .5; }
+.char-btn.nodl:hover { opacity: .8; }
+.char-btn.nodl .nm { color: #8c9db1; }
+.badge {
+  display: inline-block; font-size: 9.5px; line-height: 14px;
+  padding: 0 5px; border-radius: 4px; margin-left: 5px;
+  vertical-align: 1px; white-space: nowrap;
+}
+.badge.nodl { background: #44232a; color: #ffb3ba; border: 1px solid #6d3740; }
+.badge.soft { background: #3d3320; color: #ffd79a; border: 1px solid #5e4c26; }
+
+/* ---------------- 控制条：新增「录制 / 译文」后不允许挤成两行 ---------------- */
+#controls { gap: 7px; overflow-x: auto; scrollbar-width: none; }
+#controls::-webkit-scrollbar { height: 0; }
+#controls button { white-space: nowrap; flex: none; padding: 6px 11px; }
+#controls .kbd { flex: 1 1 40px; }
+
+/* ---------------- 顶栏帮助按钮 ---------------- */
+#btnHelp {
+  background: #1c2c40; color: #9fd4f5; border: 1px solid #2f4c6d;
+  border-radius: 8px; width: 30px; height: 26px;
+  cursor: pointer; font-weight: 700; margin-left: 6px;
+}
+#btnHelp:hover { background: #26405c; color: #d7efff; }
+
+/* ---------------- 录制 HUD ---------------- */
+#recHud {
+  position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
+  z-index: 9990; display: none; align-items: center; gap: 12px;
+  background: rgba(58, 13, 18, .96); border: 1px solid #a3242f;
+  color: #ffd9dc; padding: 8px 14px; border-radius: 12px; font-size: 13px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .55);
+}
+#recHud b { color: #ff5f6d; letter-spacing: .5px; }
+#recHud span { font-variant-numeric: tabular-nums; color: #fff; }
+#recHud button {
+  background: #7d1b24; color: #ffe3e5; border: 1px solid #b83844;
+  border-radius: 8px; padding: 4px 12px; cursor: pointer; font-size: 12.5px;
+}
+#recHud button:hover { background: #9c232e; }
+
+/* ---------------- 译文面板 ---------------- */
+#transPanel {
+  position: fixed; right: 0; top: 0; bottom: 0; width: min(540px, 96vw);
+  background: #0b131e; border-left: 1px solid #22374d; z-index: 9500;
+  transform: translateX(102%); transition: transform .24s ease;
+  display: flex; flex-direction: column; color: #dbe9f8;
+  box-shadow: -18px 0 50px rgba(0, 0, 0, .5);
+}
+#transPanel.on { transform: none; }
+#transPanel .tp-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid #1d2f43; font-size: 14px;
+}
+#transPanel .tp-head b { color: #7adcff; }
+#transPanel .tp-head button {
+  background: none; border: none; color: #7d92ab; font-size: 17px; cursor: pointer;
+}
+#transPanel .tp-body { padding: 16px 18px; overflow: auto; flex: 1; }
+#transPanel /* 译文格式：左右并排对比（导出 vs 导回） */
+.tp-cmp { display: flex; gap: 10px; margin: 10px 0 12px; }
+.tp-cmp-col { flex: 1 1 0; min-width: 0; background: #0d1622;
+  border: 1px solid #23405c; border-radius: 9px; padding: 9px 11px; }
+.tp-cmp-col.good { border-color: #2c5a3c; background: #0c1a12; }
+.tp-cmp-h { font-size: 12px; color: #7fd3ff; margin-bottom: 7px; font-weight: 600; }
+.tp-cmp-col.good .tp-cmp-h { color: #8fe0a4; }
+.tp-cmp-code { font-family: Consolas, "Courier New", monospace; font-size: 12px;
+  line-height: 1.9; color: #b9cde0; word-break: break-all; }
+.tp-bar { color: #ffb454; font-weight: 700; }
+.tp-empty { color: #5c718a; font-style: italic; }
+.tp-fill { color: #8fe0a4; }
+.tp-cmp-f { margin-top: 7px; font-size: 11.5px; color: #7d92ab; }
+.tp-cmp-f b { color: #cfe0f2; }
+@media (max-width: 620px) { .tp-cmp { flex-direction: column; } }
+
+.tp-note {
+  font-size: 12.5px; line-height: 2; color: #a9c0d8;
+  background: #0f1a27; border: 1px solid #1d2f43; border-radius: 10px;
+  padding: 12px 14px; margin: 0 0 14px;
+}
+#transPanel .tp-note code { color: #8fd6ff; background: #14243a; padding: 1px 4px; border-radius: 3px; }
+#transPanel .tp-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+}
+#transPanel button.primary {
+  background: #2b6ea8; color: #eaf6ff; border: 1px solid #4b96d4;
+  border-radius: 9px; padding: 8px 16px; cursor: pointer; font-size: 13px;
+}
+#transPanel button.primary:hover { filter: brightness(1.15); }
+#transPanel button.primary:disabled { opacity: .5; cursor: default; }
+#transPanel .tp-stat { font-size: 12px; color: #7d92ab; }
+#transPanel .tp-file {
+  flex: 1; display: flex; align-items: center; gap: 8px;
+  border: 1px dashed #2f4c6d; border-radius: 9px; padding: 9px 12px;
+  font-size: 12.5px; color: #9fb6cc; cursor: pointer;
+}
+#transPanel .tp-file:hover { border-color: #4b96d4; color: #cfe6ff; }
+#transPanel .tp-file input { display: none; }
+#transPanel .tp-mode { font-size: 12.5px; color: #a9c0d8; display: flex; align-items: center; gap: 4px; }
+#transPanel textarea {
+  width: 100%; height: 190px; resize: vertical; background: #0f1a27;
+  color: #dbe9f8; border: 1px solid #1d2f43; border-radius: 10px;
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.8;
+  font-family: Consolas, 'Courier New', monospace; margin-bottom: 12px;
+}
+#transPanel .tp-result { font-size: 12.5px; line-height: 1.9; color: #a9e8bf; }
+#transPanel .tp-result .tp-tip { color: #7d92ab; }
+#transPanel .tp-result .tp-err { color: #ff9aa5; }
+
+/* 窄屏：译文面板铺满 */
+@media (max-width: 640px) {
+  #transPanel { width: 100vw; }
+}

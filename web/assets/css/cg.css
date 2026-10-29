@@ -1,0 +1,139 @@
+:root{
+  --bg:#0b0d12; --bg2:#141822; --bg3:#1c2230; --line:#2a3040;
+  --fg:#e6e9f0; --fg2:#9aa4b8; --fg3:#6b7488;
+  --gold:#e0b566; --purple:#8b7cf6; --cyan:#4dd4c4;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column;
+  overflow:hidden;font-family:"Microsoft YaHei","Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
+
+/* ---------- 顶栏 ---------- */
+h1{font-size:15px;font-weight:600;color:var(--gold);letter-spacing:.5px;white-space:nowrap}
+/* 导航绝对居中，理由同播放器页：标题字数变化不该让导航左右跳 */
+h1 small{color:var(--fg3);font-weight:400;margin-left:8px;font-size:11.5px}
+nav{display:flex;gap:4px;margin-left:6px}
+nav a{padding:5px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
+  color:var(--fg2);background:var(--bg3);border:1px solid transparent}
+nav a:hover{color:var(--fg)}
+nav a.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
+/* 搜索框在侧栏顶部，宽度跟着侧栏走（与播放器页一致） */
+#sidebar #q{width:auto;margin:8px 8px 0;padding:6px 10px;border-radius:7px;
+  font-size:12.5px;border:1px solid var(--line);background:var(--bg3);
+  color:var(--fg);font-family:inherit}
+#sidebar #q:focus{outline:none;border-color:var(--purple)}
+
+/* ---------- 布局 ---------- */
+.layout{display:flex;flex:1;min-height:0}
+#sidebar{width:252px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--line);
+  display:flex;flex-direction:column}
+#filters{padding:7px 8px;border-bottom:1px solid var(--line);flex-shrink:0;display:flex;gap:5px}
+#filters select{flex:1;padding:4px 6px;border-radius:5px;font-size:11.5px;font-family:inherit;
+  border:1px solid var(--line);background:var(--bg3);color:var(--fg)}
+#filters select:focus{outline:none;border-color:var(--purple)}
+#charList{flex:1;overflow-y:auto;padding:4px}
+#charList::-webkit-scrollbar{width:7px}
+#charList::-webkit-scrollbar-thumb{background:#333a4d;border-radius:4px}
+/* 未下载角色的头像占位：不请求图片（否则全新环境上百个 404），用首字色块 */
+.char-btn .ava-ph{width:42px;height:42px;flex-shrink:0;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,#2a2138,#1a1626);
+  border:1px solid var(--line);color:#8b7ba8;font-size:16px;font-weight:600;
+  user-select:none}
+
+.char-btn{display:flex;align-items:center;gap:8px;padding:4px 7px;border-radius:7px;
+  cursor:pointer;font-size:12.5px;color:var(--fg2);margin-bottom:2px}
+.char-btn:hover{background:var(--bg3);color:var(--fg)}
+.char-btn.on{background:linear-gradient(90deg,#3a2d5c,#2a2340);color:var(--gold);font-weight:600}
+.char-btn.all{padding:7px;justify-content:center;font-weight:600;color:var(--fg);
+  background:var(--bg3);margin-bottom:6px}
+.char-btn.all.on{background:#2d2a4a;color:var(--gold)}
+.char-btn img{width:42px;height:42px;border-radius:8px;object-fit:cover;flex-shrink:0;
+  background:#1a2030;border:1px solid #2d3446}
+.char-btn.on img{border-color:rgba(224,181,102,.7)}
+.char-btn .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.char-btn .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.char-btn .sub{font-size:10px;color:var(--fg3)}
+.char-btn.on .sub{color:var(--gold);opacity:.8}
+
+/* ---------- 卡片墙 ---------- */
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+#bar{display:flex;align-items:center;gap:12px;padding:5px 16px;flex-shrink:0;
+  background:var(--bg2);border-bottom:1px solid var(--line);font-size:11.5px;color:var(--fg3)}
+#bar b{color:var(--gold);font-weight:600}
+#bar .sizes{margin-left:auto;display:flex;gap:4px;align-items:center}
+#bar .sizes span{font-size:11px;color:var(--fg3);margin-right:2px}
+#bar .sz{border:1px solid var(--line);background:var(--bg3);color:var(--fg3);
+  border-radius:5px;padding:2px 10px;font-size:11px;cursor:pointer;font-family:inherit}
+#bar .sz:hover{color:var(--fg)}
+#bar .sz.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
+#grid{flex:1;overflow-y:auto;padding:14px 16px 40px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cardMin,300px),1fr));
+  grid-auto-rows:max-content;
+  gap:16px;align-content:start;align-items:start}
+#grid::-webkit-scrollbar{width:9px}
+#grid::-webkit-scrollbar-thumb{background:#333a4d;border-radius:5px}
+
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:9px;overflow:hidden;
+  cursor:pointer;transition:transform .14s,border-color .14s,box-shadow .14s}
+.card:hover{transform:translateY(-3px);border-color:#4a3f78;
+  box-shadow:0 8px 22px rgba(0,0,0,.55)}
+/* 用 padding-top 撑出 16:9，比 aspect-ratio 在大量网格行中更可靠 */
+.card .thumb{position:relative;width:100%;height:0;padding-top:56.25%;
+  background:#05060a;overflow:hidden;flex-shrink:0}
+.card .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  display:block;transition:transform .3s}
+.card:hover .thumb img{transform:scale(1.04)}
+.card .badge{position:absolute;right:6px;top:6px;background:rgba(8,10,16,.82);
+  color:var(--gold);font-size:11px;padding:1px 8px;border-radius:10px;font-weight:600;
+  border:1px solid rgba(224,181,102,.35)}
+.card .cap{padding:7px 9px 8px;display:flex;flex-direction:column;gap:2px}
+.card .cap .cn{font-size:12.5px;color:var(--fg);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.card .cap .share{color:var(--cyan);font-size:10px;margin-left:5px;opacity:.75}
+.card .cap .cz{font-size:10.5px;color:var(--gold);opacity:.85;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.card .cap .ck{font-size:10.5px;color:var(--fg3);display:flex;justify-content:space-between;gap:6px}
+.card .cap .ck span:last-child{flex-shrink:0}
+#empty{grid-column:1/-1;text-align:center;padding:70px 0;color:var(--fg3);font-size:13px}
+
+/* ---------- 灯箱 ---------- */
+#lb{position:fixed;inset:0;z-index:200;background:rgba(4,5,9,.97);display:none;
+  flex-direction:column}
+#lb.on{display:flex}
+#lbTop{display:flex;align-items:center;gap:14px;padding:9px 18px;flex-shrink:0;
+  font-size:12.5px;color:var(--fg2);border-bottom:1px solid #1e2430}
+#lbTop b{color:var(--gold);font-weight:600}
+#lbClose{margin-left:auto;background:var(--bg3);border:1px solid var(--line);color:var(--fg);
+  border-radius:6px;padding:4px 13px;cursor:pointer;font-size:12px;font-family:inherit}
+#lbClose:hover{color:var(--gold);border-color:#4a3f78}
+#lbBody{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+  position:relative;padding:10px}
+#lbImg{max-width:100%;max-height:100%;object-fit:contain;display:block;
+  box-shadow:0 10px 50px rgba(0,0,0,.8)}
+#lbPrev,#lbNext{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:88px;
+  background:rgba(20,24,34,.72);border:1px solid var(--line);color:var(--fg2);cursor:pointer;
+  font-size:20px;border-radius:7px;display:flex;align-items:center;justify-content:center}
+#lbPrev{left:12px} #lbNext{right:12px}
+#lbPrev:hover,#lbNext:hover{color:var(--gold);background:rgba(45,42,74,.92)}
+#lbBottom{display:flex;align-items:center;justify-content:center;gap:9px;
+  padding:10px;flex-shrink:0;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#39414f;cursor:pointer;
+  transition:background .15s,transform .15s}
+.dot:hover{background:#5c6a80}
+.dot.on{background:var(--gold);transform:scale(1.35)}
+#lbHint{font-size:11px;color:var(--fg3);padding:0 14px 12px;text-align:center}
+#lbHint kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
+  padding:1px 5px;font-size:10.5px}
+
+/* 未下载角色的 CG 缩略图占位（不请求图片，避免 404）
+   原来 12px + #5d5175，在深色底上等于看不见，改成虚线徽标 */
+/* 注意：.thumb 是 height:0 + padding-top 撑出的 16:9，
+   所以不能用 flex 居中（内容会排到 padding 下方、溢出被裁）。
+   必须绝对定位 + translate 才真正居中。 */
+.card .thumb.noimg{background:linear-gradient(160deg,#2a2138,#181327)}
+/* 提示文字由 JS 插入（CSS content 里的中文会被某些环境按错编码解析） */
+.card .thumb .noimg-tip{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  color:#cbbcf0;font-size:16px;font-weight:600;letter-spacing:3px;
+  padding:8px 20px;border:1px dashed #6b58a0;border-radius:10px;
+  background:rgba(12,9,20,.65);white-space:nowrap;pointer-events:none}

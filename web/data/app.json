@@ -1,0 +1,7 @@
+{
+ "_说明": "程序元信息。把 repo 改成你自己的 GitHub 仓库（owner/name），「检查程序更新」才能工作。",
+ "repo": "YOUR_GITHUB_NAME/escalation-heroines-offline",
+ "name": "ESCAH-Offline",
+ "channel": "stable",
+ "docs": "docs/AI-ONBOARDING.md"
+}
