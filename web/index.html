@@ -238,7 +238,9 @@
         onerror="window.__IMGX2=window.__IMGX2||{}"></script>
 <script src="data/imgmap.base.js?v=1029a"
         onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
-<script src="data/sfxmap.js"></script>
+  <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
+  <script src="data/sfxmap.js?v=1029a"
+          onerror="window.__SFX=window.__SFX||{}"></script>
 <script src="assets/js/common.js?v=1030a"></script>
 <script src="assets/js/header.js?v=1030a"></script>
 <script src="assets/js/i18n.js?v=1030a"></script>

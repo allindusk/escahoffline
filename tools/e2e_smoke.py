@@ -233,7 +233,8 @@ def main() -> int:
                     if r.status != 404:
                         return
                     u = r.url
-                    if "imgmap.x2" in u or "imgmap.base" in u or "/i18n/" in u:
+                    if ("imgmap.x2" in u or "imgmap.base" in u or "/i18n/" in u
+                        or "sfxmap" in u):
                         return
                     f404.append(u)
                 pg.on("response", on_resp)

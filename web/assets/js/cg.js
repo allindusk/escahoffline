@@ -37,8 +37,9 @@ function avatarCands(id) {
   push((IMGMAP.avatar || {})[id]);
   // 头像导出的是 **.png**（原图格式），不是 .webp。
   // 只写 .webp 的话，全新环境里所有头像 404、侧栏一片空白。
-  push('media/img/avatar/' + id + '.webp');
+  // 导出的是 **.png**，先试 png 再试 webp（顺序反了会先吃一个 404 才回退）
   push('media/img/avatar/' + id + '.png');
+  push('media/img/avatar/' + id + '.webp');
   push('media/img/avatar/' + id + '.jpg');
   push('media/img_x2/avatar/' + id + '.webp');
   push('media/img_x2/avatar/' + id + '.png');

@@ -1582,8 +1582,10 @@ function avatarCands(id) {
   push((IMGMAP.avatar || {})[id]);
   // 头像导出的是 **.png**（原图格式），不是 .webp —— 以前只试 .webp，
   // 于是全新环境里 378 个头像全部 404、侧栏头像整片空白。
-  push(`media/img/avatar/${id}.webp`);
+  // 导出的是 **.png**，所以硬编码兜底时先试 png 再试 webp：
+  // 顺序反了会让每个角色都先吃一个 404 才回退。
   push(`media/img/avatar/${id}.png`);
+  push(`media/img/avatar/${id}.webp`);
   push(`media/img/avatar/${id}.jpg`);
   if (SET.useX2 !== false) {
     push(`media/img_x2/avatar/${id}.webp`);
