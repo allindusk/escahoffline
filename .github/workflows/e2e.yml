@@ -1,10 +1,18 @@
 name: e2e-clean-install
 
-# 模拟「新用户下载便携包 → 解压 → 启动 → 装一部剧情 → 播放」的完整链路。
+# 模拟「新用户 → 下载便携包 → 解压 → 启动 → 装一部剧情 → 播放」的完整链路。
 # 只在手动触发：跑一次约 8–15 分钟（含下载素材），不适合每次提交都跑。
 on:
   workflow_dispatch:
     inputs:
+      source:
+        description: '从哪拿被测的包'
+        type: choice
+        required: true
+        default: 'release'
+        options:
+          - release      # 从 Releases 下载真实发布产物（推荐）
+          - build        # 在 CI 里现场组装（Release 还没发时用这个）
       unit:
         description: '装哪一部剧情（如 char_2）'
         required: false
@@ -16,7 +24,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: read        # 只需读 Releases（写权限在 release.yml 里）
 
 jobs:
   e2e:
@@ -25,23 +33,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      # ============================================================
+      #  1. 拿到被测的包
+      # ============================================================
+      #  默认走 release：下载**真实发布产物**。
+      #  为什么不能用"现场再组装一遍"代替 —— 那样测的是 CI 自己拼出来的副本，
+      #  打包环节（漏文件 / 路径错 / 依赖没装全）根本没被验证，
+      #  只有解压真正的 portable.zip 才会暴露。
+      - name: 从 Releases 下载便携包
+        if: inputs.source == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          gh release download --pattern "*win64-portable.zip" --dir dist --clobber
+          if ($LASTEXITCODE -ne 0) { throw "下载 Release 产物失败（Releases 里还没有发布包？可改用 source=build）" }
+          Get-ChildItem dist/*.zip | ForEach-Object {
+            "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB)
+          }
 
-      - name: 安装运行依赖
+      - name: 现场组装便携包（回退用）
+        if: inputs.source == 'build'
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -c "import UnityPy, lz4, PIL, numpy; print('deps ok')"
 
-      # 与 release.yml 相同的便携版组装逻辑：内置 embedded Python + 全部依赖。
-      # 这一步顺带验证打包脚本本身没坏。
-      - name: 组装便携版（内置 Python）
-        shell: pwsh
-        run: |
-          $v = (Get-Content VERSION -Raw).Trim()
           $dst = "dist/ESCAH-Offline"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
           Copy-Item server, tools, docs -Destination $dst -Recurse
@@ -54,10 +73,8 @@ jobs:
           } | Copy-Item -Destination "$dst/web/data"
           New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
 
-          # 内置 Python 3.11 + 依赖
           $pyVer = "3.11.9"
-          $url = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip"
-          Invoke-WebRequest -Uri $url -OutFile "dist/py.zip"
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip" -OutFile "dist/py.zip"
           Expand-Archive "dist/py.zip" -DestinationPath "$dst/python" -Force
           $pth = Get-ChildItem "$dst/python/python*._pth" | Select-Object -First 1
           (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' |
@@ -66,7 +83,6 @@ jobs:
           python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
             --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
 
-          # 便携版启动脚本（直接调内置解释器）
           @'
           @echo off
           chcp 65001 >nul
@@ -75,32 +91,41 @@ jobs:
           if errorlevel 1 pause
           '@ | Set-Content "$dst/启动.bat" -Encoding oem
 
-          & "$dst/python/python.exe" -c "import sys, UnityPy, PIL, numpy; print('embedded ok', sys.version.split()[0])"
+          & "$dst/python/python.exe" -c "import sys, UnityPy, PIL, numpy, playwright; print('embedded ok', sys.version.split()[0])"
+          Compress-Archive -Path $dst/* -DestinationPath dist/ESCAH-Offline-v0.0.0-win64-portable.zip -CompressionLevel Optimal
 
-      # 关键：**真的打成 zip 再解压**，这样连"解压后能不能跑"一起验了
-      - name: 打包并解压到干净目录（模拟用户下载）
+      # ============================================================
+      #  2. 解压到干净目录（模拟用户下载后的操作）
+      # ============================================================
+      - name: 解压到干净目录
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/ESCAH-Offline/* `
-            -DestinationPath dist/portable.zip -CompressionLevel Optimal
-          $mb = [math]::Round((Get-Item dist/portable.zip).Length / 1MB, 1)
-          "portable.zip: $mb MB"
+          $zip = (Get-ChildItem dist/*win64-portable.zip | Select-Object -First 1).FullName
+          "被测包: $zip"
+          Remove-Item -Recurse -Force D:\e2e -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path D:\e2e | Out-Null
-          Expand-Archive dist/portable.zip -DestinationPath D:\e2e\ESCAH-Offline -Force
-          "解压后文件数: $((Get-ChildItem D:\e2e\ESCAH-Offline -Recurse -File | Measure-Object).Count)"
+          Expand-Archive $zip -DestinationPath D:\e2e\ESCAH-Offline -Force
+          $n = (Get-ChildItem D:\e2e\ESCAH-Offline -Recurse -File | Measure-Object).Count
+          "解压后文件数: $n"
+          if ($n -lt 50) { throw "解压结果异常（只有 $n 个文件）" }
 
+      # ============================================================
+      #  3. 端到端冒烟测试
+      # ============================================================
       - name: 端到端冒烟测试
         shell: pwsh
         env:
           PYTHONUTF8: '1'
         run: |
-          # 用**便携包里的**解释器跑测试脚本，确保用的是用户那套环境
+          # 关键：**用解压出来的包里自带的解释器**跑，才能验证内置环境
           $py = "D:\e2e\ESCAH-Offline\python\python.exe"
-          $unit = "${{ inputs.unit }}"
+          if (-not (Test-Path $py)) { throw "包里没有内置 Python: $py" }
+          & $py -c "import sys, UnityPy, PIL, numpy, playwright; print('包内环境 ok', sys.version.split()[0])"
+
           $extra = @()
           if ("${{ inputs.with_base }}" -eq "true") { $extra += "--base" }
           & $py D:\e2e\ESCAH-Offline\tools\e2e_smoke.py `
-            --dir D:\e2e\ESCAH-Offline --unit $unit @extra
+            --dir D:\e2e\ESCAH-Offline --unit "${{ inputs.unit }}" @extra
           if ($LASTEXITCODE -ne 0) { throw "端到端测试未通过（exit $LASTEXITCODE）" }
 
       - name: 上传日志（失败也传）
