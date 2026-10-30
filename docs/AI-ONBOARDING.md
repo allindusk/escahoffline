@@ -54,7 +54,6 @@ escalation_heroines/escahoffline/
 │   ├─ assets/js/
 │   │   ├─ player.js           演出引擎（按 Methods 指令序列复现游戏演出）
 │   │   ├─ packstate.js        资源状态层：某部剧情能不能播
-│   │   ├─ recorder.js         录制：canvas 逐帧重绘 + MediaRecorder
 │   │   ├─ transui.js          译文导入导出面板
 │   │   ├─ tour.js             新手引导引擎（高亮 + 气泡）
 │   │   ├─ setup.js            控制台逻辑

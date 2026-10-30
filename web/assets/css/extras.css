@@ -1,4 +1,4 @@
-/* 播放器扩展样式（资源状态标记 / 录制 HUD / 译文面板 / 帮助按钮）
+/* 播放器扩展样式（资源状态标记 / 译文面板 / 帮助按钮）
  *
  * 单独一个文件而不是塞进 player.css：player.css 是原先就有的演出样式，
  * 这里全是"资源管理改造"新增的东西，分开便于以后单独替换。
@@ -16,7 +16,7 @@
 .badge.nodl { background: #44232a; color: #ffb3ba; border: 1px solid #6d3740; }
 .badge.soft { background: #3d3320; color: #ffd79a; border: 1px solid #5e4c26; }
 
-/* ---------------- 控制条：新增「录制 / 译文」后不允许挤成两行 ---------------- */
+/* ---------------- 控制条：新增「译文」后不允许挤成两行 ---------------- */
 #controls { gap: 7px; overflow-x: auto; scrollbar-width: none; }
 #controls::-webkit-scrollbar { height: 0; }
 #controls button { white-space: nowrap; flex: none; padding: 6px 11px; }
@@ -29,22 +29,6 @@
   cursor: pointer; font-weight: 700; margin-left: 6px;
 }
 #btnHelp:hover { background: #26405c; color: #d7efff; }
-
-/* ---------------- 录制 HUD ---------------- */
-#recHud {
-  position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
-  z-index: 9990; display: none; align-items: center; gap: 12px;
-  background: rgba(58, 13, 18, .96); border: 1px solid #a3242f;
-  color: #ffd9dc; padding: 8px 14px; border-radius: 12px; font-size: 13px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, .55);
-}
-#recHud b { color: #ff5f6d; letter-spacing: .5px; }
-#recHud span { font-variant-numeric: tabular-nums; color: #fff; }
-#recHud button {
-  background: #7d1b24; color: #ffe3e5; border: 1px solid #b83844;
-  border-radius: 8px; padding: 4px 12px; cursor: pointer; font-size: 12.5px;
-}
-#recHud button:hover { background: #9c232e; }
 
 /* ---------------- 译文面板 ---------------- */
 #transPanel {
