@@ -812,28 +812,53 @@ def regen_charmeta() -> None:
     run_script("gen_charmeta.py", quiet=True)
 
 
+def _load_names() -> dict:
+    """读 ``{角色id: 日文名}``。
+
+    注意：``names.js`` 实际在 ``web/data``（= ``DATA``），userdata 里没有，
+    所以先试 DATA，再退回 WS。
+    """
+    for p in (os.path.join(DATA, "names.js"), os.path.join(WS, "names.js")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                raw = f.read()
+            return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+        except Exception:                                      # noqa: BLE001
+            continue
+    return {}
+
+
 def sync_wiki(job=None, proxy: str | None = None) -> dict:
-    """拉角色元信息（稀有度/类型/势力…），合并进本机 ``userdata/char_meta.json``
+    """拉角色元信息（稀有度/类型/实装日），合并进本机 ``userdata/char_meta.json``
     并重建成 ``charmeta.js``。
 
     数据来源优先级：
-    1. **GitHub raw** 上的 ``char_meta.json``（由每日 CI 抓好的）——国内普通网络
-       即可访问，**不需要代理**；
+    1. 每日 CI 产出的**成品** ``web/data/charmeta.js``（约 17KB，只含
+       ``{id: {r,d,t}}``），按 ``wiki.CHAR_META_ROUTES`` 多线路回退拉取
+       （jsDelivr → raw → gh 反代…），**不需要代理**；
     2. 直连 Wiki（只抓 2 个页面）——需要代理，失败抛 ``WikiUnreachable``。
 
     ``proxy_needed`` 只在上面的第 2 步也失败时才可能为 True。
     """
     from . import wiki as wiki_mod
-    source = "github"
-    scraped = None
-    try:
-        scraped = wiki_mod.fetch_json(wiki_mod.GITHUB_RAW)
-        if not scraped:
-            raise ValueError("GitHub 返回空数据")
-    except Exception as e:                                     # noqa: BLE001
+    scraped: dict = {}
+    source = ""
+    data, route = wiki_mod.fetch_remote_charmeta()
+    if data:
+        names = _load_names()
+        for cid, m in data.items():
+            nm = names.get(str(cid))
+            if nm:
+                scraped[nm] = {"r": m.get("r", ""), "d": m.get("d", ""),
+                               "t": m.get("t", "")}
+        if scraped:
+            source = "github:" + route
+            if job is not None:
+                job.log(f"已从 GitHub（{route}）取到 {len(scraped)} 个角色")
+    if not scraped:
         source = "wiki"
         if job is not None:
-            job.log(f"GitHub 获取失败（{e}），改直连 Wiki（需代理）")
+            job.log(f"GitHub 各线路均失败（{route}），改直连 Wiki（需代理）")
         scraped = wiki_mod.scrape(proxy=proxy)
     path = os.path.join(WS, "char_meta.json")
     existing = {}

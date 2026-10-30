@@ -32,10 +32,29 @@ SUPPORTER_URL = ("https://escalationheroines.wikiru.jp/"
 BASE = "https://escalationheroines.wikiru.jp/"
 MEDIA_BASE = "https://escalationheroines.wikiru.jp"
 
-# 每日 CI 抓取的产物（char_meta.json 提交在仓库 main 分支）。客户端优先从这里
-# 拉取：国内普通网络即可访问 GitHub raw，不需要代理；失败再退回直连 Wiki。
-GITHUB_RAW = ("https://raw.githubusercontent.com/allindusk/escahoffline/"
-              "main/server/cdn/data/char_meta.json")
+# 每日 CI 产出的**成品**：web/data/charmeta.js（约 17KB，只含 角色id→{r,d,t}）。
+# 比中间产物 server/cdn/data/char_meta.json（约 63KB，按日文名 + 十来个字段）小得多，
+# 客户端拉这个是 3.6 倍的速度差。
+_REPO = "allindusk/escahoffline"
+_BRANCH = "main"
+_PROD_PATH = "web/data/charmeta.js"
+_RAW = f"https://raw.githubusercontent.com/{_REPO}/{_BRANCH}/{_PROD_PATH}"
+
+# raw.githubusercontent.com 在国内时通时不通，所以按顺序多线路回退。
+# 前三条是 jsDelivr 的公共 CDN（国内基本可达），后面是官方直连 + 几个 gh 反代。
+#   实测可用：jsdelivr / fastly / gcore / raw / github-raw / gh-proxy.com / ghfast / edgeone
+#   实测不可用（已剔除）：cdn.statically.io、raw.gitmirror.com、ghproxy.net
+CHAR_META_ROUTES = [
+    ("jsdelivr", "https://cdn.jsdelivr.net/gh/{repo}@{br}/{path}"),
+    ("jsdelivr-fastly", "https://fastly.jsdelivr.net/gh/{repo}@{br}/{path}"),
+    ("jsdelivr-gcore", "https://gcore.jsdelivr.net/gh/{repo}@{br}/{path}"),
+    ("raw", _RAW),
+    ("github-raw", "https://github.com/{repo}/raw/{br}/{path}"),
+    ("gh-proxy.com", "https://gh-proxy.com/" + _RAW),
+    ("ghfast.top", "https://ghfast.top/" + _RAW),
+    ("edgeone", "https://edgeone.gh-proxy.org/" + _RAW),
+]
+_ROUTE_VARS = {"repo": _REPO, "br": _BRANCH, "path": _PROD_PATH}
 
 # 列表页表头（日）→ 我们的字段名
 # 注意：このゲームでは「所属」が職業/タイプ（戦士/閃忍/神騎/サポーター…）で、
@@ -123,14 +142,32 @@ def fetch_html(url: str, proxy: str | None = None, timeout: int = 30) -> str:
         return raw.decode("utf-8", "replace")
 
 
-def fetch_json(url: str, timeout: int = 30) -> dict:
-    """抓一个 JSON（走系统默认网络，**不用** Wiki 代理）。
-
-    用于从 GitHub raw 取每日 CI 抓好的 ``char_meta.json``。
-    """
+def _http_get(url: str, timeout: int = 10) -> str:
+    """普通 HTTP GET（走系统默认网络，不强制 Wiki 代理）。"""
     req = urllib.request.Request(url, headers={"User-Agent": config.UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+        return r.read().decode("utf-8")
+
+
+def fetch_remote_charmeta(timeout: int = 10) -> tuple[dict | None, str]:
+    """按 ``CHAR_META_ROUTES`` 顺序拉每日 CI 产出的 charmeta 成品。
+
+    返回 ``(data, route)``：``data`` 形如 ``{角色id: {r,d,t}}``；
+    全部线路失败返回 ``(None, 最后一条错误描述)``。
+    """
+    last = ""
+    for name, tpl in CHAR_META_ROUTES:
+        url = tpl.format(**_ROUTE_VARS)
+        try:
+            txt = _http_get(url, timeout=timeout)
+            body = txt[txt.index("{"): txt.rindex("}") + 1]
+            data = json.loads(body)
+            if data:
+                return data, name
+            last = f"{name}: 空数据"
+        except Exception as e:                                # noqa: BLE001
+            last = f"{name}: {type(e).__name__}"
+    return None, last
 
 
 def _cell_text(html_frag: str) -> str:
@@ -266,7 +303,7 @@ def merge_meta(existing: dict, scraped: dict) -> dict:
     out = {}
     for name, m in scraped.items():
         merged = dict(existing.get(name) or {})
-        for k in ("r", "t", "cat", "special_attr", "attack_attr", "img"):
+        for k in ("r", "t", "d", "cat", "special_attr", "attack_attr", "img"):
             if m.get(k):
                 merged[k] = m[k]
         if merged.get("r") not in valid_r:

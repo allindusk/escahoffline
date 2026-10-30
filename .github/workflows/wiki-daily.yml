@@ -1,17 +1,20 @@
 name: wiki-daily
 
-# 每天抓一次公开 Wiki（escalationheroines.wikiru.jp）的角色信息，把
-# server/cdn/data/char_meta.json + web/data/charmeta.js 提交回仓库。
+# 每天抓一次公开 Wiki（escalationheroines.wikiru.jp）的角色信息，在 CI 里解析完，
+# 把成品提交回仓库：
+#   · web/data/charmeta.js          ← 客户端下载的就是这个「成品」（约 17KB）
+#   · server/cdn/data/char_meta.json ← 中间表（约 63KB，构建/下次抓取保留 d 用）
 #
-# 客户端「更新角色信息」按钮从 GitHub raw 拉这个 char_meta.json —— 国内普通网络
-# 即可访问，用户侧**不需要代理**（只有 GitHub 也拿不到时才退回直连 Wiki）。
+# 客户端「更新角色信息」按多线路回退拉 web/data/charmeta.js
+# （jsDelivr → raw.githubusercontent.com → gh 反代），用户侧**不需要代理**；
+# 只有全部线路都拿不到时才退回直连 Wiki。
 #
-# 只请求 2 个页面（角色一览 + ?サポーター），稀有度取自页面分节标题，
+# 抓取只请求 2 个页面（角色一览 + ?サポーター），稀有度取自页面分节标题，
 # 不逐页抓 439 个子页面。
 
 on:
   schedule:
-    - cron: '17 19 * * *'      # UTC 19:17 = 日本时间 04:17
+    - cron: '0 8 * * *'        # UTC 08:00 = 日本时间 17:00
   workflow_dispatch: {}         # 也支持手动触发
 
 permissions:
