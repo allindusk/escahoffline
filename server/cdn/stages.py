@@ -812,21 +812,29 @@ def regen_charmeta() -> None:
     run_script("gen_charmeta.py", quiet=True)
 
 
-def sync_wiki(job=None, proxy: str | None = None, deep: bool = False,
-             detail_limit: int = 0) -> dict:
-    """从公开 Wiki 抓取角色元信息（稀有度/类型/势力…），合并进本机
-    ``userdata/char_meta.json`` 并重建成 ``charmeta.js``。
+def sync_wiki(job=None, proxy: str | None = None) -> dict:
+    """拉角色元信息（稀有度/类型/势力…），合并进本机 ``userdata/char_meta.json``
+    并重建成 ``charmeta.js``。
 
-    这是把"角色信息数据源"从本地 ``escah`` WIKI 镜像换成公开页面的运行时入口：
-    * ``deep=False``：只抓角色一览页（一次请求，拿名前 + 类型/势力 + 属性），足够
-      让 CG 页/侧栏显示类型；
-    * ``deep=True`` / ``detail_limit>0``：再逐页补 レアリティ(稀有度)。
+    数据来源优先级：
+    1. **GitHub raw** 上的 ``char_meta.json``（由每日 CI 抓好的）——国内普通网络
+       即可访问，**不需要代理**；
+    2. 直连 Wiki（只抓 2 个页面）——需要代理，失败抛 ``WikiUnreachable``。
 
-    连不上 Wiki（多半没开代理）时抛 ``wiki.WikiUnreachable``，由 ``api`` 层捕获后
-    在 ``job.detail["proxy_needed"]`` 打标，前端据此提示用户开代理补下载。
+    ``proxy_needed`` 只在上面的第 2 步也失败时才可能为 True。
     """
     from . import wiki as wiki_mod
-    scraped = wiki_mod.scrape(proxy=proxy, deep=deep, detail_limit=detail_limit)
+    source = "github"
+    scraped = None
+    try:
+        scraped = wiki_mod.fetch_json(wiki_mod.GITHUB_RAW)
+        if not scraped:
+            raise ValueError("GitHub 返回空数据")
+    except Exception as e:                                     # noqa: BLE001
+        source = "wiki"
+        if job is not None:
+            job.log(f"GitHub 获取失败（{e}），改直连 Wiki（需代理）")
+        scraped = wiki_mod.scrape(proxy=proxy)
     path = os.path.join(WS, "char_meta.json")
     existing = {}
     if os.path.exists(path):
@@ -841,11 +849,11 @@ def sync_wiki(job=None, proxy: str | None = None, deep: bool = False,
         json.dump(merged, f, ensure_ascii=False, indent=1)
     if job is not None:
         n_r = sum(1 for v in scraped.values() if v.get("r"))
-        job.log(f"Wiki 角色信息：合并 {len(scraped)} 条"
-                + (f"，其中稀有度 {n_r}" if deep or detail_limit else ""))
+        job.log(f"角色信息（来源 {source}）：合并 {len(scraped)} 条（含稀有度 {n_r}）")
     regen_charmeta()
     return {"merged": len(merged), "scraped": len(scraped),
-            "with_rarity": sum(1 for v in merged.values() if v.get("r"))}
+            "with_rarity": sum(1 for v in merged.values() if v.get("r")),
+            "source": source}
 
 
 # ================================================================ 自检

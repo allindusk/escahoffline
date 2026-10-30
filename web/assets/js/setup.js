@@ -612,28 +612,23 @@
       }
     });
 
-    // 刷新官方清单成功后，顺带从 Wiki 补一次角色信息（用户要求：更新剧情时
-    // 也更新角色类型/稀有度）。只抓一览页 + 少量详情，一次请求为主，失败（没开代理）
-    // 也不影响清单本身。同一清单任务只触发一次。
-    const mfDone = (list || []).find(j => j.kind === 'manifest' && j.state === 'done');
-    if (mfDone && ST._wikiAfter !== mfDone.id) {
-      ST._wikiAfter = mfDone.id;
-      wikiSync(false, 60);
-    }
-
-    // 从 Wiki 更新角色信息：失败（多为没开代理）→ 提示开代理补下载；成功 → 显示条数
+    // 从 GitHub / Wiki 更新角色信息：只有用户点按钮才会跑，不做后台自动请求。
+    // 连不上（GitHub 与 Wiki 都失败）时 → 提示开代理补下载；成功 → 显示条数
     const wk = (list || []).find(j => j.kind === 'wiki');
     const wtip = $('#wikiProxyTip');
     const wres = $('#wikiResult');
     if (wk) {
-      if (wk.state === 'failed' && wk.detail && wk.detail.proxy_needed) {
-        if (wtip) wtip.style.display = 'block';
-        if (wres) wres.textContent = '';
+      const d = wk.detail || {};
+      if (wk.state === 'failed') {
+        // GitHub 和直连 Wiki 都失败才会到这；直连 Wiki 失败才可能 proxy_needed
+        if (d.proxy_needed && wtip) wtip.style.display = 'block';
+        if (wres) wres.textContent = '获取失败：' + (d.wiki_error || '见底部日志');
       } else if (wk.state === 'done') {
         if (wtip) wtip.style.display = 'none';
-        if (wres) wres.textContent = '已更新 ' + ((wk.detail && wk.detail.scraped) || '') + ' 个角色';
+        const src = d.source === 'wiki' ? '（直连 Wiki）' : '（GitHub）';
+        if (wres) wres.textContent = '已更新 ' + (d.scraped || '') + ' 个角色' + src;
       } else if (wk.state === 'running' || wk.state === 'queued') {
-        if (wres) wres.textContent = '抓取中（需代理）…';
+        if (wres) wres.textContent = '获取中…';
       }
     }
 
@@ -1118,18 +1113,18 @@
     if (box) box.textContent = '已开始，进度见底部（首次约 10–20 秒）';
     startJob('manifest/refresh', {}, '开始刷新资源清单');
   };
-  // 从公开 Wiki 抓角色类型/稀有度。deep=false 只抓一览页（一次请求），
-  // detail_limit>0 再补抓前 N 个缺稀有度的角色子页面。站点在日本，需代理。
-  function wikiSync(deep, limit) {
+  // 更新角色类型/稀有度：优先从 GitHub 拉每日 CI 抓好的 char_meta.json
+  // （国内普通网络即可，**不需要代理**）；GitHub 拿不到时后端自动退回直连 Wiki。
+  // 只有用户点按钮才会发起，不做任何后台自动请求。
+  function wikiSync() {
     const res = $('#wikiResult');
-    if (res) res.textContent = '抓取中（需代理）…';
+    if (res) res.textContent = '正在获取（优先 GitHub，无需代理）…';
     const tip = $('#wikiProxyTip');
     if (tip) tip.style.display = 'none';
-    startJob('wiki/sync', {deep: !!deep, detail_limit: limit || 0},
-             '从 Wiki 更新角色信息');
+    startJob('wiki/sync', {}, '更新角色信息');
   }
-  $('#btnWikiSync').onclick = () => wikiSync(false, 60);
-  $('#btnWikiRetry').onclick = () => wikiSync(false, 60);
+  $('#btnWikiSync').onclick = () => wikiSync();
+  $('#btnWikiRetry').onclick = () => wikiSync();
 
   $('#btnCheckUpdate').onclick = async () => {
     $('#updResult').textContent = '检查中…';
