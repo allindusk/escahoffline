@@ -73,7 +73,7 @@ class SubJob:
 def run_install(job, units: list[str], workers: int = 32,
                 voice: bool = True, image: bool = True,
                 upscale: bool = False, scale: int = 2,
-                engine: str = "builtin") -> dict:
+                engine: str = "cugan") -> dict:
     """串行安装多个剧情单元（每个单元内部并发下载 bundle）。
 
     进度条语义：``total/done`` 交给下载层（用户最关心"下了多少包"），
@@ -262,6 +262,29 @@ def _sync_wiki(job, proxy: str | None) -> dict:
         job.detail["proxy_needed"] = bool(e.proxy_hint)
         job.detail["wiki_error"] = str(e)[:300]
         raise
+
+
+def _refresh_manifest_and_wiki(job) -> dict:
+    """一次做两件事：刷新官方清单 → 更新角色信息（稀有度 / 类型 / 实装日）。
+
+    为什么合并成一个动作：用户点「更新」是想"把该更新的都更新了"，拆两个按钮
+    只会让人漏点其中一个（而且第二步本来就依赖第一步刷出来的新剧情）。
+    第 ② 步失败**不能拖垮第 ① 步** —— 清单已经刷新成功，用户至少要能看到
+    新剧情列表。
+    """
+    res = _refresh_manifest(job)
+    if job.cancelled:
+        return res
+    job.log("接着更新角色信息（类型 / 稀有度 / 实装日）…")
+    try:
+        meta = _sync_wiki(job, None)
+        for k in ("merged", "scraped", "with_rarity", "source"):
+            if k in meta:
+                res[k] = meta[k]
+    except Exception as e:                                     # noqa: BLE001
+        res["metaError"] = str(e)[:300]
+        job.log(f"角色信息没更新成功：{e}（不影响清单与剧情安装）")
+    return res
 
 
 def _refresh_manifest(job) -> dict:
@@ -611,7 +634,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             image = bool(b.get("image", True))
             up = bool(b.get("upscale", False))
             scale = int(b.get("scale") or 2)
-            engine = b.get("engine") or "builtin"
+            engine = b.get("engine") or "cugan"
             job = jobs.submit(
                 "install", f"安装 {len(sel)} 部剧情",
                 lambda j: run_install(j, sel, workers, voice, image,
@@ -622,7 +645,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             b = self._body()
             kinds = tuple(b.get("kinds") or ("stand", "back", "cg", "standfull"))
             scale = int(b.get("scale") or 2)
-            engine = b.get("engine") or "builtin"
+            engine = b.get("engine") or "cugan"
             limit = int(b.get("limit") or 0)
 
             def fn(job):
@@ -742,6 +765,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not unit or not text:
                 return self._err("缺少 unit 或译文内容")
             return self._json(exports.import_trans(unit, text, mode))
+        if path == "/api/export/trans/batch":
+            # 与「批量导入」对称：把多部剧情的 txt 打成一个 zip
+            # scope=translated（默认，已有译文）| installed（全部已装剧情原文）
+            b = self._body()
+            scope = (b.get("scope") or "translated").strip()
+            if scope not in ("translated", "installed"):
+                return self._err("scope 只能是 translated / installed")
+            units = b.get("units")
+            if units is not None:
+                if not isinstance(units, list):
+                    return self._err("units 必须是数组")
+                units = [str(u) for u in units if u]
+                if not units:
+                    return self._err("没有选择剧情")
+            job = jobs.submit(
+                "transzip", "批量导出译文",
+                lambda j: exports.export_trans_batch(j, scope, units))
+            return self._json({"job": job.snapshot()})
         if path == "/api/update/apply":
             b = self._body()
             url = b.get("url") or ""
@@ -757,8 +798,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             kind = b.get("kind") or "base"
             return self._json({"ok": media.reset_overlay(kind)})
         if path == "/api/manifest/refresh":
-            job = jobs.submit("manifest", "刷新官方资源清单",
-                              lambda j: _refresh_manifest(j))
+            # 一个入口做两步：清单 → 角色信息（前端只有一个「更新」按钮）
+            job = jobs.submit("manifest", "刷新清单与角色信息",
+                              lambda j: _refresh_manifest_and_wiki(j))
             return self._json({"job": job.snapshot()})
         if path == "/api/wiki/sync":
             b = self._body()

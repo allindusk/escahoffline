@@ -139,9 +139,12 @@
             想反悔就重新装一次这部剧。
           </p>
           <p class="dim">
-            内置引擎是 Lanczos + 锐化，不挑显卡；把
-            <code>realesrgan-ncnn-vulkan.exe</code> 放进 <code>tools/upscaler/</code>
-            会自动优先用它（效果明显更好，有独显时快很多，但需要额外下载约 30 MB）。
+            超分引擎是 <b>Real-CUGAN</b>（<code>realcugan-ncnn-vulkan</code>，
+            参数 <code>-m models-se -n 2 -s 2</code>）。全量包自带在
+            <code>tools/realcugan/</code> 下；源码运行时也会自动识别
+            <code>_tools/realcugan/</code>。
+            <b>没有这个引擎就无法超分</b>（不会再拿插值算法糊弄），
+            按 A 键或看本页提示确认当前引擎。
           </p>
         </details>
 
@@ -400,6 +403,32 @@
         </div>
         <div id="trResult" class="dim"></div>
       </div>
+      <div class="panel">
+        <h3>批量导出（备份 / 批量翻译）</h3>
+        <p class="dim">
+          和上面的「批量导入」对称：把<b>所选剧情</b>的 txt 打成一个 zip 放进
+          <code>userdata/export/</code>。文件格式与播放器里单部导出完全一致，
+          改完可以直接用「批量导入」逐部导回。
+          选择方式与「导出视频 / CG」那一页一致（角色剧情 / 主线·活动剧情）。
+        </p>
+        <div class="optrow" style="flex-wrap:wrap;gap:10px">
+          <select id="trKind">
+            <option value="char">角色剧情</option>
+            <option value="adv">主线 / 活动剧情</option>
+          </select>
+          <input id="trSearch" placeholder="搜索名字 / ID"
+                 style="flex:1;min-width:180px">
+          <button class="small" id="trAll">全选</button>
+          <button class="small" id="trNone">清空</button>
+          <button class="small" id="trAllTrans" title="只勾选已经有译文的">全选已翻译</button>
+          <span class="hint" id="trSelInfo">未选择剧情</span>
+        </div>
+        <div id="trList" class="charlist"></div>
+        <div class="optrow" style="margin-top:10px">
+          <button class="primary" id="btnTrExport">导出所选剧情</button>
+          <span id="trExpResult" class="dim"></span>
+        </div>
+      </div>
     </section>
 
     <!-- ================= 更新 ================= -->
@@ -407,30 +436,31 @@
       <h2>更新</h2>
 
       <div class="panel">
-        <h3>① 刷新官方资源清单（有新剧情时）</h3>
+        <h3>① 刷新清单与角色信息（有新剧情时）</h3>
         <p class="dim">
-          重新下载官方清单，用来发现新上线的剧情。清单约 5 MB，
-          下载 + 解密合计约 <b>10–20 秒</b>，进度显示在页面底部。
+          点一次跑两步：<b>①</b> 重新下载官方清单（约 5 MB，10–20 秒），用来发现新上线的剧情；
+          <b>②</b> 从 <b>GitHub</b> 拉取每天自动更新的角色类型 / 稀有度 / 实装日期。
           <br>
-          <b>公共素材（背景 / BGM / 音效）是必选包</b>，所以这里检测到它们有新增时
-          会<b>顺带自动补下</b>（已有的跳过），不用你再手动点一次。
+          <b>公共素材（背景 / BGM / 音效）是必选包</b>，所以检测到它们有新增时会
+          <b>顺带自动补下</b>（已有的跳过），不用你再手动点一次。
         </p>
         <div class="optrow">
-          <button id="btnRefreshManifest">刷新官方清单</button>
-          <button id="btnWikiSync">更新角色信息</button>
+          <button id="btnRefreshManifest">刷新清单与角色信息</button>
           <span id="manResult" class="dim"></span>
         </div>
         <div class="optrow" style="margin-top:6px">
           <span id="wikiResult" class="dim"></span>
         </div>
         <p class="dim" style="margin-top:6px">
-          「更新角色信息」优先从 <b>GitHub</b> 拉取每天自动更新的角色类型 / 稀有度
-          （<b>普通网络即可，无需代理</b>）；只有 GitHub 访问不了时才退回直连 Wiki
-          （该站在日本，需代理）。
+          两步都<b>不需要代理</b>：清单走官方 CDN；角色信息走 GitHub 多线路
+          （和「检查程序更新」共用同一张线路表）。只有当 GitHub 各线路全不通时，
+          第 ② 步才会退回直连 Wiki —— 那个站在日本，才需要代理。
+          第 ② 步失败不影响第 ① 步的结果。
         </p>
         <div id="wikiProxyTip" class="warn" style="display:none;margin-top:8px">
-          GitHub 与 Wiki 都无法访问。请检查网络，或开启代理后点「补下载」。
-          <button id="btnWikiRetry" class="small">补下载</button>
+          GitHub 与 Wiki 都无法访问（清单已刷新，角色信息没更新）。
+          请检查网络，或开启代理后点「补下载」。
+          <button id="btnWikiRetry" class="small">补下载角色信息</button>
         </div>
       </div>
 

@@ -616,8 +616,89 @@ def _update_trans_index(unit: str, n: int) -> None:
     paths.save_json(idx_path, idx)
 
 
+# ---------------------------------------------------------------- 译文批量导出
+def _trans_units(scope: str = "translated") -> list[str]:
+    """批量导出要包含哪些 unit。
+
+    ``translated``：只列**已有译文文件**的（备份 / 合并用）
+    ``installed`` ：所有已安装剧情（把原文一次性交给 AI 从头翻）
+    """
+    out: list[str] = []
+    if scope == "installed":
+        if os.path.isdir(paths.DATA):
+            for name in os.listdir(paths.DATA):
+                if name.endswith(".js"):
+                    u = name[:-3]
+                    if u.startswith(("char_", "adv_")):
+                        out.append(u)
+    elif os.path.isdir(TRANS_DIR):
+        for name in os.listdir(TRANS_DIR):
+            if not name.endswith(".json") or name.startswith("_"):
+                continue
+            u = name[:-5]
+            if u.startswith(("char_", "adv_")):
+                out.append(u)
+    return sorted(out)
+
+
+def export_trans_batch(job=None, scope: str = "translated",
+                       units: list[str] | None = None) -> dict:
+    """把多部剧情的译文 txt 打成一个 zip（与「批量导入」对称）。
+
+    单部导出在播放器控制条上（``export_trans``）；这里补的是批量：
+    备份，或一次性交给 AI 批量翻译。
+
+    ``units`` 给了就**只导这些剧情**（前端用与视频/CG 导出同一套选择组件），
+    没给才按 ``scope`` 推（``translated`` 已有译文 / ``installed`` 全部已安装）。
+    """
+    if units:
+        want = [u for u in dict.fromkeys(units) if u]
+        units = [u for u in want
+                 if os.path.exists(os.path.join(paths.DATA, f"{u}.js"))]
+        if not units:
+            raise FileNotFoundError("所选剧情都没有剧本数据（可能还没安装）")
+    else:
+        units = _trans_units(scope)
+        if not units:
+            raise FileNotFoundError(
+                "还没有任何译文（先在播放器里逐部翻译，或用「批量导入」）"
+                if scope != "installed" else "还没有安装任何剧情")
+    # 注意 _unique_path 自己会拼时间戳，这里只给个名字前缀，
+    # 否则会变成「译文_20261031_0046_20261031_004651.zip」这种双时间戳。
+    dst = _unique_path("译文")
+    if job is not None:
+        job.set_total(len(units))
+    n = 0
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, u in enumerate(units, 1):
+            if job is not None and job.cancelled:
+                break
+            try:
+                txt = export_trans(u)
+            except Exception:                                  # noqa: BLE001
+                txt = ""
+            if txt:
+                z.writestr(f"{u}_{_san(unit_title(u)) or u}.txt", txt)
+                n += 1
+            if job is not None:
+                job.progress(add=1, message=f"打包 {i}/{len(units)}")
+    if not n:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        raise FileNotFoundError("这些剧情都没有可导出的台词")
+    size = os.path.getsize(dst)
+    if job is not None:
+        job.log(f"已导出 {n} 部剧情的译文 → {paths.rel(dst)}"
+                f"（{size / 1048576:.1f} MB）")
+    return {"path": dst, "name": os.path.basename(dst), "files": n,
+            "bytes": size, "scope": scope}
+
+
 def trans_stats() -> dict:
-    out = {"units": 0, "messages": 0,
+    # ``list`` 给译文页的「全选已翻译」用（前端要用它和标准剧情选择组件联动）
+    out = {"units": 0, "messages": 0, "list": [],
            "speakers": len(load_speakers())}
     if not os.path.isdir(TRANS_DIR):
         return out
@@ -630,4 +711,6 @@ def trans_stats() -> dict:
         if n:
             out["units"] += 1
             out["messages"] += n
+            out["list"].append(name[:-5])
+    out["list"].sort()
     return out

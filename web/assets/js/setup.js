@@ -674,8 +674,11 @@
       else if (j.state === 'failed') {
         notify('失败：' + ttl + (j.error ? '：' + j.error : ''), 'err');
       }
-      // 导出任务刚跑完 → 按设置自动弹目录
-      if (j.state === 'done' && (j.kind === 'video' || j.kind === 'cg')) {
+      // 批量导出译文完成 → 刷新「已导出文件」列表（zip 就在那儿）
+      if (j.state === 'done' && j.kind === 'transzip') loadExports();
+      // 导出任务刚跑完 → 按设置自动弹目录（译文 zip 也算导出）
+      if (j.state === 'done'
+          && (j.kind === 'video' || j.kind === 'cg' || j.kind === 'transzip')) {
         let auto = false;
         try { auto = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
         if (auto) openDir('export', '导出目录');
@@ -723,6 +726,25 @@
       }
     });
 
+    // 「刷新清单与角色信息」是同一个任务：把第二步的结果也显示出来
+    const mfJob = (list || []).find(j => j.kind === 'manifest' && j.state === 'done'
+      && j.detail && (j.detail.scraped || j.detail.metaError));
+    if (mfJob && ST._metaShown !== mfJob.id) {
+      ST._metaShown = mfJob.id;
+      const md = mfJob.detail;
+      const box = $('#wikiResult');
+      if (md.scraped) {
+        const src = md.source === 'wiki' ? '（直连 Wiki）' : '（GitHub）';
+        if (box) box.textContent = '角色信息已更新 ' + md.scraped + ' 个' + src;
+      } else if (box) {
+        box.textContent = '角色信息未更新：'
+          + (md.wiki_error || md.metaError || '见底部日志');
+        if (md.proxy_needed) {
+          const tip = $('#wikiProxyTip');
+          if (tip) tip.style.display = 'block';
+        }
+      }
+    }
     // 从 GitHub / Wiki 更新角色信息：只有用户点按钮才会跑，不做后台自动请求。
     // 连不上（GitHub 与 Wiki 都失败）时 → 提示开代理补下载；成功 → 显示条数
     const wk = (list || []).find(j => j.kind === 'wiki');
@@ -851,12 +873,18 @@
       const LAB = { stand: '立绘', back: '背景', cg: 'CG', standfull: '全身立绘' };
       const by = Object.keys(d.byKind || {})
         .map(k => (LAB[k] || k) + ' ' + d.byKind[k]).join(' · ');
-      const s = d.sample;
+      // 每类图尺寸完全不同（立绘多为 300×628，背景/CG 是 1280×720）。
+      // 以前只拿一张样本报"原图 W×H"，等于把一张图的尺寸说成全部。
+      const sz = d.byKindSize || {};
+      const szTxt = Object.keys(sz).map(function (k) {
+        const v = sz[k];
+        return (LAB[k] || k) + ' ' + v.w + '×' + v.h
+          + ' → <b>' + v.outW + '×' + v.outH + '</b>';
+      }).join(' ｜ ');
       box.innerHTML =
         '<b>本次待超分 ' + d.total + ' 张</b>（' + esc(by) + '）<br>'
-        + (s ? '原图 ' + s.w + '×' + s.h + ' → <b>' + s.outW + '×' + s.outH
-          + '</b>（' + d.scale + ' 倍）<br>' : '')
-        + '单张约 <b>' + d.perImageSec + ' 秒</b>，预计共 <b>' + esc(d.etaText) + '</b>'
+        + (szTxt ? '尺寸：' + szTxt + '（' + d.scale + ' 倍）<br>' : '')
+        + '平均单张约 <b>' + d.perImageSec + ' 秒</b>，预计共 <b>' + esc(d.etaText) + '</b>'
         + '<div class="dim" style="margin-top:6px">按当前引擎（'
         + esc(d.engineNote || d.engine) + '）估算，实际有 ±30% 波动。'
         + '超分会占满 CPU，期间电脑变卡、风扇会响；随时可取消，已完成的不白做。</div>';
@@ -887,9 +915,44 @@
         ['语音 audio/', human((img.audio || {}).bytes), `${(img.audio || {}).files || 0} 个文件`],
         ['剩余磁盘', human(img.free), '统计于 ' + (img.at || '-')],
       ];
+      // 两个数字口径不同（img/ 是全部图片，待超分只算映射表登记过的 stand/back/cg），
+      // 不解释的话用户一定会问"为什么 28042 个文件只有 3481 张要超分"。
+      const up = img.upscalable || null;
+      const bk = img.byKindFiles || {};
+      const imgAll = (img.img || {}).files || 0;
+      const standAll = bk.stand || 0;
+      const standMap = (up && up.byKind && up.byKind.stand && up.byKind.stand.total) || 0;
+      const cgAll = bk.cg || 0;
+      const cgMap = (up && up.byKind && up.byKind.cg && up.byKind.cg.total) || 0;
+      // 逐项列出"不参与超分"的构成，并用它们的和作为总数，
+      // 免得分项之和与总数差一两个，反而更像 bug。
+      const parts = [
+        ['未被任何剧情引用的立绘', Math.max(0, standAll - standMap)],
+        ['剧情插图', bk.story || 0],
+        ['头像', bk.avatar || 0],
+        ['全身立绘', bk.standfull || 0],
+        ['未登记的背景', Math.max(0, (bk.back || 0)
+          - ((up && up.byKind && up.byKind.back && up.byKind.back.total) || 0))],
+        ['未登记的 CG', Math.max(0, cgAll - cgMap)],
+      ].filter(function (x) { return x[1] > 0; });
+      const outside = parts.reduce(function (s, x) { return s + x[1]; }, 0);
+      const note = up
+        ? '<div class="dim" style="margin-top:10px;line-height:1.85">'
+          + '<b>为什么图片数量对不上：</b><br>'
+          + '「待超分」只统计<b>图片映射表里登记过</b>的图 —— 立绘 '
+          + standMap + ' · 背景 ' + ((up.byKind.back || {}).total || 0)
+          + ' · CG ' + cgMap + '，共 <b>' + up.total + '</b> 个；已超分 '
+          + up.done + ' 个，剩 <b>' + up.left + '</b> 个。<br>'
+          + 'img/ 里的 ' + imgAll + ' 个文件是解出来的<b>全部</b>图片，其中 '
+          + outside + ' 张<b>不参与超分</b>：'
+          + parts.map(function (x) { return x[0] + ' ' + x[1] + ' 张'; })
+            .join('、')
+          + '。</div>'
+        : '';
       disk.innerHTML = rows.map(([k, v, s]) => `
         <div class="stat"><div class="k">${esc(k)}</div>
-          <div class="v">${esc(v)}</div><div class="k">${esc(s)}</div></div>`).join('');
+          <div class="v">${esc(v)}</div><div class="k">${esc(s)}</div></div>`).join('')
+        + note;
     } catch (e) {
       disk.innerHTML = '<div class="dim">统计失败：' + esc(e.message) + '</div>';
     }
@@ -1221,24 +1284,126 @@
     }
   };
 
+  /* 译文批量导出：复用「导出视频/CG」那套剧情选择（角色剧情 / 主线·活动），
+     不再只给"全部或只有译文"两个粗放的选项。 */
+  ST.trSel = ST.trSel || new Set();
+
+  function updateTrInfo() {
+    const el = $('#trSelInfo');
+    if (!el) return;
+    el.textContent = ST.trSel.size
+      ? '已选 ' + ST.trSel.size + ' 部剧情' : '未选择剧情';
+  }
+
+  function renderTrList() {
+    const box = $('#trList');
+    if (!box) return;
+    const kind = ($('#trKind') || {}).value || 'char';
+    const q = (($('#trSearch') || {}).value || '').trim().toLowerCase();
+    let list = (kind === 'char' ? ST.units.char : ST.units.adv)
+      .filter(k => (ST.units.state[k] || 'missing') !== 'missing');
+    if (q) {
+      list = list.filter(k => k.toLowerCase().indexOf(q) >= 0
+        || unitName(k).toLowerCase().indexOf(q) >= 0);
+    }
+    list = ESC.sortItems(list, 'date-desc',
+      k => ({ id: k, name: unitName(k), date: ESC.dateOf(k) }));
+    if (!ST.units.loaded) {
+      box.innerHTML = '<div class="dim" style="padding:14px">正在读取剧情列表…</div>';
+      loadUnits().then(renderTrList).catch(() => { });
+      return;
+    }
+    const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
+    if (!list.length) {
+      box.innerHTML = '<div class="dim" style="padding:14px">'
+        + '还没有已安装的剧情 —— 先到「剧情安装」装一部</div>';
+    } else {
+      box.innerHTML = list.map(function (k) {
+        return '<label class="charrow" data-id="' + esc(k) + '">'
+          + '<input type="checkbox" data-id="' + esc(k) + '"'
+          + (ST.trSel.has(k) ? ' checked' : '') + '>'
+          + '<span class="nm">' + esc(unitName(k))
+          + ' <span class="n">' + esc(k) + '</span></span>'
+          + '<span class="n">'
+          + (have.indexOf(k) >= 0 ? '有译文' : '未翻译') + '</span></label>';
+      }).join('');
+      box.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+        cb.onchange = function () {
+          if (cb.checked) ST.trSel.add(cb.dataset.id);
+          else ST.trSel.delete(cb.dataset.id);
+          updateTrInfo();
+        };
+      });
+    }
+    updateTrInfo();
+  }
+
+  if ($('#trKind')) {
+    $('#trKind').onchange = () => renderTrList();
+    $('#trSearch').oninput = () => renderTrList();
+    $('#trAll').onclick = () => {
+      const kind = $('#trKind').value;
+      (kind === 'char' ? ST.units.char : ST.units.adv).forEach(function (k) {
+        if ((ST.units.state[k] || 'missing') !== 'missing') ST.trSel.add(k);
+      });
+      renderTrList();
+    };
+    $('#trNone').onclick = () => { ST.trSel.clear(); renderTrList(); };
+    $('#trAllTrans').onclick = () => {
+      const kind = $('#trKind').value;
+      const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
+      have.forEach(function (k) {
+        const isChar = k.indexOf('char_') === 0;
+        if ((kind === 'char') !== isChar) return;
+        if ((ST.units.state[k] || 'missing') !== 'missing') ST.trSel.add(k);
+      });
+      renderTrList();
+    };
+  }
+
+  const btnTrExport = $('#btnTrExport');
+  if (btnTrExport) {
+    btnTrExport.onclick = async () => {
+      const units = Array.from(ST.trSel);
+      const res = $('#trExpResult');
+      if (!units.length) { toastMsg('先选要导出的剧情', true); return; }
+      if (res) res.textContent = '正在打包…';
+      try {
+        await api('export/trans/batch', {
+          method: 'POST', body: JSON.stringify({ units }),
+        });
+        if (res) res.textContent = '';
+        toastMsg('开始导出 ' + units.length + ' 部，完成后见底部任务条');
+        connectJobs(true);
+      } catch (e) {
+        if (res) res.textContent = '失败：' + e.message;
+      }
+    };
+  }
+
   // ---------------------------------------------------------------- 更新
+  // 「更新」只有一个入口：后端 _refresh_manifest_and_wiki 顺序跑
+  // ① 刷新官方清单 ② 更新角色信息。第二步失败不影响第一步。
   $('#btnRefreshManifest').onclick = () => {
     const box = $('#manResult');
-    if (box) box.textContent = '已开始，进度见底部（首次约 10–20 秒）';
-    startJob('manifest/refresh', {}, '开始刷新资源清单');
+    if (box) box.textContent = '已开始：① 刷新清单 → ② 更新角色信息（进度见底部）';
+    const w = $('#wikiResult');
+    if (w) w.textContent = '';
+    const tip = $('#wikiProxyTip');
+    if (tip) tip.style.display = 'none';
+    startJob('manifest/refresh', {}, '刷新清单与角色信息');
   };
-  // 更新角色类型/稀有度：优先从 GitHub 拉每日 CI 抓好的 char_meta.json
-  // （国内普通网络即可，**不需要代理**）；GitHub 拿不到时后端自动退回直连 Wiki。
-  // 只有用户点按钮才会发起，不做任何后台自动请求。
+  /** 只补角色信息：GitHub 全线路不通（第二步失败）时的重试入口。
+   *  数据仍优先走 GitHub（多线路，与「检查程序更新」共用线路表）。 */
   function wikiSync() {
     const res = $('#wikiResult');
-    if (res) res.textContent = '正在获取（优先 GitHub，无需代理）…';
+    if (res) res.textContent = '正在获取（GitHub 多线路，无需代理）…';
     const tip = $('#wikiProxyTip');
     if (tip) tip.style.display = 'none';
     startJob('wiki/sync', {}, '更新角色信息');
   }
-  $('#btnWikiSync').onclick = () => wikiSync();
-  $('#btnWikiRetry').onclick = () => wikiSync();
+  const btnWikiRetry = $('#btnWikiRetry');
+  if (btnWikiRetry) btnWikiRetry.onclick = () => wikiSync();
 
   $('#btnCheckUpdate').onclick = async () => {
     $('#updResult').textContent = '检查中…';
@@ -1340,6 +1505,7 @@
     if (sec === 'export') loadCg().then(renderCgList).catch(() => { });
     if (sec === 'export') loadExports();
     if (sec === 'quality') loadStats();
+    if (sec === 'trans') renderTrList();
   }
   $$('#side button').forEach(b => { b.onclick = () => goto(b.dataset.sec); });
 

@@ -42,7 +42,12 @@ for cid, nm in NAMES.items():
     if not m:
         miss_meta += 1
         continue
-    out[cid] = {"r": m.get("r", ""), "d": m.get("d", ""), "t": m.get("t", "")}
+    # 只放行合法稀有度。「サポーター」是职业不是稀有度，旧表里可能残留这种值
+    # （曾在 charmeta 里出现 39 个 r="サポーター"），不能让它随包分发出去。
+    _r = m.get("r", "")
+    if _r not in ("SSR", "SR", "R", "NPC"):
+        _r = ""
+    out[cid] = {"r": _r, "d": m.get("d", ""), "t": m.get("t", "")}
 
 js = "window.__CHARMETA=" + json.dumps(out, ensure_ascii=False,
                                        separators=(",", ":")) + ";"

@@ -33,7 +33,7 @@ import ssl
 import time
 import urllib.request
 
-from . import paths
+from . import net, paths
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -328,6 +328,60 @@ def _label(kind: str) -> str:
 def apply_github(route: dict, url: str) -> str:
     """把原始 GitHub URL 套到选中路线的模板上。"""
     return (route.get("tpl") or "{url}").replace("{url}", url)
+
+
+def routes(kind: str = "github") -> list[dict]:
+    """该类线路的**原始定义**（未测速、未排序）。
+
+    所有「要从 GitHub 取东西」的功能都共用这一张表，别再各自硬编码一份。
+    """
+    return list(_ROUTES.get(kind, []))
+
+
+def fetch(url: str, *, kind: str = "github", want: str = "text",
+          timeout: float = 8.0, budget: float = 30.0,
+          job=None, refresh: bool = False, extra: tuple | list = ()):
+    """按线路顺序取一个 URL，返回 ``(内容, 命中的线路名)``。
+
+    统一入口：``wiki`` 取 charmeta、``updater`` 取 release、以后任何要访问
+    GitHub 的功能都用它，**只传 URL 和想要的类型**即可，不用各写一套回退。
+
+    ``want``：``text`` / ``json`` / ``bytes``
+    ``timeout``：单条线路超时；``budget``：全部线路的总预算（秒）
+    ``refresh``：True 时重新测速排序；默认用已有缓存，没有就按表里顺序 ——
+    取一个几十 KB 的小文件没必要先测速。
+    ``extra``：额外的兜底线路（``{"name":..,"tpl":"完整URL"}``）。用于那些
+    **不能靠前缀代理**的线路（如 jsDelivr 要 ``gh/{repo}@{br}/{path}`` 形式），
+    调用方自己把 URL 拼好传进来，排在所有内置线路之后。
+    """
+    deadline = time.monotonic() + max(3.0, float(budget))
+    base = (None if refresh else cached(kind)) or routes(kind)
+    ok = [r for r in base if r.get("ok")] or base
+    if extra:
+        ok = list(ok) + list(extra)
+    seen: set[str] = set()
+    last = ""
+    for r in ok:
+        left = deadline - time.monotonic()
+        if left <= 1.0:
+            last = last or "线路总预算用尽"
+            break
+        real = apply_github(r, url)
+        if real in seen:
+            continue
+        seen.add(real)
+        name = r.get("name") or r.get("id") or "?"
+        try:
+            if want == "json":
+                return net.fetch_json(real, timeout=min(timeout, left)), name
+            if want == "bytes":
+                return net.fetch_bytes(real, timeout=min(timeout, left)), name
+            return net.fetch_text(real, timeout=min(timeout, left)), name
+        except Exception as e:                                 # noqa: BLE001
+            last = f"{name}: {type(e).__name__}"
+            if job is not None:
+                job.log(f"  线路 {name} 不可用（{type(e).__name__}），换下一条")
+    raise RuntimeError(last or "所有线路都不可用")
 
 
 def quick_check(route: dict, url: str, timeout: float = 6.0) -> bool:

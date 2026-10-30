@@ -963,8 +963,8 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
 
     数据来源优先级：
     1. 每日 CI 产出的**成品** ``web/data/charmeta.js``（约 17KB，只含
-       ``{id: {r,d,t}}``），按 ``wiki.CHAR_META_ROUTES`` 多线路回退拉取
-       （jsDelivr → raw → gh 反代…），**不需要代理**；
+       ``{id: {r,d,t}}``），用 ``mirrors.fetch()`` 的线路表回退拉取
+       （与「检查程序更新」共用同一张表），**不需要代理**；
     2. 直连 Wiki（只抓 2 个页面）——需要代理，失败抛 ``WikiUnreachable``。
 
     ``proxy_needed`` 只在上面的第 2 步也失败时才可能为 True。

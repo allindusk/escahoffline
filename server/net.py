@@ -218,3 +218,9 @@ def fetch_json(url: str, timeout: float = 20, headers: dict | None = None):
     if headers:
         h.update(headers)
     return json.loads(fetch_text(url, timeout, h))
+
+
+def fetch_bytes(url: str, timeout: float = 20,
+                headers: dict | None = None) -> bytes:
+    with _open(url, headers, timeout) as r:
+        return r.read()

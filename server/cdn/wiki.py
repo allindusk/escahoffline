@@ -38,26 +38,10 @@ MEDIA_BASE = "https://escalationheroines.wikiru.jp"
 _REPO = "allindusk/escahoffline"
 _BRANCH = "main"
 _PROD_PATH = "web/data/charmeta.js"
-_RAW = f"https://raw.githubusercontent.com/{_REPO}/{_BRANCH}/{_PROD_PATH}"
 
-# raw.githubusercontent.com 在国内时通时不通，所以按顺序多线路回退。
-# **时效优先**：raw / github.com 直连和几个 gh 反代每次都回源，CI 刚提交就能取到；
-# jsDelivr 对 @main 分支约缓存 12 小时，虽然国内可达性最好，但只能当兜底放最后。
-#   实测可用：raw / github-raw / gh-proxy.com / ghfast.top / edgeone
-#            / jsdelivr / fastly / gcore
-#   实测不可用（已剔除）：cdn.statically.io、raw.gitmirror.com、ghproxy.net
-CHAR_META_ROUTES = [
-    ("raw", _RAW),
-    ("github-raw", "https://github.com/{repo}/raw/{br}/{path}"),
-    ("gh-proxy.com", "https://gh-proxy.com/" + _RAW),
-    ("ghfast.top", "https://ghfast.top/" + _RAW),
-    ("edgeone", "https://edgeone.gh-proxy.org/" + _RAW),
-    # —— 以下 CDN 有 12 小时级缓存，放最后，只在国内直连全挂时兜底
-    ("jsdelivr", "https://cdn.jsdelivr.net/gh/{repo}@{br}/{path}"),
-    ("jsdelivr-fastly", "https://fastly.jsdelivr.net/gh/{repo}@{br}/{path}"),
-    ("jsdelivr-gcore", "https://gcore.jsdelivr.net/gh/{repo}@{br}/{path}"),
-]
-_ROUTE_VARS = {"repo": _REPO, "br": _BRANCH, "path": _PROD_PATH}
+# 线路不在这里维护 —— 统一用 ``mirrors.fetch()``（和「检查程序更新」同一张线路表）。
+# 那张表里已按"时效优先"排好：raw / github.com 直连 → gh 反代 → jsDelivr 兜底
+# （jsDelivr 对 @main 约缓存 12 小时，只能放最后）。
 
 # 列表页表头（日）→ 我们的字段名
 # 注意：このゲームでは「所属」が職業/タイプ（戦士/閃忍/神騎/サポーター…）で、
@@ -145,32 +129,31 @@ def fetch_html(url: str, proxy: str | None = None, timeout: int = 30) -> str:
         return raw.decode("utf-8", "replace")
 
 
-def _http_get(url: str, timeout: int = 10) -> str:
-    """普通 HTTP GET（走系统默认网络，不强制 Wiki 代理）。"""
-    req = urllib.request.Request(url, headers={"User-Agent": config.UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8")
-
-
 def fetch_remote_charmeta(timeout: int = 8) -> tuple[dict | None, str]:
-    """按 ``CHAR_META_ROUTES`` 顺序拉每日 CI 产出的 charmeta 成品。
+    """拉每日 CI 产出的 charmeta 成品 → ``(data, route)``。
 
-    返回 ``(data, route)``：``data`` 形如 ``{角色id: {r,d,t}}``；
+    **线路不再在这里维护**：统一交给 :func:`server.mirrors.fetch`（与
+    「检查程序更新」共用同一张线路表与模板），这里只给出仓库内路径。
     全部线路失败返回 ``(None, 最后一条错误描述)``。
     """
-    last = ""
-    for name, tpl in CHAR_META_ROUTES:
-        url = tpl.format(**_ROUTE_VARS)
-        try:
-            txt = _http_get(url, timeout=timeout)
-            body = txt[txt.index("{"): txt.rindex("}") + 1]
-            data = json.loads(body)
-            if data:
-                return data, name
-            last = f"{name}: 空数据"
-        except Exception as e:                                # noqa: BLE001
-            last = f"{name}: {type(e).__name__}"
-    return None, last
+    from .. import mirrors                                    # 避免层间循环导入
+    url = ("https://raw.githubusercontent.com/%s/%s/%s"
+           % (_REPO, _BRANCH, _PROD_PATH))
+    # jsDelivr 不能靠"前缀代理"，得自己拼 gh/{repo}@{br}/{path} 形式；
+    # 它有约 12 小时缓存（时效差），所以作为**最后兜底**追加，不进公共线路表。
+    extra = [{"name": "jsDelivr",
+              "tpl": "https://cdn.jsdelivr.net/gh/%s@%s/%s"
+                     % (_REPO, _BRANCH, _PROD_PATH)}]
+    try:
+        txt, route = mirrors.fetch(url, want="text", timeout=timeout,
+                                   budget=timeout * 5, extra=extra)
+        body = txt[txt.index("{"): txt.rindex("}") + 1]
+        data = json.loads(body)
+        if not data:
+            return None, f"{route}: 空数据"
+        return data, route
+    except Exception as e:                                     # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
 
 
 def _cell_text(html_frag: str) -> str:
@@ -279,8 +262,11 @@ def scrape(proxy: str | None = None) -> dict:
     """
     rows = parse_charlist(fetch_html(LIST_URL, proxy))
     try:
+        # サポーター 页**不设稀有度**：这个游戏里「サポーター」是职业/类型
+        # （所属列），不是 SSR/SR/R/NPC 那样的稀有度。以前硬塞进 r，
+        # 结果 charmeta 里出现 39 个 r="サポーター" 的脏值。
         rows += parse_charlist(fetch_html(SUPPORTER_URL, proxy),
-                               forced_rarity="サポーター")
+                               forced_rarity="")
     except WikiError:
         pass                                         # サポーター 页失败不影响主表
     meta: dict = {}
@@ -302,15 +288,17 @@ def merge_meta(existing: dict, scraped: dict) -> dict:
     注意：旧 escah 数据曾把「サポーター」等误当成稀有度写入 ``r``；这里把不在
     合法集合里的旧 ``r`` 清空（wiki 给了就覆盖，没给则置空），避免脏数据残留。
     """
-    valid_r = {"SSR", "SR", "R", "NPC", "サポーター"}
+    valid_r = {"SSR", "SR", "R", "NPC"}
     out = {}
     for name, m in scraped.items():
         merged = dict(existing.get(name) or {})
         for k in ("r", "t", "d", "cat", "special_attr", "attack_attr", "img"):
             if m.get(k):
                 merged[k] = m[k]
-        if merged.get("r") not in valid_r:
-            merged["r"] = m.get("r") or ""           # wiki 没给且旧的非法 → 清空
+        # 只接受合法稀有度：wiki 的「サポーター」分节是**类型**不是稀有度，
+        # 旧本地数据里也可能残留这种脏值 —— 统一清空，别让它漏进 charmeta。
+        _wr = m.get("r") or ""
+        merged["r"] = _wr if _wr in valid_r else ""
         if m.get("d"):
             # wiki 给出真日期 → 之前用资源包时间填的推定值作废
             merged.pop("dEst", None)
@@ -318,6 +306,11 @@ def merge_meta(existing: dict, scraped: dict) -> dict:
     for name, m in existing.items():
         if name not in out:
             out[name] = m
+    # 兜底清洗：wiki 这次没收录的角色会原样保留旧值，旧值里可能有
+    # 「サポーター」这类非法稀有度 —— 统一清空，别让脏值继续传下去。
+    for m in out.values():
+        if m.get("r") not in valid_r:
+            m["r"] = ""
     return out
 
 
