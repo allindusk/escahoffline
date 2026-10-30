@@ -53,7 +53,7 @@ DEFAULTS = {
     "threads": 4,              # 每个资源包的下载线程数
     "concurrency": 2,          # 同时下载几个包
     "upscale": False,          # 解包后是否自动超分
-    "upscaleEngine": "builtin",  # builtin(Pillow) | realesrgan
+    "upscaleEngine": "cugan",    # 只有 Real-CUGAN（realcugan-ncnn-vulkan）
     "upscaleScale": 2,
     "convertWebp": True,       # 解包时把 png/jpg 转 webp
     "webpQuality": 88,

@@ -797,7 +797,7 @@ def install_unit(key: str, job=None, workers: int = 32, voice: bool = True,
                  image: bool = True, maps: bool = True,
                  force: bool = False, upscale: bool = False,
                  upscale_scale: int = 2,
-                 upscale_engine: str = "builtin") -> dict:
+                 upscale_engine: str = "cugan") -> dict:
     """安装一部剧情。``key`` 形如 ``char_12`` / ``adv_main_3`` / ``adv_op``。
 
     ``upscale=True`` 时，装完顺手把**这部剧用到的图**超分（只处理这些 key，
@@ -916,7 +916,7 @@ def _entries(mf, items):
 
 
 def _install_char(mf, cid, job, workers, voice, image, maps, force,
-                  upscale=False, scale=2, engine="builtin") -> dict:
+                  upscale=False, scale=2, engine="cugan") -> dict:
     t0 = time.time()
     scen = mf.scenario(cid)
     if not scen:
@@ -1030,7 +1030,7 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
 
 
 def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
-                 upscale=False, scale=2, engine="builtin") -> dict:
+                 upscale=False, scale=2, engine="cugan") -> dict:
     t0 = time.time()
     key = select.story_key(kind, no)
     b = mf.adv_scenario(kind, no)

@@ -95,6 +95,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$dst/web" | Out-Null
 
           Copy-Item "$src/server", "$src/tools", "$src/docs" -Destination $dst -Recurse
+          # 超分引擎连同模型约 80 MB，不进「纯代码更新包」（3–5 MB 那个）
+          Remove-Item "$dst/tools/realcugan" -Recurse -Force -ErrorAction SilentlyContinue
           # **不带启动脚本**：便携版的 启动.bat 是下面那步专门生成的（直接调 python\python.exe），
           # 而仓库里这份是"找系统 Python"的源码版。一旦被更新包覆盖，
           # 便携版用户下次启动就会报"没有找到 Python"。
@@ -111,6 +113,38 @@ jobs:
           $n = (Get-ChildItem $dst -Recurse -File | Measure-Object).Count
           "更新包内容：$n 个文件"
 
+
+      # ---------------- 超分引擎：Real-CUGAN (ncnn/Vulkan) ----------------
+      # 「全量包」必须自带超分引擎，否则用户只能拿到内置 Lanczos（纯插值，
+      # 2 倍只是像素变多、不增细节）。
+      # 用的就是本地那条已验证的链路：realcugan-ncnn-vulkan，
+      # 参数与 _manifest_analysis/_scripts/sr.py 一致（-m models-se -n 2 -s 2）。
+      # 位置很关键：必须在**打包更新包之后**做，否则 ~80 MB 的模型会被塞进
+      # 那个本来只有 3–5 MB 的纯代码更新包。
+      - name: 内置超分引擎（Real-CUGAN）
+        shell: pwsh
+        run: |
+          $dst = "dist/ESCAH-Offline/tools/realcugan"
+          $zip = "_tools/realcugan-ncnn-vulkan-windows.zip"
+          if (-not (Test-Path $zip)) {
+            # 项目里那份在 _tools/ 下但不入库，CI 现下同一版本（20220728）
+            $zip = "dist/realcugan.zip"
+            $url = "https://github.com/nihui/realcugan-ncnn-vulkan/releases/download/20220728/realcugan-ncnn-vulkan-20220728-windows.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+          }
+          Expand-Archive $zip -DestinationPath "dist/realcugan" -Force
+          $exe = Get-ChildItem "dist/realcugan" -Recurse -Filter "realcugan-ncnn-vulkan.exe" |
+                   Select-Object -First 1
+          if (-not $exe) { throw "压缩包里没找到 realcugan-ncnn-vulkan.exe" }
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item (Join-Path $exe.Directory.FullName "*") $dst -Recurse -Force
+          if (-not (Test-Path "$dst/realcugan-ncnn-vulkan.exe")) {
+            throw "超分引擎没有正确放进包内"
+          }
+          if (-not (Test-Path "$dst/models-se")) { throw "超分模型目录缺失（models-se）" }
+          $mb = [math]::Round(((Get-ChildItem $dst -Recurse -File |
+                   Measure-Object Length -Sum).Sum / 1MB), 1)
+          "Real-CUGAN 已内置：$mb MB"
 
       # ---------------- 便携版：内置 Python + Pillow ----------------
       - name: 组装便携版（embedded Python）

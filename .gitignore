@@ -37,6 +37,12 @@
 !/tools/
 !/docs/
 
+# 超分引擎（Real-CUGAN 的 exe + models，约 80 MB）不入库：
+# 由 CI 在打「全量包」时放进 tools/realcugan/（见 release.yml）。
+# 本地想用可以自己解压到这儿，find_engine() 会自动识别
+# （也认开发布局 _tools/realcugan/，那是项目里现成的那份）。
+/tools/realcugan/
+
 # ---------- web ----------
 # web 下只要：页面、前端资源、数据索引、媒体目录占位、两个开发脚本
 !/web/

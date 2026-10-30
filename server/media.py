@@ -182,55 +182,73 @@ def extract(zip_path: str, job=None, convert: bool = False,
 
 
 # ---------------------------------------------------------------- 超分
+# 引擎固定为 **Real-CUGAN**（项目自带的 `_tools/realcugan`；全量包在
+# `tools/realcugan/` 下）。参数与本地 `_manifest_analysis/_scripts/sr.py` 完全一致：
+#   realcugan-ncnn-vulkan.exe -i <in> -o <out> -n 2 -s 2 -m models-se -f png -j 2:2:2
+#   → Pillow 转 WebP（q95）
+# 以前这里探测的是 realesrgan-ncnn-vulkan.exe —— 项目里根本没有那个引擎，
+# 于是永远回落到"内置 Lanczos 插值"，看着自然不清晰。不要再用 Lanczos 顶替。
+_CUGAN_EXE = "realcugan-ncnn-vulkan.exe"
+_CUGAN_MODEL = "models-se"      # models-se / models-pro / models-nose
+_CUGAN_DENOISE = 2              # -n：-1 保守 / 0 不降噪 / 1-3 降噪强度
+_CUGAN_THREADS = "2:2:2"        # -j：load:proc:save
+_CUGAN_LAST_ERR = ""
+
+
 def find_engine() -> dict:
-    """→ {'kind': 'builtin'|'realesrgan'|'none', 'path': str, 'note': str}"""
-    exe = os.path.join(paths.TOOLS, "upscaler", "realesrgan-ncnn-vulkan.exe")
-    if os.path.exists(exe):
-        return {"kind": "realesrgan", "path": exe, "note": "外置 Real-ESRGAN（ncnn/Vulkan）"}
-    if have_pillow():
-        return {"kind": "builtin", "path": "", "note": "内置 Lanczos + 锐化（无需显卡）"}
-    return {"kind": "none", "path": "", "note": "缺少 Pillow，无法超分；请 pip install pillow"}
+    """探测超分引擎（只认 Real-CUGAN）。
+
+    → ``{'kind': 'cugan'|'none', 'path': exe, 'dir': 工作目录, 'note': 说明}``
+
+    搜索顺序：``<程序根>/tools/realcugan``（发布包布局）、
+    ``<项目根>/_tools/realcugan``（本地开发布局），两种都兼容套一层
+    ``xxx-windows/`` 的解压结构。
+    """
+    for root in (paths.TOOLS, os.path.join(paths.ROOT, "_tools")):
+        base = os.path.join(root, "realcugan")
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _dirs, files in os.walk(base):
+            if _CUGAN_EXE in files:
+                return {"kind": "cugan",
+                        "path": os.path.join(dirpath, _CUGAN_EXE),
+                        "dir": dirpath,
+                        "note": f"Real-CUGAN（ncnn/Vulkan · {_CUGAN_MODEL}）"}
+    return {"kind": "none", "path": "", "dir": "",
+            "note": "缺少 Real-CUGAN 超分引擎：请把 realcugan-ncnn-vulkan 解压到 "
+                    "tools/realcugan/ 下（全量包自带这一份）"}
 
 
-def _upscale_one_builtin(src: str, dst: str, scale: int) -> bool:
-    Image, ImageFilter = pillow()
-    if Image is None:
-        return False
-    try:
-        with Image.open(src) as im:
-            im = im.convert("RGBA" if _has_alpha(im) else "RGB")
-            w, h = im.size
-            im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))),
-                           Image.LANCZOS)
-            im = im.filter(ImageFilter.UnsharpMask(radius=1.3, percent=55,
-                                                   threshold=2))
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            im.save(dst, "WEBP", quality=92, method=4)
-        return True
-    except Exception:                                            # noqa: BLE001
-        return False
-
-
-def _upscale_one_rr(exe: str, src: str, dst: str, scale: int) -> bool:
+def _upscale_one_cugan(exe: str, workdir: str, src: str, dst: str,
+                       scale: int, denoise: int = _CUGAN_DENOISE) -> bool:
+    """调 Real-CUGAN 放大一张图，再转 WebP（q95，与本地 sr.py 一致）。"""
+    global _CUGAN_LAST_ERR
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = os.path.splitext(dst)[0] + ".png"
     try:
-        # realesrgan-ncnn-vulkan 只能输出 png/jpg/webp（按扩展名），先出 png 再转
-        tmp = os.path.splitext(dst)[0] + ".png"
-        r = subprocess.run(
-            [exe, "-i", src, "-o", tmp, "-s", str(scale),
-             "-n", "realesrgan-x4plus-anime"],
-            capture_output=True, timeout=300)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        cmd = [exe, "-i", src, "-o", tmp,
+               "-n", str(int(denoise)), "-s", str(int(scale)),
+               "-m", _CUGAN_MODEL, "-f", "png", "-j", _CUGAN_THREADS]
+        r = subprocess.run(cmd, cwd=workdir or None, capture_output=True,
+                           timeout=900)
         if r.returncode != 0 or not os.path.exists(tmp):
+            err = (r.stderr or b"").decode("utf-8", "replace").strip()
+            _CUGAN_LAST_ERR = f"rc={r.returncode} {err[:300]}"
             return False
         Image, _ = pillow()
-        if Image is not None:
-            with Image.open(tmp) as im:
-                im.save(dst, "WEBP", quality=92, method=4)
-            os.remove(tmp)
-        else:
+        if Image is None:
             os.replace(tmp, dst)
+            return True
+        with Image.open(tmp) as im:
+            im = im.convert("RGBA" if _has_alpha(im) else "RGB")
+            im.save(dst, "WEBP", quality=95, method=4)
+        os.remove(tmp)
+        _CUGAN_LAST_ERR = ""
         return True
-    except Exception:                                            # noqa: BLE001
+    except Exception as e:                                       # noqa: BLE001
+        _CUGAN_LAST_ERR = f"{type(e).__name__}: {e}"
         return False
 
 
@@ -294,14 +312,13 @@ def _per_image_sec(mp: float, engine: str, scale: int = 2) -> float:
     这点很关键：1280×720 放大 2 倍 → 2560×1440（面积 ×4），放大 4 倍 → ×16。
     如果只按原图算，选 4 倍时预估会和 2 倍一模一样（实际慢 4 倍）。
 
-    系数来自实测：内置 Lanczos 把 0.92 MP 放大 2 倍（3.7 MP 输出）约 1.4 秒
-    （含读盘 / 放大 / 写 WebP）；外置 Real-ESRGAN 有独显时快得多。
-    误差约 ±30%，足够让用户判断"要不要现在跑"。
+    系数来自实测：Real-CUGAN（AMD 780M 核显，models-se/-n 2/-s 2）
+    把 0.92 MP 放大到 3.7 MP 用 **3.0 秒**（含 PNG 中转与 WebP 写盘）。
+    以前这里写的是插值算法的系数（0.25/MP），会把 3 小时说成半小时，
+    等于骗人 —— 宁可估高一点。
     """
     out_mp = max(0.01, mp * (scale ** 2))
-    if engine == "realesrgan":
-        return 0.12 * out_mp + 0.2
-    return 0.35 * out_mp + 0.3
+    return 0.85 * out_mp + 0.5
 
 
 def upscale_plan(kinds=("stand", "back", "cg"),
@@ -318,7 +335,7 @@ def upscale_plan(kinds=("stand", "back", "cg"),
         by[kind] = by.get(kind, 0) + 1
 
     eng = find_engine()
-    mode = eng["kind"] if eng["kind"] != "none" else "builtin"
+    mode = eng["kind"]
 
     sample = None
     if targets:
@@ -333,9 +350,38 @@ def upscale_plan(kinds=("stand", "back", "cg"),
         except Exception:                                      # noqa: BLE001
             sample = None
 
-    mp = (sample or {}).get("mp") or 0.92          # 取不到就按 720p 估
-    per = _per_image_sec(mp, mode, scale)
+    # 逐类取样本：立绘多是 300×628 这种小图，背景/CG 是 1280×720 ——
+    # 只拿第一张当样本，既会把尺寸说错（用户会以为所有图都是 300×628），
+    # 也会让 ETA 差几倍（说过"半小时"结果跑 3 小时）。
+    def _first_size(kind: str):
+        try:
+            Image, _ = pillow()
+        except Exception:                                      # noqa: BLE001
+            return None
+        for k, _key, rel in targets:
+            if k != kind:
+                continue
+            try:
+                with Image.open(paths.web_path(rel)) as im:
+                    return im.width, im.height
+            except Exception:                                  # noqa: BLE001
+                continue
+        return None
+
+    by_kind_size: dict = {}
+    sum_out_mp = 0.0
+    for kind, cnt in by.items():
+        wh = _first_size(kind)
+        if not wh:
+            continue
+        w, h = wh
+        by_kind_size[kind] = {"n": cnt, "w": w, "h": h,
+                              "outW": int(w * scale), "outH": int(h * scale)}
+        sum_out_mp += cnt * (w * h / 1e6) * (scale ** 2)
     total = len(targets)
+    # 总耗时 = 像素项 + 每张固定开销
+    eta = 0.85 * sum_out_mp + 0.5 * total
+    per = (eta / total) if total else 0.0
 
     # total==0 有两种截然不同的原因，不能都说成"都已做过"：
     #   ① 一张原图都没有（刚装好程序、还没装剧情）
@@ -356,23 +402,26 @@ def upscale_plan(kinds=("stand", "back", "cg"),
         "engine": mode,
         "engineNote": eng.get("note", ""),
         "sample": sample,
+        "byKindSize": by_kind_size,
         "perImageSec": round(per, 2),
-        "etaSec": round(per * total, 1),
-        "etaText": _human_sec(per * total),
+        "etaSec": round(eta, 1),
+        "etaText": _human_sec(eta),
         "hint": hint,
     }
 
 
 def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
-            engine: str = "builtin", limit: int = 0,
+            engine: str = "cugan", limit: int = 0,
             only: set | None = None) -> dict:
-    """批量超分，逐张写覆盖层（中断也能续跑）。"""
+    """批量超分，逐张写覆盖层（中断也能续跑）。
+
+    ``engine`` 参数只为兼容旧调用保留 —— 现在**只有 Real-CUGAN 一种引擎**，
+    没有引擎就直接报错，不再用 Lanczos 插值顶替（那只是像素变多、不增细节）。
+    """
     eng = find_engine()
     if eng["kind"] == "none":
         raise RuntimeError(eng["note"])
-    mode = eng["kind"] if engine in ("auto", "") else engine
-    if mode == "realesrgan" and eng["kind"] != "realesrgan":
-        mode = eng["kind"]
+    mode = eng["kind"]
 
     targets = collect_upscale_targets(kinds, only=only)
     if limit:
@@ -395,10 +444,8 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
         # 文件，重建覆盖层时被"扩展名不认识"整批跳过，页面/导出永远拿不到超分图。
         dst_rel = overlay_path("x2", kind, key) + ".webp"
         dst = paths.web_path(dst_rel)
-        if mode == "realesrgan":
-            good = _upscale_one_rr(eng["path"], src, dst, scale)
-        else:
-            good = _upscale_one_builtin(src, dst, scale)
+        good = _upscale_one_cugan(eng["path"], eng.get("dir") or "",
+                                  src, dst, scale)
         if good:
             ok += 1
             x2.setdefault(kind, {})[key] = dst_rel
@@ -406,6 +453,10 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
                 save_overlay("x2", x2)
         else:
             fail += 1
+            if fail == 1:
+                # 引擎可能因为「缺模型 / 没有 Vulkan / 参数不合法」整批失败，
+                # 必须把原因写进日志，否则用户只看到"全部失败"。
+                job.log("  超分失败示例：" + (_CUGAN_LAST_ERR[:300] or "（无输出）"))
         sp = (ok + fail) / max(0.001, time.time() - t0)
         job.progress(add=1, message=f"超分 {ok + fail}/{len(targets)}"
                                    f"（{sp:.1f} 张/秒，失败 {fail}）")
@@ -547,6 +598,28 @@ def img_stats(force: bool = False) -> dict:
         out[name] = {"files": n, "bytes": b}
     out["free"] = paths.disk_free()
     out["at"] = time.strftime("%H:%M:%S")
+    # 「磁盘文件数」和「待超分张数」是两个口径，页面必须能解释差异：
+    #   img/  = 解出来的**所有**图片（含没人引用的立绘、剧情插图、头像…）
+    #   待超分 = 只算 imgmap 里登记过的 stand/back/cg
+    try:
+        im, x2 = load_imgmap(), load_overlay("x2")
+        per, tot, done = {}, 0, 0
+        for k in ("stand", "back", "cg"):
+            keys = im.get(k) or {}
+            have = x2.get(k) or {}
+            d = len([x for x in keys if x in have])
+            per[k] = {"total": len(keys), "done": d}
+            tot += len(keys)
+            done += d
+        out["upscalable"] = {"total": tot, "done": done,
+                             "left": tot - done, "byKind": per}
+        # 各类目录的实际文件数，用来解释"其余那些是什么"
+        out["byKindFiles"] = {}
+        for k in ("stand", "back", "cg", "avatar", "standfull", "story"):
+            n, _b = _walk_size(os.path.join(paths.IMG, k))
+            out["byKindFiles"][k] = n
+    except Exception:                                          # noqa: BLE001
+        pass
     _STATS_CACHE.update(at=time.time(), data=out)
     return out
 
