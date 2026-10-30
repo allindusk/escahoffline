@@ -39,24 +39,43 @@ def free_port(start: int = 8610) -> int:
 
 
 class Report:
+    """ok=True/False/"skip"。
+
+    三条原则（都是踩过坑才立起来的）：
+    * 断言必须能真的失败 —— 不写 ``x or True``、不写 ``isinstance(x, dict)``
+      这种"只要返回 JSON 就算过"的假断言；
+    * 异常不能当通过 —— 该报失败就报失败，确实测不到的用 ``skip`` 明说；
+    * 无论中途发生什么都得 dump 出汇总表，否则 CI 里只剩一句 exit 1。
+    """
+
     def __init__(self) -> None:
-        self.items: list[tuple[bool, str, str]] = []
+        self.items: list[tuple[object, str, str]] = []
 
     def add(self, ok: bool, name: str, detail: str = "") -> None:
-        self.items.append((ok, name, detail))
+        self.items.append((bool(ok), name, detail))
         print(f"  {OK if ok else NO} {name}"
               + (f"  —— {detail}" if detail else ""))
 
+    def skip(self, name: str, detail: str = "") -> None:
+        self.items.append(("skip", name, detail))
+        print(f"  － {name}" + (f"  —— {detail}" if detail else ""))
+
     @property
     def failed(self) -> int:
-        return sum(1 for ok, _, _ in self.items if not ok)
+        return sum(1 for ok, _, _ in self.items if ok is False)
+
+    @property
+    def skipped(self) -> int:
+        return sum(1 for ok, _, _ in self.items if ok == "skip")
 
     def dump(self) -> None:
         print("\n" + "=" * 66)
         for ok, name, detail in self.items:
-            print(f"{OK if ok else NO} {name}" + (f"  {detail}" if detail else ""))
+            mark = OK if ok is True else ("－" if ok == "skip" else NO)
+            print(f"{mark} {name}" + (f"  {detail}" if detail else ""))
         print("=" * 66)
-        print(f"共 {len(self.items)} 项，失败 {self.failed} 项")
+        print(f"共 {len(self.items)} 项，失败 {self.failed} 项，"
+              f"跳过 {self.skipped} 项")
 
 
 def http(port: int, path: str, body=None, timeout=180):
@@ -102,6 +121,7 @@ def main() -> int:
     HAS_BASE = bool(args.base)
 
     root = os.path.abspath(args.dir)
+    cid = args.unit.split("_")[-1]          # char_2 -> 2（多处要用，别在分支里定义）
     rep = Report()
     print(f"被测目录: {root}")
 
@@ -111,10 +131,11 @@ def main() -> int:
         py = sys.executable
         print(f"  (没找到内置 Python，用当前解释器: {py})")
     rep.add(os.path.exists(os.path.join(root, "server", "api.py")), "程序文件齐全")
-    rep.add(not os.path.exists(os.path.join(root, "web", "data", "char_1.js"))
-            or True, "干净环境（无预装剧情）",
-            "注意：目录里已经有剧情正文" if os.path.exists(
-                os.path.join(root, "web", "data", "char_1.js")) else "")
+    dirty_files = [f for f in ("char_1.js", "char_2.js", "adv_main_1.js")
+                   if os.path.exists(os.path.join(root, "web", "data", f))]
+    rep.add(not dirty_files, "干净环境（未预装剧情）",
+            "，".join(dirty_files) if dirty_files
+            else "web/data 里只有程序自带的索引")
 
     port = free_port()
     srv = subprocess.Popen(
@@ -146,10 +167,11 @@ def main() -> int:
         rep.add(bool(ver), "版本号可读", f"v{ver}")
         # 这两条在**真·干净环境**里必然成立；若被测目录已有数据（比如拿本机
         # 目录跑），只提示、不算失败，免得把"测试环境不干净"误报成产品问题。
-        dirty = (cov.get("units") or 0) > 0 or st["cdn"]["manifestReady"]
-        rep.add(True, "初始状态",
-                ("⚠ 被测目录已有数据，非纯净环境（CI 里是干净的）"
-                 if dirty else f"已装 0/{cov.get('unitsTotal')}，清单未就绪"))
+        cdn_st = st.get("cdn") or {}
+        dirty = (cov.get("units") or 0) > 0 or cdn_st.get("manifestReady")
+        rep.skip("初始状态（干净 / 已有数据）",
+                 ("被测目录已有数据，非纯净环境（CI 里是干净的）"
+                  if dirty else f"已装 0/{cov.get('unitsTotal')}，清单未就绪"))
 
         # ---------- 2. 下载清单 ----------
         print("\n下载资源清单…")
@@ -226,106 +248,104 @@ def main() -> int:
         except ImportError:
             rep.add(False, "playwright 可用", "未安装，跳过画面检查")
         else:
-            cid = args.unit.split("_")[-1]
             errs, f404 = [], []
-            with sync_playwright() as p:
-                b = p.chromium.launch(channel="msedge")
-                pg = b.new_page()
-                pg.set_viewport_size({"width": 1400, "height": 900})
-                pg.on("pageerror", lambda e: errs.append(str(e)[:100]))
-                # imgmap.x2.js / base.js 是可选覆盖层，没有才正常；
-                # 用户译文（i18n/zh-Hans）在干净包里也不存在。这两类不算失败。
-                def on_resp(r):
-                    if r.status != 404:
-                        return
-                    u = r.url
-                    if ("imgmap.x2" in u or "imgmap.base" in u or "/i18n/" in u
-                        or "sfxmap" in u
-                        or (not HAS_BASE and "/avatar/" in u)):
-                        return
-                    f404.append(u)
-                pg.on("response", on_resp)
-                pg.goto(f"http://127.0.0.1:{port}/index.html"
-                        f"?notour=1&nodisclaimer=1&char={cid}",
-                        wait_until="domcontentloaded", timeout=30000)
-                pg.wait_for_timeout(3000)
-                # 光带 ?char= 只是侧栏预选，还得点一下才会真正加载剧情
-                try:
-                    pg.click(f"#charList .char-btn[data-id='{cid}']",
-                             timeout=5000)
-                except Exception:                              # noqa: BLE001
-                    btns = pg.query_selector_all("#charList .char-btn")
-                    if btns:
-                        btns[min(int(cid) - 1, len(btns) - 1)].click()
-                pg.wait_for_timeout(7000)
-                r = pg.evaluate("""() => {
-                    const q = s => [...document.querySelectorAll(s)];
-                    const ok = a => a.filter(i => i.naturalWidth > 0).length;
-                    return {
-                        avatars: ok(q('#charList .char-btn img')),
-                        avatarTotal: q('#charList .char-btn img').length,
-                        stand: ok(q('#stage img')),
-                        standTotal: q('#stage img').length,
-                        bg: ok(q('#bgLayer img')),
-                        bgTotal: q('#bgLayer img').length,
-                        msg: (document.getElementById('msgText') || {}).textContent || '',
-                        hasAudio: (window.SFX ? Object.keys(SFX).length : 0) > 0,
-                    };
-                }""")
-                # 播放控制：就在当前这个已加载的页面上测，不重新 goto
-                # （实测二次导航 60s 都会超时）
-                try:
-                    txt0 = pg.evaluate(
-                        "() => (document.getElementById('msgText')||{}).textContent || ''")
-                    pg.keyboard.press("Enter")
-                    pg.wait_for_timeout(1200)
-                    txt1 = pg.evaluate(
-                        "() => (document.getElementById('msgText')||{}).textContent || ''")
-                    hasSet = pg.evaluate(
-                        "() => !!document.getElementById('settings')")
-                    rep.add(hasSet, "设置面板存在")
-                    # 文字变了 = 确实切到了下一句
-                    rep.add(bool(txt1) and txt1 != txt0, "回车切下一句",
-                            f"{(txt0 or '(空)')[:12]} -> {(txt1 or '(空)')[:12]}")
-                except Exception as ex:                       # noqa: BLE001
-                    rep.add(False, "播放控制", str(ex)[:70])
+            # 整段包 try：浏览器起不来 / goto 超时也得把汇总表打出来。
+            # 否则异常直接冲出 main，CI 上只剩一句 "exit 1"，什么线索都没有。
+            r = {"avatars": 0, "avatarTotal": 0, "stand": 0, "standTotal": 0,
+                 "bg": 0, "bgTotal": 0, "msg": "", "hasAudio": False}
+            browser_ok = False
+            try:
+                with sync_playwright() as p:
+                    b = p.chromium.launch(channel="msedge")
+                    pg = b.new_page()
+                    pg.set_viewport_size({"width": 1400, "height": 900})
+                    pg.on("pageerror", lambda e: errs.append(str(e)[:100]))
 
-                # 播放控制：就在当前这个已加载的页面上测，不重新 goto
-                # （实测二次导航 60s 都会超时）
-                try:
-                    txt0 = pg.evaluate(
-                        "() => (document.getElementById('msgText')||{}).textContent || ''")
-                    pg.keyboard.press("Enter")
-                    pg.wait_for_timeout(1200)
-                    txt1 = pg.evaluate(
-                        "() => (document.getElementById('msgText')||{}).textContent || ''")
-                    hasSet = pg.evaluate(
-                        "() => !!document.getElementById('settings')")
-                    rep.add(hasSet, "设置面板存在")
-                    # 文字变了 = 确实切到了下一句
-                    rep.add(bool(txt1) and txt1 != txt0, "回车切下一句",
-                            f"{(txt0 or '(空)')[:12]} -> {(txt1 or '(空)')[:12]}")
-                except Exception as ex:                       # noqa: BLE001
-                    rep.add(False, "播放控制", str(ex)[:70])
+                    # imgmap.x2.js / base.js 是可选覆盖层，没有才正常；
+                    # 用户译文（i18n/zh-Hans）在干净包里也不存在。这几类不算失败。
+                    def on_resp(resp):
+                        if resp.status != 404:
+                            return
+                        u = resp.url
+                        if ("imgmap.x2" in u or "imgmap.base" in u or "/i18n/" in u
+                            or "sfxmap" in u
+                            or (not HAS_BASE and "/avatar/" in u)):
+                            return
+                        f404.append(u)
+                    pg.on("response", on_resp)
+                    pg.goto(f"http://127.0.0.1:{port}/index.html"
+                            f"?notour=1&nodisclaimer=1&char={cid}",
+                            wait_until="domcontentloaded", timeout=30000)
+                    pg.wait_for_timeout(3000)
+                    # 光带 ?char= 只是侧栏预选，还得点一下才会真正加载剧情。
+                    # **按 data-id 找，不能按下标猜**：侧栏顺序是排序后的，
+                    # 跟角色 id 完全不同，按下标点会点到别的角色还"测通过"。
+                    clicked = pg.evaluate(
+                        """(cid) => {
+                            const btns = [...document.querySelectorAll(
+                                '#charList .char-btn')];
+                            const hit = btns.find(x => x.dataset.id === String(cid));
+                            if (!hit) return false;
+                            hit.scrollIntoView({block: 'center'});
+                            hit.click();
+                            return true;
+                        }""", cid)
+                    rep.add(clicked, "侧栏里找到该角色", f"data-id={cid}")
+                    pg.wait_for_timeout(7000)
+                    r = pg.evaluate("""() => {
+                        const q = s => [...document.querySelectorAll(s)];
+                        const ok = a => a.filter(i => i.naturalWidth > 0).length;
+                        return {
+                            avatars: ok(q('#charList .char-btn img')),
+                            avatarTotal: q('#charList .char-btn img').length,
+                            stand: ok(q('#stage img')),
+                            standTotal: q('#stage img').length,
+                            bg: ok(q('#bgLayer img')),
+                            bgTotal: q('#bgLayer img').length,
+                            msg: (document.getElementById('msgText') || {}).textContent || '',
+                            hasAudio: (window.SFX ? Object.keys(SFX).length : 0) > 0,
+                        };
+                    }""")
+                    # 播放控制：就在这个已加载的页面上测，不重新 goto
+                    # （实测二次导航 60s 都会超时）
+                    try:
+                        txt0 = pg.evaluate(
+                            "() => (document.getElementById('msgText')||{}).textContent || ''")
+                        pg.keyboard.press("Enter")
+                        pg.wait_for_timeout(1200)
+                        txt1 = pg.evaluate(
+                            "() => (document.getElementById('msgText')||{}).textContent || ''")
+                        hasSet = pg.evaluate(
+                            "() => !!document.getElementById('settings')")
+                        rep.add(hasSet, "设置面板存在")
+                        # 文字变了 = 确实切到了下一句
+                        rep.add(bool(txt1) and txt1 != txt0, "回车切下一句",
+                                f"{(txt0 or '(空)')[:12]} -> {(txt1 or '(空)')[:12]}")
+                    except Exception as ex:                   # noqa: BLE001
+                        rep.add(False, "播放控制", str(ex)[:70])
+                    b.close()
+                    browser_ok = True
+            except Exception as ex:                           # noqa: BLE001
+                rep.add(False, "浏览器实测", f"{type(ex).__name__}: {str(ex)[:80]}")
 
-                b.close()
-
-            # 头像**属于公共素材**：只有下了公共素材才该有，不装就不该要求。
-            if HAS_BASE:
-                rep.add(r["avatarTotal"] > 0 and r["avatars"] == r["avatarTotal"],
-                        "侧栏头像加载", f"{r['avatars']}/{r['avatarTotal']}")
-            else:
-                rep.add(True, "侧栏头像加载", "跳过（未装公共素材，头像本就该缺）")
-            rep.add(r["bgTotal"] > 0 and r["bg"] == r["bgTotal"],
-                    "背景加载", f"{r['bg']}/{r['bgTotal']}")
-            rep.add(r["standTotal"] > 0, "立绘出现",
-                    f"{r['stand']}/{r['standTotal']}")
-            rep.add(bool(r["msg"].strip()), "对话框有文字",
-                    r["msg"][:24].replace("\n", " "))
-            rep.add(not errs, "无 JS 报错", "; ".join(errs[:2]))
-            # 未下载剧情不该请求头像，所以 404 应为 0
-            rep.add(len(f404) == 0, "无 404 请求",
-                    "; ".join(f404[:2]))
+            if browser_ok:
+                # 头像**属于公共素材**：只有下了公共素材才该有，不装就不该要求。
+                if HAS_BASE:
+                    rep.add(r["avatarTotal"] > 0
+                            and r["avatars"] == r["avatarTotal"],
+                            "侧栏头像加载", f"{r['avatars']}/{r['avatarTotal']}")
+                else:
+                    rep.skip("侧栏头像加载", "未装公共素材，头像本就该缺")
+                rep.add(r["bgTotal"] > 0 and r["bg"] == r["bgTotal"],
+                        "背景加载", f"{r['bg']}/{r['bgTotal']}")
+                rep.add(r["standTotal"] > 0, "立绘出现",
+                        f"{r['stand']}/{r['standTotal']}")
+                rep.add(bool(r["msg"].strip()), "对话框有文字",
+                        r["msg"][:24].replace("\n", " "))
+                rep.add(not errs, "无 JS 报错", "; ".join(errs[:2]))
+                # 未下载剧情不该请求头像，所以 404 应为 0
+                rep.add(len(f404) == 0, "无 404 请求",
+                        "; ".join(f404[:2]))
 
         # ---------- 6.5 扩展功能（这些以前完全没测） ----------
         print("\n扩展功能检查…")
@@ -334,7 +354,7 @@ def main() -> int:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            rep.add(True, "CG 页", "跳过（playwright 未装）")
+            rep.skip("CG 页", "playwright 未装")
         else:
             errs2 = []
             try:
@@ -366,8 +386,7 @@ def main() -> int:
                     rep.add(r2["thOk"] > 0, "CG 缩略图加载",
                             f"{r2['thOk']}/{r2['thTotal']}")
                 else:
-                    rep.add(True, "CG 缩略图加载",
-                            "跳过（该角色没有可显示的 CG）")
+                    rep.skip("CG 缩略图加载", "该角色没有可显示的 CG")
 
         # (c) 超分：默认只测「能否算出计划」，--full 才真的跑
         try:
@@ -386,7 +405,7 @@ def main() -> int:
                 x2 = os.path.join(web, "data", "imgmap.x2.js")
                 rep.add(os.path.exists(x2), "超分产出记录 imgmap.x2.js")
             else:
-                rep.add(True, "实际超分", "跳过（加 --full 才跑）")
+                rep.skip("实际超分", "加 --full 才跑")
         except Exception as e:                                # noqa: BLE001
             rep.add(False, "超分预估", str(e)[:70])
 
@@ -396,9 +415,16 @@ def main() -> int:
         tfile = os.path.join(web, "assets", "i18n", "zh-Hans", f"{args.unit}.json")
         tbak = tfile + ".e2ebak"
         had_t = os.path.exists(tfile)
+        # index.json 也要备份：导入会调 _update_trans_index() 改里面的字数统计，
+        # 只还原 zh-Hans/<unit>.json 的话，本机跑一次 e2e 计数就被测试串带偏了。
+        ifile = os.path.join(web, "assets", "i18n", "index.json")
+        ibak = ifile + ".e2ebak"
+        had_i = os.path.exists(ifile)
         try:
             if had_t:
                 shutil.copy2(tfile, tbak)
+            if had_i:
+                shutil.copy2(ifile, ibak)
             # 注意：这个路由在 **GET 分支**，参数走 query string，
             # 返回纯文本（不是 json），所以按 bytes 解；导出带 UTF-8 BOM
             exp0 = http(port, f"/api/export/trans?unit={args.unit}", timeout=300)
@@ -431,48 +457,69 @@ def main() -> int:
         except Exception as e:                                # noqa: BLE001
             rep.add(False, "译文导入导出", str(e)[:70])
         finally:
-            # 还原译文库：测试数据一条都不许留下
+            # 还原译文库：测试数据一条都不许留下（正文与字数统计都要还原）
             if had_t and os.path.exists(tbak):
                 shutil.move(tbak, tfile)
             elif not had_t and os.path.exists(tfile):
                 os.remove(tfile)
+            if had_i and os.path.exists(ibak):
+                shutil.move(ibak, ifile)
+            elif not had_i and os.path.exists(ifile):
+                os.remove(ifile)
 
         # (e) 导出 CG
         try:
-            jc = http(port, "/api/export/cg", {"chars": [2]},
+            jc = http(port, "/api/export/cg", {"chars": [int(cid)]},
                       timeout=120)["job"]
             jr2 = wait_job(port, jc["id"], timeout=900)
             rep.add(jr2["state"] == "done", "导出 CG",
                     jr2.get("message") or str(jr2)[:50])
         except Exception as e:                                # noqa: BLE001
-            rep.add(True, "导出 CG", f"跳过（{str(e)[:50]}）")
+            rep.add(False, "导出 CG", str(e)[:70])
 
         # (f) 检查程序更新（需要访问 GitHub，CI 里可以）
         try:
-            up = http(port, "/api/update/check", {}, timeout=120)
-            rep.add(isinstance(up, dict), "检查程序更新接口可用",
-                    str(up)[:70])
+            # 注意是 **GET**（这条路由挂在 _api_get 里）。以前传了空 dict →
+            # 变成 POST → 404 → 异常被 except 当"跳过=通过"，等于一直没测。
+            up = http(port, "/api/update/check", timeout=180)
+            # 真断言：拿到最新版本号才算通过。以前只判 isinstance(dict) ——
+            # 返回 {"error": "…"} 也照样"通过"，等于没测。
+            rep.add(bool(up.get("latest")), "检查程序更新",
+                    f"当前 {up.get('current')} / 最新 {up.get('latest')}"
+                    f" / 线路 {up.get('via') or '-'}"
+                    + (f" / 错误 {up['error'][:60]}" if up.get("error") else ""))
         except Exception as e:                                # noqa: BLE001
-            rep.add(True, "检查程序更新", f"跳过（{str(e)[:50]}）")
+            rep.add(False, "检查程序更新", str(e)[:70])
 
         # (g) 打开目录按钮
         try:
-            op = http(port, "/api/open", {"kind": "data"}, timeout=60)
-            rep.add(op.get("ok") is True or isinstance(op, dict),
-                    "打开数据目录接口", str(op)[:60])
+            # 参数名是 which（不是 kind）：{"kind":"data"} 会被当成默认的 export，
+            # 而且 "data" 本身不是合法值 —— 以前这么写只能是"测了个寂寞"。
+            op = http(port, "/api/open", {"which": "export"}, timeout=60)
+            rep.add(op.get("ok") is True, "打开导出目录接口", str(op)[:60])
         except Exception as e:                                # noqa: BLE001
-            rep.add(True, "打开数据目录", f"跳过（{str(e)[:50]}）")
+            rep.add(False, "打开导出目录", str(e)[:70])
 
         # (h) 暂停 / 取消任务：用一个清单独刷任务验证
         try:
             j2 = http(port, "/api/manifest/refresh", {})["job"]
-            time.sleep(2)
-            pz = http(port, f"/api/jobs/{j2['id']}/pause", {}, timeout=60)
-            rep.add(pz.get("ok") is True or isinstance(pz, dict),
-                    "暂停任务", str(pz)[:50])
+            # 暂停只对 running 生效，任务可能还没起来/已经跑完，先等它进入 running
+            t0 = time.time()
+            state = ""
+            while time.time() - t0 < 15:
+                js = http(port, "/api/jobs", timeout=30)["jobs"]
+                me = [j for j in js if j["id"] == j2["id"]]
+                state = me[0]["state"] if me else "gone"
+                if state != "queued":
+                    break
+                time.sleep(0.3)
+            if state == "running":
+                pz = http(port, f"/api/jobs/{j2['id']}/pause", {}, timeout=60)
+                rep.add(pz.get("ok") is True, "暂停任务", str(pz)[:50])
+            else:
+                rep.skip("暂停任务", f"任务已 {state}，来不及暂停（清单刷得太快）")
             cc = http(port, f"/api/jobs/{j2['id']}/cancel", {}, timeout=60)
-            rep.add(cc.get("ok") is True or isinstance(cc, dict),
-                    "取消任务", str(cc)[:50])
+            rep.add(cc.get("ok") is True, "取消任务", str(cc)[:50])
             time.sleep(1)
             js = http(port, "/api/jobs", timeout=30)["jobs"]
             me = [j for j in js if j["id"] == j2["id"]]
@@ -487,27 +534,45 @@ def main() -> int:
         # (i) 导出视频（很慢，--full 才跑）
         if args.full:
             try:
+                # /api/export/video 返回的是 {"job": …}（后台任务），**必须等**：
+                # 以前这里直接判 vd["ok"] → 永远 False（必红），而且没等任务就去
+                # 卸载，把正在截帧的剧本文档删了，视频 0 帧失败还被标成 done。
+                n0 = len((http(port, "/api/exports", timeout=30) or {})
+                         .get("items") or [])
                 vd = http(port, "/api/export/video",
-                          {"unit": args.unit, "maxSeconds": 20}, timeout=1800)
-                rep.add(vd.get("ok") is True or bool(vd.get("file")),
-                        "导出视频", str(vd)[:70])
+                          {"unit": args.unit, "limit": 24}, timeout=300)
+                if "error" in vd:
+                    rep.add(False, "导出视频", str(vd["error"])[:80])
+                else:
+                    jv = vd["job"]
+                    jrv = wait_job(port, jv["id"], timeout=3600)
+                    rep.add(jrv["state"] == "done", "导出视频",
+                            jrv.get("error") or jrv.get("message")
+                            or str(jrv)[:60])
+                    items = (http(port, "/api/exports", timeout=30) or {}) \
+                        .get("items") or []
+                    rep.add(len(items) > n0, "导出目录里多出文件",
+                            f"{n0} -> {len(items)}")
             except Exception as e:                            # noqa: BLE001
                 rep.add(False, "导出视频", str(e)[:70])
         else:
-            rep.add(True, "导出视频", "跳过（加 --full 才跑，很慢）")
+            rep.skip("导出视频", "加 --full 才跑（很慢）")
 
         # (j) 卸载：放最后（会把刚装的剧情删掉）
         try:
-            ju = http(port, "/api/uninstall", {"units": [args.unit]},
-                      timeout=120)["job"]
-            wait_job(port, ju["id"], timeout=900)
-            time.sleep(2)
-            st2 = http(port, "/api/state", timeout=30)
-            left = (st2.get("coverage") or {}).get("units") or 0
-            script = os.path.join(web, "data", f"{args.unit}.js")
-            rep.add(left == 0 and not os.path.exists(script),
-                    "卸载剧情", f"剩余 {left} 部，剧本文件已删="
-                    f"{not os.path.exists(script)}")
+            rj = http(port, "/api/uninstall", {"units": [args.unit]}, timeout=120)
+            if "error" in rj:
+                # 有任务占着这部剧时接口会拒绝（这是对的，不是缺陷）
+                rep.add(False, "卸载剧情", str(rj["error"])[:80])
+            else:
+                wait_job(port, rj["job"]["id"], timeout=900)
+                time.sleep(2)
+                st2 = http(port, "/api/state", timeout=30)
+                left = (st2.get("coverage") or {}).get("units") or 0
+                script = os.path.join(web, "data", f"{args.unit}.js")
+                rep.add(left == 0 and not os.path.exists(script),
+                        "卸载剧情", f"剩余 {left} 部，剧本文件已删="
+                        f"{not os.path.exists(script)}")
         except Exception as e:                                # noqa: BLE001
             rep.add(False, "卸载剧情", str(e)[:70])
 
@@ -518,6 +583,8 @@ def main() -> int:
             bad_words = [w for w in ("Traceback", "NameError", "TypeError")
                          if w in txt]
             rep.add(not bad_words, "日志无异常", ", ".join(bad_words))
+        else:
+            rep.skip("日志无异常", f"没有 {log}")
 
         rep.dump()
         return 0 if rep.failed == 0 else 1
