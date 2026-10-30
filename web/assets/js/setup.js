@@ -566,14 +566,27 @@
       if (g) g.hidden = !(r.unused && r.dry);
     }
 
-    // 导出任务跑完 → 按用户设置决定要不要自动弹出文件夹
-    const expDone = (list || []).find(
-      j => (j.kind === 'video' || j.kind === 'cg') && j.state === 'done');
-    if (expDone && ST._expShown !== expDone.id) {
-      ST._expShown = expDone.id;
+    // 导出任务「刚跑完」→ 按用户设置自动弹出文件夹。
+    // **必须按状态跃迁判断**：以前是"列表里存在任意 done 的 video/cg 任务"就打开，
+    // 而去重标记 ST._expShown 只在内存里 —— 每次刷新/重进页面都会把历史上的
+    // 已完成任务当成"刚完成"，于是无缘无故自动弹一次文件夹。
+    ST._jobSeen = ST._jobSeen || {};
+    const jobsNow = list || [];
+    for (const j of jobsNow) {
+      if (!j || !j.id) continue;
+      const prev = ST._jobSeen[j.id];
+      ST._jobSeen[j.id] = j.state;
+      if (prev === undefined || prev === j.state) continue;   // 首次见到 / 状态没变 → 不动
+      if (j.state !== 'done') continue;
+      if (j.kind !== 'video' && j.kind !== 'cg') continue;
       let auto = false;
       try { auto = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
       if (auto) openDir('export', '导出目录');
+    }
+    // 清掉已经不在列表里的 id，别让这个表无限膨胀
+    const alive = new Set(jobsNow.map(j => j && j.id));
+    for (const id of Object.keys(ST._jobSeen)) {
+      if (!alive.has(id)) delete ST._jobSeen[id];
     }
     // 自动更新失败（所有线路不通）→ 给可点的 GitHub 链接与手动步骤
     const up = (list || []).find(j => j.kind === 'update' && j.detail && j.detail.manual);
