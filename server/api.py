@@ -19,10 +19,11 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 
-from . import (exports, jobs, media, mirrors, packs, paths, proc, updater,
-               videxport)
+from . import (exports, jobs, log as applog, media, mirrors, packs, paths, proc,
+               updater, videxport)
 from .cdn import install as cdn_install
 from .cdn import manifest as cdn_manifest
 from .cdn import stages as cdn_stages
@@ -334,11 +335,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, fmt, *args):
+        # API 走 _log_req（带耗时/状态码/请求体摘要），这里只管静态资源，
+        # 否则每个 /api 请求会被记两遍。
+        if urllib.parse.urlparse(self.path).path.startswith("/api/"):
+            return
         try:
             code = int(str(args[1])) if len(args) > 1 else 0
         except (ValueError, IndexError):
             code = 0
         if code >= 400:
+            try:
+                applog.warn("static " + (fmt % args), tag="http")
+            except Exception:                                    # noqa: BLE001
+                pass
             super().log_message(fmt, *args)
 
     def translate_path(self, path):
@@ -350,6 +359,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------------- 响应工具
     def _json(self, obj, code: int = 200):
+        self._status = int(code)
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -358,6 +368,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _err(self, msg: str, code: int = 400):
+        self._status = int(code)
+        self._err_msg = str(msg)[:600]
         self._json({"error": str(msg)[:600]}, code)
 
     def _body(self) -> dict:
@@ -365,6 +377,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not n:
             return {}
         raw = self.rfile.read(n)
+        # 只留个摘要：别把整段译文/大 JSON 塞进日志
+        self._body_note = "%dB %s" % (
+            n, raw[:160].decode("utf-8", "replace").replace("\n", " "))
         ctype = (self.headers.get("Content-Type") or "").lower()
         if "application/json" in ctype:
             try:
@@ -377,28 +392,76 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         q = urllib.parse.urlparse(self.path).query
         return {k: v[0] for k, v in urllib.parse.parse_qs(q).items()}
 
+    def _log_req(self, method: str, t0: float) -> None:
+        """每条 API 请求都记一条：方法 路径 状态码 耗时 (+POST 体摘要/错误)。
+
+        当天的日志是"全量"的 —— 出问题时能按时间线还原用户点了什么、
+        哪个请求返回了什么。1 天后只保留 ERROR（见 log.prune）。
+        """
+        ms = (time.time() - t0) * 1000
+        code = getattr(self, "_status", 200)
+        msg = "%s %s %d %.0fms" % (method, self.path, code, ms)
+        note = getattr(self, "_body_note", "")
+        if note:
+            msg += " body=" + note
+        err = getattr(self, "_err_msg", "")
+        if err:
+            msg += " err=" + err
+        if code >= 500:
+            applog.error(msg, tag="http")
+        elif code >= 400:
+            applog.warn(msg, tag="http")
+        else:
+            applog.debug(msg, tag="http")
+        # handler 实例会被 keep-alive 复用，必须清干净
+        self._status = 200
+        self._err_msg = ""
+        self._body_note = ""
+
     # ---------------- 路由
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        t0 = time.time()
         try:
             if path.startswith("/api/"):
-                return self._api_get(path)
+                r = self._api_get(path)
+                self._log_req("GET", t0)
+                return r
             return super().do_GET()
         except BrokenPipeError:
             pass
         except Exception as e:                                   # noqa: BLE001
-            self._err(e, 500)
+            self._status = 500
+            applog.error("GET %s 未捕获异常\n%s"
+                         % (self.path, traceback.format_exc()), tag="http")
+            try:
+                self._err(e, 500)
+            except Exception:                                    # noqa: BLE001
+                pass
+            self._log_req("GET", t0)
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        t0 = time.time()
         try:
             if not path.startswith("/api/"):
-                return self._err("not found", 404)
-            return self._api_post(path)
+                self._err("not found", 404)
+                self._log_req("POST", t0)
+                return None
+            r = self._api_post(path)
+            self._log_req("POST", t0)
+            return r
         except BrokenPipeError:
             pass
         except Exception as e:                                   # noqa: BLE001
-            self._err(e, 500)
+            self._status = 500
+            applog.error("POST %s 未捕获异常\n%s"
+                         % (self.path, traceback.format_exc()), tag="http")
+            try:
+                self._err(e, 500)
+            except Exception:                                    # noqa: BLE001
+                pass
+            self._log_req("POST", t0)
 
     # ---------------- GET
     def _api_get(self, path: str):
@@ -791,7 +854,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "updateReady": updater.pending_version(),
             # 路径含中文时的提示（前端顶部条显示），以及日志位置
             "warn": paths.path_warning(),
-            "logPath": os.path.join(paths.USERDATA, "logs", "app.log"),
+            "logPath": applog.log_path(),
         }
 
 

@@ -45,6 +45,16 @@ def main(argv=None) -> int:
     from . import log as applog, proc
     proc.install_signal_handlers()
     applog.log(f"boot v{paths.app_version()} python={ver}", "boot")
+    # 按保留策略收敛日志：当天全量、>1 天只留 ERROR、>7 天删除
+    try:
+        _pr = applog.prune()
+        applog.log("日志保留：当天全量 / >%d 天仅 ERROR / >%d 天删除；"
+                   "本次压缩 %d 份、删除 %d 份；当前文件 %s"
+                   % (applog.COMPACT_DAYS, applog.KEEP_DAYS,
+                      _pr.get("compacted", 0), _pr.get("dropped", 0),
+                      applog.log_path()), "boot")
+    except Exception:                                          # noqa: BLE001
+        pass
     _warn = paths.path_warning()
     if _warn:
         print("[!] " + _warn.replace("\n", "\n    "))
