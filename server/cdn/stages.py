@@ -918,4 +918,20 @@ def check_char(cid) -> dict:
     for key, kind in (("stand", "stand"), ("back", "back"), ("cg", "cg")):
         miss = [s for s in assets[kind] if s not in imgmap.get(kind, {})]
         res[f"{kind}_miss"] = miss
+
+    # 包级检查：imgmap 缺可能只是"没合成"，但也可能是"包根本没下载"。
+    # 后者重装一次就能补（fetch 的 skip 只跳过已存在的），必须单独说清楚，
+    # 否则用户只看到"立绘缺 N 个"不知道该做什么。
+    try:
+        from . import manifest as _mf
+        _M = select.Manifest(_mf.load_index())
+    except Exception:                                          # noqa: BLE001
+        _M = None
+    bundle_miss = []
+    if _M is not None:
+        for s in assets["stand"]:
+            b = _M.stand_bundle(s)
+            if b and not os.path.exists(os.path.join(FILES_IMG, b)):
+                bundle_miss.append(b)
+    res["stand_bundle_miss"] = sorted(set(bundle_miss))
     return res

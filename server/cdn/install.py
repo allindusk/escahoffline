@@ -806,6 +806,12 @@ def _self_check(job, key: str) -> dict:
                     miss.append(f"{label}引用缺 {len(keys)} 个"
                                 f"（{', '.join(keys[:3])}"
                                 + ("…" if len(keys) > 3 else "") + "）")
+            nb = [str(x) for x in (r.get("stand_bundle_miss") or [])]
+            if nb:
+                miss.append(f"立绘包未下载 {len(nb)} 个"
+                            f"（{', '.join(nb[:2])}"
+                            + ("…" if len(nb) > 2 else "") + "）"
+                            "——重装这部剧即可补齐")
             out = {"unit": key, "missing": miss, "detail": r}
         else:
             data = os.path.join(config.DATA, f"{key}.js")
