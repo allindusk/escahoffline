@@ -390,14 +390,18 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
         if job.cancelled:
             break
         src = paths.web_path(rel)
-        dst = paths.web_path(overlay_path("x2", kind, key))
+        # 注意：imgmap 的 key 是**不带扩展名**的 stem，但落盘与映射的值必须带
+        # `.webp` —— 以前这里漏了扩展名，产出 `img_x2/stand/<key>` 这种无后缀
+        # 文件，重建覆盖层时被"扩展名不认识"整批跳过，页面/导出永远拿不到超分图。
+        dst_rel = overlay_path("x2", kind, key) + ".webp"
+        dst = paths.web_path(dst_rel)
         if mode == "realesrgan":
             good = _upscale_one_rr(eng["path"], src, dst, scale)
         else:
             good = _upscale_one_builtin(src, dst, scale)
         if good:
             ok += 1
-            x2.setdefault(kind, {})[key] = overlay_path("x2", kind, key)
+            x2.setdefault(kind, {})[key] = dst_rel
             if ok % 25 == 0:               # 每 25 张落一次盘，崩溃不至于全丢
                 save_overlay("x2", x2)
         else:
@@ -556,20 +560,38 @@ def reset_overlay(kind: str) -> bool:
 
 
 def rebuild_x2_overlay(job=None) -> dict:
-    """按磁盘实际存在的 img_x2 文件重建 __IMGX2（比 state 更可信）。"""
+    """按磁盘实际存在的 img_x2 文件重建 __IMGX2（比 state 更可信）。
+
+    顺带自愈历史 bug：早期 ``upscale()`` 落盘时漏了扩展名，产出
+    ``img_x2/stand/<key>`` 这种无后缀文件；这里把它们补成 ``.webp``，
+    否则重建时会因"扩展名不认识"整批跳过（页面和导出都拿不到超分图）。
+    """
     data = {k: {} for k in IMG_KINDS}
-    n = 0
+    n = fixed = 0
     for kind in IMG_KINDS:
         d = os.path.join(paths.IMG_X2, kind)
         if not os.path.isdir(d):
             continue
         for name in os.listdir(d):
             stem, ext = os.path.splitext(name)
+            if not ext:
+                # 历史无后缀文件：内容其实是 webp，补上扩展名
+                try:
+                    os.replace(os.path.join(d, name),
+                               os.path.join(d, name + ".webp"))
+                    name, ext = name + ".webp", ".webp"
+                    fixed += 1
+                except OSError:
+                    continue
             if ext.lower() not in (".webp", ".png", ".jpg"):
                 continue
-            data[kind][stem] = overlay_path("x2", kind, stem)
+            # 映射的**值**要带扩展名（key 仍是 stem，和 imgmap 对齐）
+            data[kind][stem] = overlay_path("x2", kind, stem) + ext.lower()
             n += 1
     save_overlay("x2", data)
     if job is not None:
-        job.log(f"重建覆盖层：{n} 张超分图")
-    return {"count": n}
+        msg = f"重建覆盖层：{n} 张超分图"
+        if fixed:
+            msg += f"（顺手补全 {fixed} 个缺扩展名的旧文件）"
+        job.log(msg)
+    return {"count": n, "fixed": fixed}

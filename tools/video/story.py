@@ -82,6 +82,13 @@ class Timeline:
         self.audio: list[dict] = []
         self.total = 0.0
         for pi in parts:
+            pi = int(pi)
+            # 段落号 **1 基**。这里必须校验：以前不校验，传 0 会变成
+            # all_parts[-1]（Python 负索引）→ 静默渲染"最后一段"。
+            if not (1 <= pi <= len(self.all_parts)):
+                raise ValueError(
+                    "段落号超出范围：%d（本剧情共 %d 段，段落号从 1 开始）"
+                    % (pi, len(self.all_parts)))
             self._build_part(pi - 1)
 
     def text_of(self, m) -> str:

@@ -107,7 +107,10 @@ def export(job, key: str, parts: list[int], limit: int = 0,
         raise VideoExportError("没有选择段落")
 
     from story import Timeline                                # noqa: PLC0415
-    tl = Timeline(cid, parts)
+    try:
+        tl = Timeline(cid, parts)                             # 段落号 1 基
+    except ValueError as e:                                   # 越界 / 非法段落号
+        raise VideoExportError(str(e)) from e
     total = len(tl.lines)
     if limit:
         total = min(total, limit)

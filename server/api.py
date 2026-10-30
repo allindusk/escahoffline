@@ -326,6 +326,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "ESCAH/" + paths.app_version()
     protocol_version = "HTTP/1.1"
 
+    #: Windows 上 ``mimetypes`` 常常不认 webp/m4a，会退化成
+    #: ``application/octet-stream``。浏览器没 nosniff 时靠嗅探还能显示，但很脆；
+    #: 这里显式补上（超分图、语音、视频导出都用到）。
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".webp": "image/webp",
+        ".avif": "image/avif",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".woff2": "font/woff2",
+        ".wasm": "application/wasm",
+    }
+
     # ---------------- 基础设施
     def end_headers(self):
         self.send_header("Cache-Control",
@@ -671,7 +687,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not units:
                 return self._err("没有选择角色")
             try:
-                parts = sorted({int(x) for x in (b.get("parts") or [0])})
+                # 段落号 **1 基**（与 story.Timeline 的 `pi - 1`、导出名 p<N> 一致）
+                parts = sorted({int(x) for x in (b.get("parts") or [1])})
             except (TypeError, ValueError):
                 return self._err("段落参数不对")
             miss = videxport.missing_deps()

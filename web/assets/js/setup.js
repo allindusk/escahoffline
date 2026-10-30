@@ -917,9 +917,12 @@
   function renderParts() {
     // 段落对所有选中角色通用；勾相邻几段 = 连续录制，合成一条
     const count = $('#vidKind').value === 'adv' ? 9 : 6;
+    // value 用 **1 基**（第 1 段 = 1）：后端 story.Timeline 是 `_build_part(pi - 1)`，
+    // 导出文件名 seg_label 也是 p<该值>。以前这里给 0 基，选第 2 段会被当成第 1 段，
+    // 选第 1 段更会因为 -1 变成"最后一段"。
     $('#vidParts').innerHTML = Array.from({ length: count }, function (_, i) {
       return '<label class="' + (i < 1 ? 'on' : '') + '">' +
-        '<input type="checkbox" value="' + i + '"' + (i < 1 ? ' checked' : '') + '>' +
+        '<input type="checkbox" value="' + (i + 1) + '"' + (i < 1 ? ' checked' : '') + '>' +
         '第 ' + (i + 1) + ' 段</label>';
     }).join('');
     $$('#vidParts label').forEach(function (lb) {
@@ -942,7 +945,7 @@
     const info = $('#vidSelInfo');
     if (info) {
       info.textContent = n
-        ? '已选 ' + n + ' 个 · 第 ' + parts.map(i => i + 1).join('、') + ' 段'
+        ? '已选 ' + n + ' 个 · 第 ' + parts.join('、') + ' 段'
         : '未选择角色';
     }
     const h = $('#vidHint');
