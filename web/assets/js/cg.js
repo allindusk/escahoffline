@@ -49,6 +49,9 @@ function avatarCands(id) {
 /** 挂候选链：加载失败自动换下一个，全失败隐藏自身 */
 function setChain(img, list) {
   if (!img || !list.length) return;
+  // 复位：上一轮候选链全失败会把 img 设成 visibility:hidden（灯箱复用同一个 <img>），
+  // 不复位就会出现"第二次打开图其实加载了却看不见"。
+  img.style.visibility = '';
   img.dataset.chain = list.slice(1).join('|');
   img.onerror = function () {
     const rest = (this.dataset.chain || '').split('|').filter(Boolean);
@@ -171,8 +174,10 @@ function renderChars() {
     const d = el('div', 'char-btn' + (curChar === c.id ? ' on' : ''));
     /* 按日期排序时把日期显示出来，否则看不出排序依据 */
     const dTxt = (c.d && sortBy.startsWith('date')) ? ' · ' + c.d : '';
-    // 未下载的角色不请求头像（否则全新环境会刷出上百个 404），用首字色块
-    const have = dlHave(c.id);
+    // 头像看**头像素材**是否已下载（公共素材里 378 张），不能只看剧情装没装；
+    // 否则只装少数角色时其余全变首字色块，像是"头像没加载"。
+    const have = dlHave(c.id)
+      || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
     d.innerHTML =
       (have
         ? `<img alt="" loading="lazy">`
@@ -320,8 +325,17 @@ function moveGroup(d) {
 }
 
 function closeLB() {
+  const img = $('#lbImg');
+  /* 直接 src='' 会触发 onerror 级联：把剩余候选全试一遍（全 404）后
+     设 onerror=null + visibility:hidden。第二次打开时图能加载但永久隐藏，
+     表现就是"再点一次所有 CG 都不显示/404"。这里干净地断开。 */
+  if (img) {
+    img.onerror = null;
+    delete img.dataset.chain;
+    img.removeAttribute('src');
+    img.style.visibility = '';
+  }
   $('#lb').classList.remove('on');
-  $('#lbImg').src = '';
   lb.g = -1;
 }
 

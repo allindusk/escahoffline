@@ -17,7 +17,7 @@
  */
 window.PACKSTATE = (() => {
   const TTL = 15000;
-  const cache = { at: 0, data: null, online: false, promise: null };
+  const cache = { at: 0, data: null, pub: null, online: false, promise: null };
   const listeners = [];
 
   function emit() {
@@ -29,16 +29,20 @@ window.PACKSTATE = (() => {
     if (cache.promise && !force) return cache.promise;
     cache.promise = (async () => {
       try {
-        const [rs, rm] = await Promise.all([
+        const [rs, rm, rp] = await Promise.all([
           fetch('api/state', { cache: 'no-store' }),
           cache.manifest ? Promise.resolve(null)
             : fetch('api/manifest', { cache: 'no-store' }).catch(() => null),
+          // 公共素材进度（背景/BGM/音效/头像各下了多少）——侧栏头像要不要加载看它
+          cache.pub ? Promise.resolve(null)
+            : fetch('api/cdn/public', { cache: 'no-store' }).catch(() => null),
         ]);
         if (!rs.ok) throw new Error('HTTP ' + rs.status);
         const d = await rs.json();
         cache.online = true;
         cache.data = d;
         if (rm && rm.ok) cache.manifest = await rm.json();
+        if (rp && rp.ok) cache.pub = await rp.json();
       } catch (e) {
         cache.online = false;
         cache.data = cache.data || null;
@@ -86,6 +90,18 @@ window.PACKSTATE = (() => {
 
   function manifest() { return cache.manifest || null; }
 
+  /** 公共素材计数：{back,backTotal,music,musicTotal,sfx,sfxTotal,avatar,avatarTotal} */
+  function publicAssets() { return cache.pub || null; }
+
+  /** 头像是否已随公共素材下载（≥98% 视为齐全）。侧栏判断要不要请求 <img> 用它，
+   *  不能再用"剧情是否安装"——用户可能只装了 2 个角色却下了全部头像。 */
+  function avatarsReady() {
+    const p = cache.pub;
+    if (!p) return false;
+    const total = p.avatarTotal || 0;
+    return total ? (p.avatar || 0) >= total * 0.98 : (p.avatar || 0) > 0;
+  }
+
   /** 某剧情数据文件是否真的存在（正文在单元包里） */
   function hasStoryData(unit) {
     const st = status(unit);
@@ -97,7 +113,7 @@ window.PACKSTATE = (() => {
 
   return {
     refresh, status, installed, isInstalled, coverage, config,
-    missingDepots, hasStoryData, on,
+    missingDepots, hasStoryData, on, publicAssets, avatarsReady,
     get online() { return cache.online; },
     get data() { return cache.data; },
     human(n) {

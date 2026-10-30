@@ -243,6 +243,9 @@ function candsOf(kind, key) {
 function applyChain(img, list) {
   if (!img) return img;
   if (!list || !list.length) { img.style.visibility = 'hidden'; return img; }
+  // 同一个 <img> 会被复用（如灯箱）。上一轮候选链全失败会留下 visibility:hidden，
+  // 这里必须复位，否则第二轮即使图能加载也永远看不见。
+  img.style.visibility = '';
   img.dataset.chain = list.slice(1).join('|');
   img.onerror = function () {
     const rest = (this.dataset.chain || '').split('|').filter(Boolean);
@@ -474,16 +477,32 @@ const SEFFECT_ICON = {
   '点々': '…', '困り': '💧', '落ち込み': '⤵',
 };
 function showStandEffect(m) {
-  const el = currentStand(m);
+  // 无 Name 的是「清除特效」指令，别建一个空 div
+  if (!m.Name) return;
   const d = document.createElement('div');
   d.className = 'seffect';
   d.textContent = SEFFECT_ICON[m.Name] || m.Name;
-  if (el) {
-    const r = el.getBoundingClientRect(), sr = $('#stage').getBoundingClientRect();
-    const sx = 1280 / sr.width;
-    d.style.left = `${(r.left - sr.left + r.width * 0.66) * sx}px`;
-    d.style.top = `${(r.top - sr.top + r.height * 0.12) * sx}px`;
-  } else { d.style.left = '62%'; d.style.top = '18%'; }
+  const stage = $('#stage');
+  const sr = stage.getBoundingClientRect();
+  // 舞台内部坐标系固定 1280 宽（CSS 用 transform 缩放），高度按比例推
+  const iw = 1280;
+  const ih = sr.width ? iw * (sr.height / sr.width) : 720;
+  const sx = sr.width ? iw / sr.width : 1;
+  const el = currentStand(m);
+  const r = el ? el.getBoundingClientRect() : null;
+  let left, top;
+  if (r && r.width > 0 && r.height > 0) {
+    left = (r.left - sr.left + r.width * 0.66) * sx;
+    top = (r.top - sr.top + r.height * 0.12) * sx;
+  } else {
+    // 立绘还没解码完时 getBoundingClientRect 全是 0，照算会跑到舞台外，
+    // 被 #stage 的 overflow:hidden 裁掉（表现就是"符号没出现"）。退回默认站位。
+    left = iw * 0.62;
+    top = ih * 0.18;
+  }
+  const pad = 24;
+  d.style.left = `${Math.min(Math.max(left, pad), iw - pad)}px`;
+  d.style.top = `${Math.min(Math.max(top, pad), ih - pad)}px`;
   $('#fxLayer').appendChild(d);
   setTimeout(() => d.remove(), 2200);
 }
@@ -1558,10 +1577,12 @@ function renderSidebar(filter = '') {
       `ID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}` +
       (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '') +
       (st === 'soft-missing' ? '\n公共素材未下载：可播放但可能缺背景/音乐' : '');
-    // 只有**确认已下载**的角色才请求头像。
-    // 全新环境（含"没有清单"时的 unknown 状态）384 个角色 × 3 个候选 URL
-    // 会刷出上千个 404，控制台一片红。没装就用首字色块代替。
-    const haveImg = (st === 'ready' || st === 'soft-missing' || st === 'partial');
+    // 头像要不要请求，看**头像素材本身**是否已下载，而不是"该角色剧情是否安装"。
+    // 以前只用剧情状态判定 → 只装 2 个角色却下了全部 378 张头像时，
+    // 另外 382 个角色全变成首字色块，用户会以为头像没加载出来。
+    // 头像没下载时才退回色块（避免 384×N 个 404 刷屏）。
+    const haveImg = (st === 'ready' || st === 'soft-missing' || st === 'partial')
+      || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
     d.innerHTML =
       (haveImg
         ? `<img alt="" loading="lazy">`
