@@ -51,6 +51,11 @@ WHITELIST = (
 #: 属于用户数据，不是程序。更新包里若带一份旧译文，会把用户后来的翻译覆盖回去。
 BLACKLIST = ("web/media/", "web/data/", "web/assets/i18n/", "userdata/",
              ".git/", ".github/")
+#: ``web/data/`` 整体是"装了哪些剧情"的用户侧状态，更新时不能碰；但里面有几个
+#: **程序自带的索引**必须能随更新刷新 —— 否则老用户永远停在旧数据（现实例子：
+#: charmeta.js 曾经带中文名，改成纯日文后，不刷新索引的老包还会一直显示中文）。
+#: 只放行明确是程序产出、且不会被安装流程重写的文件；要放行新的必须在这里加。
+WEB_DATA_UPDATABLE = ("web/data/charmeta.js", "web/data/names.js")
 
 
 def app_meta() -> dict:
@@ -423,6 +428,8 @@ def _is_program(name: str) -> bool:
     low = name.lower()
     if low.startswith(("__macosx", ".")):
         return False
+    if any(low.endswith(p) for p in WEB_DATA_UPDATABLE):
+        return True                       # 例外：这几个索引要能随更新刷新
     for b in BLACKLIST:
         if low.startswith(b) or f"/{b}" in low:
             return False
@@ -432,6 +439,8 @@ def _is_program(name: str) -> bool:
 
 def allowed(relpath: str) -> bool:
     low = relpath.replace("\\", "/").lower()
+    if low in WEB_DATA_UPDATABLE:
+        return True                       # 同上：索引例外
     if any(low.startswith(b) for b in BLACKLIST):
         return False
     return any(low.startswith(w.lower()) for w in WHITELIST)
@@ -512,8 +521,10 @@ def apply_update(staging: str, job=None) -> dict:
     script = os.path.join(d, "apply_update.py")
     with open(script, "w", encoding="utf-8", newline="\n") as f:
         f.write(UPDATER_PY)
+    # 独立更新器只认这份清单，所以把索引例外也并进去（否则它会跳过 charmeta.js）
+    allow = tuple(WHITELIST) + tuple(WEB_DATA_UPDATABLE)
     args = [sys.executable, script, paths.ROOT, staging,
-            str(os.getpid()), "|".join(WHITELIST)]
+            str(os.getpid()), "|".join(allow)]
     flags = 0x00000008 if os.name == "nt" else 0
     subprocess.Popen(args, cwd=paths.ROOT,
                      creationflags=flags, start_new_session=(os.name != "nt"),

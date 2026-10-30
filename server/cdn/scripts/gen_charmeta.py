@@ -1,4 +1,9 @@
-"""生成 web/data/charmeta.js（稀有度/实装日期/中文名），并把 WIKI 头像转为 {id}.png。"""
+"""生成 web/data/charmeta.js（稀有度/实装日期），并把 WIKI 头像转为 {id}.png。
+
+**不写中文名**：charmeta.js 是随包分发的出厂索引，带上 zh 会让全新安装的
+CG 页 / 侧栏直接显示中文名（全量包必须纯日文）。中文名只留在
+``server/cdn/data/char_meta.json``，由 ``server/names.py`` 取来做导出文件名。
+"""
 import io
 import json
 import os
@@ -24,7 +29,7 @@ for cid, nm in NAMES.items():
     if not m:
         miss_meta += 1
         continue
-    out[cid] = {"r": m["r"], "d": m["d"], "zh": m.get("zh", "")}
+    out[cid] = {"r": m["r"], "d": m["d"]}       # 刻意不带 zh，见文件头说明
     if m.get("icon"):
         src = os.path.join(SITE, "public", m["icon"].replace("/", os.sep))
         dst = os.path.join(AVATAR_OUT, f"{cid}.png")
@@ -58,4 +63,6 @@ for k, v in Counter(v["r"] for v in out.values()).most_common():
 print("\n抽样:")
 for cid in ("1", "2", "57", "168", "248"):
     if cid in out:
-        print(f"  {cid:>3}  {NAMES[cid]:<22} {out[cid]['r']:<5} {out[cid]['d']:<12} {out[cid]['zh']}")
+        zh = (meta_by_name.get(re.sub(r"\s*\(\d+\)$", "", NAMES[cid])) or {}).get("zh", "")
+        print(f"  {cid:>3}  {NAMES[cid]:<22} {out[cid]['r']:<5} "
+              f"{out[cid]['d']:<12} （中文名 {zh or '无'}，仅用于导出文件名）")
