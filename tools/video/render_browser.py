@@ -21,6 +21,11 @@ LOG = OUT / 'render_web.log'
 DSF = 1.5
 #: 由调用方（server/videxport.py）通过环境变量传实际端口，避免和用户的服务撞端口
 PORT = int(os.environ.get('ESC_PORT') or 8000)
+#: 打开播放器页面 + 等 ST 就绪的超时（秒）。
+#: 原来是写死的 15s：GitHub 的 2 核 runner 冷启动加载 index.html（几 MB 的数据
+#: JS）实测超过 15s，直接 "Page.goto: Timeout 15000ms exceeded"、0 帧全废。
+#: 弱笔记本/盘慢的用户同样会踩到，所以给足时间并允许用环境变量调。
+LOAD_TIMEOUT = float(os.environ.get('ESC_RENDER_TIMEOUT') or 60)
 WAIT_MS = 80            # 截图前的额外缓冲；paint 由 rAF×2 保证，这里只留很小余量
 
 STAGE_FIX = """() => {
@@ -189,7 +194,27 @@ def main():
         ctx = b.new_context(viewport={'width': 1400, 'height': 900}, device_scale_factor=DSF)
         ctx.add_init_script(inj)
         pg = ctx.new_page()
-        pg.set_default_timeout(15000)
+        pg.set_default_timeout(int(LOAD_TIMEOUT * 1000))
+        # 打开页面失败时最需要的信息：到底哪些请求没回来、控制台报了什么。
+        # 只留最后几条，避免刷屏。
+        req_fail: list[str] = []
+        console_err: list[str] = []
+
+        def _on_req_fail(r):
+            try:
+                req_fail.append(f'{r.url} :: {str(r.failure or "")[:60]}')
+            except Exception:                                      # noqa: BLE001
+                pass
+
+        def _on_console(m):
+            try:
+                if m.type == 'error':
+                    console_err.append(str(m.text)[:140])
+            except Exception:                                      # noqa: BLE001
+                pass
+
+        pg.on('requestfailed', _on_req_fail)
+        pg.on('console', _on_console)
 
         done = 0
         # 图片等待超时的连续次数：一旦某页有永久缺失的图（资源不全），
@@ -198,8 +223,24 @@ def main():
         for pi in parts:
             if limit and done >= limit:
                 break
-            url = f'http://localhost:{PORT}/index.html?char={cid}&part={pi}&autoplay=1&lang=zh-Hans'
-            pg.goto(url, wait_until='domcontentloaded')
+            # 用 127.0.0.1 而不是 localhost：CI 上 localhost 可能先解析成 ::1，
+            # 而服务只监听 IPv4，多绕一圈还可能卡住。
+            url = f'http://127.0.0.1:{PORT}/index.html?char={cid}&part={pi}&autoplay=1&lang=zh-Hans'
+            req_fail.clear()
+            console_err.clear()
+            t_load = time.time()
+            try:
+                pg.goto(url, wait_until='domcontentloaded')
+            except Exception as e:                                 # noqa: BLE001
+                log(f'part {pi}: 打开页面失败（{time.time() - t_load:.1f}s，'
+                    f'超时上限 {LOAD_TIMEOUT:.0f}s）{type(e).__name__}: {str(e)[:120]}')
+                log(f'  URL {url}')
+                for f in req_fail[-8:]:
+                    log('  请求失败:', f)
+                for c in console_err[-5:]:
+                    log('  控制台错误:', c)
+                raise
+            log(f'part {pi}: 页面就绪 {time.time() - t_load:.1f}s')
             pg.wait_for_function("() => typeof ST === 'object' && ST.methods && ST.methods.length > 0")
             pg.wait_for_timeout(700)
             log(f'part {pi}: stage', pg.evaluate(STAGE_FIX))

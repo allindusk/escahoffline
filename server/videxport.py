@@ -161,9 +161,16 @@ def export(job, key: str, parts: list[int], limit: int = 0,
             # 最容易被误判成"浏览器没装"的一种：文件在渲染过程中被删了
             hints.insert(0, "· 剧本/素材在渲染期间被删除（是不是同时在卸载这部剧？"
                             "渲染结束前请别卸载）")
+        if "Timeout" in blob and "goto" in blob:
+            # 弱 CPU / 冷盘上加载播放器（几 MB 数据 JS）就是要这么久，不是坏了
+            hints.insert(0, "· 播放器页面在超时时间内没加载完（机器较慢，或该端口上"
+                            "跑的不是本程序）；可用环境变量 ESC_RENDER_TIMEOUT "
+                            "放宽，默认 60 秒")
         raise VideoExportError(
             "截帧失败（退出码 %s，%d 帧）。常见原因：\n%s\n最后几行日志：\n%s"
-            % (rc, frames, "\n".join(hints), "\n".join(tail[-5:])))
+            "\n完整日志：%s"
+            % (rc, frames, "\n".join(hints), "\n".join(tail[-5:]),
+               os.path.join(VIDEO_DIR, "out", "render_web.log")))
     job.log(f"   截帧完成：{frames} 帧，用时 {time.time() - t0:.0f}s")
 
     # ---------------------------------------------------------------- ② 编码
