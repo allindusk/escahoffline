@@ -53,31 +53,26 @@ GEN_VER = 2
 
 
 # ---------------------------------------------------------------- 资源读取
-def _find_pkg(num: int, cloth: str):
-    """找某个角色某套衣服的分层包。
+def _find_pkg(num, cloth: str):
+    """找某套衣服的分层包（``num`` 保留剧本 key 里的**原始字符串**）。
 
-    **包名里的编号是补零的**：角色 2 的包叫
-    ``bundle_standimage_stand_02_8aee967b``，而剧本里的 key 是
-    ``stand_2_...``。以前这里按 ``stand_2_`` 拼路径，永远找不到文件，
-    于是整部剧情的立绘全部报"缺分层包"、一张也合不出来
-    （界面上就是"只有背景和语音、没有立绘"）。
-    所以这里按目录里真实文件名匹配，编号转成 int 再比。
+    **补零宽度有意义**：``stand_36`` 与 ``stand_036`` 是两套不同素材
+    （前者 鷹守ハルカ 便服、后者 閃忍ハルカ 忍者装）。所以先按剧本 key 的
+    原始宽度精确查找；只有它不存在时才退回补零写法
+    （历史差异：剧本 key 写 ``stand_2``、包名写 ``stand_02``）。
     """
     target = cloth.lower()
-    # 直接按"各种补零位数"拼：不依赖目录扫描，子进程里也稳
-    for pad in (str(int(num)), f"{int(num):02d}", f"{int(num):03d}",
-                f"{int(num):04d}", f"{int(num):05d}"):
+    s = str(num)
+    p = os.path.join(IMG, f"bundle_standimage_stand_{s}_{target}")
+    if os.path.exists(p):
+        return p
+    n = int(s)
+    for pad in (f"{n:02d}", f"{n:03d}", f"{n:04d}", f"{n:05d}", str(n)):
+        if pad == s:
+            continue
         p = os.path.join(IMG, f"bundle_standimage_stand_{pad}_{target}")
         if os.path.exists(p):
             return p
-    # 兜底：万一还有别的编号写法，再扫一遍目录按数值比
-    try:
-        for n in os.listdir(IMG):
-            m = re.fullmatch(rf"bundle_standimage_stand_(\d+)_{re.escape(target)}", n)
-            if m and int(m.group(1)) == int(num):
-                return os.path.join(IMG, n)
-    except OSError:
-        pass
     return None
 
 
@@ -315,10 +310,25 @@ def process_group(task):
     # —— 落点质量自检（对齐时重叠区差异 ≈0，错位会飙到十几～几十）
     q, qn = group_quality(np.array(base), faces, [c for c in faces_wanted if c in faces], slot)
 
-    # —— 幂等：落点没变且文件都在 → 不重写。
+    # —— 幂等：落点没变、文件都在**且尺寸对得上** → 不重写。
     # old_slot 传 None 表示合成逻辑升级（GEN_VER 变了），此时强制重写一遍。
+    # 尺寸校验是必须的：以前把另一套素材合成到同名位置（stand_36 被 036 的包覆盖），
+    # 产出的图比底图大一圈；只看"文件存在 + 落点没变"会一直跳过、永远不修正。
     codes_ok = [c for c in faces_wanted if c in faces]
-    if old_slot == list(slot) and _all_images_exist(num, cloth, codes_ok):
+
+    def _size_ok():
+        try:
+            for c in codes_ok:
+                p = os.path.join(WEBS, f"stand_{num}_{cloth}_{c}.webp")
+                with Image.open(p) as im:
+                    if im.size != base.size:
+                        return False
+            return True
+        except Exception:                                    # noqa: BLE001
+            return False
+
+    if old_slot == list(slot) and _all_images_exist(num, cloth, codes_ok) \
+            and _size_ok():
         out = {c: list(slot) for c in codes_ok}
         return (num, cloth, list(slot), out, "", src, q, trim)
 

@@ -150,7 +150,11 @@ class Manifest:
 
     def __init__(self, index: dict):
         self.index = index
-        self.stand_parts: dict[int, list] = defaultdict(list)   # num -> [(cloth, bundle)]
+        # 注意：按**原始编号字符串**建索引，不能只按 int 归一化 ——
+        # CDN 上同时存在 standimage_stand_36_8aee967b（鷹守ハルカ 便服）
+        # 和 standimage_stand_036_8aee967b（閃忍ハルカ 忍者装），是两套不同素材。
+        self.stand_parts: dict[str, list] = defaultdict(list)   # 原样编号 -> [(cloth, bundle)]
+        self.stand_parts_by_int: dict[int, list] = defaultdict(list)
         self.stand_full: dict[int, str] = {}                    # num -> bundle
         self.bg: dict[str, str] = {}
         self.cg: dict[str, str] = {}
@@ -158,7 +162,8 @@ class Manifest:
         self.sound: dict[str, str] = {}
         for name in index:
             if m := PAT_STAND_PARTIAL.fullmatch(name):
-                self.stand_parts[int(m.group(1))].append((m.group(2), name))
+                self.stand_parts[m.group(1)].append((m.group(2), name))
+                self.stand_parts_by_int[int(m.group(1))].append((m.group(2), name))
             elif m := PAT_STAND_FULL.fullmatch(name):
                 self.stand_full[int(m.group(1))] = name
             elif name.startswith(BG_PREFIX):
@@ -203,13 +208,30 @@ class Manifest:
         ) if x]
 
     def stand_bundle(self, key: str):
-        """``stand_<num>_<cloth>_<expr>`` -> 分层部件包名。"""
+        """``stand_<num>_<cloth>_<expr>`` -> 分层部件包名。
+
+        编号的**补零宽度是有意义的**：``stand_36_...``（鷹守ハルカ 便服）与
+        ``stand_036_...``（閃忍ハルカ 忍者装）是两套不同素材。以前这里用
+        ``int(num)`` 归一化，两者被并成一组、取到哪个全看清单顺序 —— 结果剧情
+        里的 ``stand_36_...`` 被解析成 036 的包并下载，立绘整套变成忍者装。
+        所以先按**原始字符串**精确匹配；只有精确形态不存在时才按数值退回
+        （历史上剧本 key 写 ``stand_2``、包名写 ``stand_02``，需要这种容错）。
+        """
         m = PAT_STAND_KEY.match(key)
         if not m:
             return None
-        num, cloth = int(m.group(1)), m.group(2).lower()
-        cands = self.stand_parts.get(num, [])
-        return next((n for h, n in cands if h == cloth), cands[0][1] if cands else None)
+        num_s, cloth = m.group(1), m.group(2).lower()
+        exact = self.stand_parts.get(num_s, [])
+        loose = self.stand_parts_by_int.get(int(num_s), [])
+        for pool in (exact, loose):
+            hit = next((n for h, n in pool if h == cloth), None)
+            if hit:
+                return hit
+        # 同编号下没找到这套衣服：退回该编号的第一套（比返回 None 好）
+        for pool in (exact, loose):
+            if pool:
+                return pool[0][1]
+        return None
 
     def back_bundle(self, key: str):
         return self.bg.get(key.lower())
