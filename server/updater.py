@@ -76,8 +76,12 @@ def _ver_tuple(v: str) -> tuple:
     return tuple(out[:4])
 
 
-def check() -> dict:
+def check(budget: float = 25.0) -> dict:
     """→ {current, latest, hasUpdate, url, notes, via, error}
+
+    ``budget`` 是**整次检查的总预算（秒）**。为什么要有它：下面按线路顺序逐个试，
+    每条单独 8–10 秒超时，线路多的时候国内实测能串到 2 分钟 —— 用户点「检查更新」
+    看到的就是转圈两分钟，还以为是卡死。
 
     两条获得 release 信息的路：
 
@@ -100,8 +104,9 @@ def check() -> dict:
         out["error"] = "未配置仓库地址（web/data/app.json 的 repo）"
         return out
 
+    deadline = time.monotonic() + max(6.0, float(budget))
     routes = mirrors.ranked("github")
-    rel, via, err = _fetch_latest(repo, routes)
+    rel, via, err = _fetch_latest(repo, routes, deadline)
     if rel is None:
         out["error"] = err or "查询失败：GitHub API 与 releases.atom 都不可达"
         return out
@@ -111,7 +116,7 @@ def check() -> dict:
     if not assets and tag:
         # atom 兜底里没有资产列表 → 按命名规则拼，再 HEAD 逐个验证
         assets = _guess_assets(repo, tag, routes,
-                               meta.get("name") or "ESCAH-Offline")
+                               meta.get("name") or "ESCAH-Offline", deadline)
     url, _portable = _pick_assets(assets)
     # 后台已经把新版本下好了：即使远端 tag 与当前相同（比如 Release 刚被重发），
     # 也认为"可更新" —— 否则用户点不动「重启并应用」，暂存区就成了死数据
@@ -130,38 +135,60 @@ def check() -> dict:
     return out
 
 
-def _fetch_latest(repo: str, routes: list[dict]) -> tuple[dict | None, str, str]:
-    """→ (release dict, 走通了哪条线路, 错误信息)。两条路都失败才算失败。"""
+def _fetch_latest(repo: str, routes: list[dict],
+                  deadline: float = 0.0) -> tuple[dict | None, str, str]:
+    """→ (release dict, 走通了哪条线路, 错误信息)。两条路都失败才算失败。
+
+    ``deadline`` 是 ``time.monotonic()`` 的绝对时刻，用尽就立即返回，
+    不再一条条干等。
+    """
     api = f"https://api.github.com/repos/{repo}/releases/latest"
     err = ""
     tried = ""
     for route in routes:
+        left = _left(deadline)
+        if left <= 1.0:
+            err = err or "线路全部超时（总预算用尽）"
+            break
         real = mirrors.apply_github(route, api)
         if tried.count(real):                      # 不走重复地址
             continue
         tried += real + "|"
         try:
-            d = net.fetch_json(real, timeout=8)
+            d = net.fetch_json(real, timeout=min(8.0, left))
             if isinstance(d, dict) and d.get("tag_name"):
                 return d, route.get("name", "?"), ""
         except Exception as e:                                   # noqa: BLE001
             err = f"{type(e).__name__}: {str(e)[:60]}"
     # API 全线不通 → releases.atom 兜底（反代基本都支持它）
     try:
-        d, via = _release_from_atom(repo, routes)
+        d, via = _release_from_atom(repo, routes, deadline)
         return d, via, ""
     except Exception as e:                                       # noqa: BLE001
         err += f"；atom：{type(e).__name__}: {str(e)[:60]}"
     return None, "", err
 
 
-def _release_from_atom(repo: str, routes: list[dict]) -> tuple[dict, str]:
+def _left(deadline: float) -> float:
+    """距 deadline 还剩多少秒；``deadline<=0`` 表示不限时。"""
+    if not deadline:
+        return 3600.0
+    return deadline - time.monotonic()
+
+
+def _release_from_atom(repo: str, routes: list[dict],
+                       deadline: float = 0.0) -> tuple[dict, str]:
     """从 ``releases.atom`` 解析最新 release（tag / 说明 / 时间）。"""
     feed = f"https://github.com/{repo}/releases.atom"
     last = ""
     for route in routes:
+        left = _left(deadline)
+        if left <= 1.0:
+            last = last or "releases.atom 线路超时（总预算用尽）"
+            break
         try:
-            text = net.fetch_text(mirrors.apply_github(route, feed), timeout=10)
+            text = net.fetch_text(mirrors.apply_github(route, feed),
+                                  timeout=min(10.0, left))
         except Exception as e:                                   # noqa: BLE001
             last = str(e)[:60]
             continue
@@ -188,7 +215,7 @@ def _release_from_atom(repo: str, routes: list[dict]) -> tuple[dict, str]:
 
 
 def _guess_assets(repo: str, tag: str, routes: list[dict],
-                  app_name: str) -> list[dict]:
+                  app_name: str, deadline: float = 0.0) -> list[dict]:
     """按命名规则拼候选 URL，HEAD 验真后返回。
 
     只在 GitHub API 完全不可用时走这条路 —— 用户的包名是固定的
@@ -205,6 +232,8 @@ def _guess_assets(repo: str, tag: str, routes: list[dict],
     for route in routes[:1] or [{"tpl": "{url}"}]:
         for t in tags:
             for k in kinds:
+                if _left(deadline) <= 1.0:      # 预算用尽：别把 6 个 HEAD 也拖到底
+                    return []
                 name = f"{app_name}-{t}-{k}"
                 cand = base + name
                 try:

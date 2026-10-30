@@ -100,6 +100,11 @@ def run_install(job, units: list[str], workers: int = 32,
         job.finish(f"完成：{len(ok)} 部剧情")
     elif ok:
         job.finish(f"部分完成：{len(ok)} 成功 / {len(failed)} 失败")
+    else:
+        # 一部都没装上：必须标失败。以前这里什么都不做，runner 兜底调 finish()，
+        # 于是"全部失败"在界面上显示为"完成"。
+        job.fail("全部失败：" + (failed[0]["error"] if failed else ""))
+    job.detail["failed"] = failed
     return {"installed": ok, "failed": failed}
 
 
@@ -197,9 +202,21 @@ def _run_uninstall(job, units: list[str], drop_cache: bool = False) -> dict:
         except Exception as e:                                 # noqa: BLE001
             job.log(f"  缓存清理失败（不影响卸载）：{e}")
     freed = sum(x.get("bytes") or 0 for x in ok) / 1048576
-    job.finish(f"已卸载 {len(ok)} 部，释放 {freed:.1f} MB"
-               + ("（缓存已清理）" if drop_cache else "（bundle 缓存保留，重装免下载）"))
+    if failed and not ok and not job.cancelled:
+        job.fail("全部卸载失败：" + failed[0]["error"])
+    else:
+        job.finish(f"已卸载 {len(ok)} 部，释放 {freed:.1f} MB"
+                   + ("（缓存已清理）" if drop_cache else "（bundle 缓存保留，重装免下载）"))
+    job.detail["failed"] = failed
     return {"removed": ok, "failed": failed}
+
+
+def _installed_char_units() -> list[str]:
+    """当前装着的角色单元（给"全站级"任务登记占用用）。"""
+    try:
+        return [k for k in (cdn_install.local_units() or {}) if k.startswith("char_")]
+    except Exception:                                          # noqa: BLE001
+        return []
 
 
 def run_video_export(job, units: list[str], parts: list[int],
@@ -221,10 +238,15 @@ def run_video_export(job, units: list[str], parts: list[int],
             failed.append({"unit": u, "error": str(e)[:300]})
             job.log(f"[{u}] 失败：{e}")
         job.items_done = i
+    job.detail["failed"] = failed
     if not failed:
         job.finish(f"完成：{len(ok)} 条视频")
     elif ok:
         job.finish(f"部分完成：{len(ok)} 成功 / {len(failed)} 失败")
+    else:
+        # 一条都没导出来：必须标 failed。以前这里不进任何分支，runner 兜底
+        # finish() → 界面上是"完成"，用户找一个不存在的 mp4（e2e 就是这么漏掉的）。
+        job.fail("全部失败：" + (failed[0]["error"] if failed else ""))
     return {"done": ok, "failed": failed}
 
 
@@ -501,7 +523,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             job = jobs.submit(
                 "install", f"安装 {len(sel)} 部剧情",
                 lambda j: run_install(j, sel, workers, voice, image,
-                                      up, scale, engine))
+                                      up, scale, engine),
+                holds=sel)
             return self._json({"job": job.snapshot()})
         if path == "/api/upscale":
             b = self._body()
@@ -513,18 +536,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             def fn(job):
                 media.upscale(job, kinds=kinds, scale=scale, engine=engine,
                               limit=limit)
-            job = jobs.submit("upscale", "图片超分", fn)
+            job = jobs.submit("upscale", "图片超分", fn,
+                              holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
         if path == "/api/convert":
             b = self._body()
             q = int(b.get("quality") or paths.load_config()["webpQuality"])
             kinds = tuple(b.get("kinds") or ("stand", "back", "cg", "standfull"))
             job = jobs.submit("convert", "批量转 WebP",
-                              lambda j: media.convert_existing(j, q, kinds))
+                              lambda j: media.convert_existing(j, q, kinds),
+                              holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
         if path == "/api/delete-originals":
             job = jobs.submit("cleanup", "删除已超分的原图",
-                              lambda j: media.delete_originals(j))
+                              lambda j: media.delete_originals(j),
+                              holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
         if path == "/api/install/base":
             b = self._body()
@@ -543,9 +569,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             units = [u for u in units if u]
             if not units:
                 return self._err("没有选择要卸载的剧情")
+            # 卸载会删剧本与素材。若有任务正在读它们（导出视频/安装/导出 CG），
+            # 删下去就是"文件凭空消失"式的崩溃 —— 直接拦住，并说清是谁在占。
+            busy = jobs.holders(units)
+            if busy:
+                who = "、".join(f"{x['unit']}（{x['title']}）" for x in busy[:3])
+                return self._err(f"这些剧情正被任务占用：{who}。"
+                                 "等它结束后再卸载，或先点「取消」停掉它")
             drop = bool(b.get("dropCache", False))
             job = jobs.submit("uninstall", f"卸载 {len(units)} 部剧情",
-                              lambda j: _run_uninstall(j, units, drop))
+                              lambda j: _run_uninstall(j, units, drop),
+                              holds=units)
             return self._json({"job": job.snapshot()})
         if path == "/api/cdn/prune":
             b = self._body()
@@ -568,20 +602,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if miss:
                 return self._err("缺少依赖：" + "、".join(miss)
                                  + "。到「剧情安装」页点「自动安装依赖」")
-            limit = int(b.get("limit") or 0)
+            limit = int(b.get("limit") or b.get("maxSeconds") or 0)
             port = self.server.server_address[1]
             job = jobs.submit(
                 "video", f"导出 {len(units)} 条视频",
-                lambda j: run_video_export(j, units, parts, limit, port))
+                lambda j: run_video_export(j, units, parts, limit, port),
+                holds=units)
             return self._json({"job": job.snapshot()})
         if path == "/api/export/cg":
             b = self._body()
             chars = [int(x) for x in (b.get("chars") or [])]
             groups = [[int(x[0]), int(x[1])] for x in (b.get("groups") or [])]
             whole = bool(b.get("whole", False))
+            # 导出 CG 要读当前装着的图；卸载同时把图删了就只能导出半套，所以也占住单元
+            hold = ([f"char_{c}" for c in chars] if chars
+                    else _installed_char_units())
             job = jobs.submit(
                 "export", "导出角色 CG", lambda j: exports.export_cg(
-                    j, chars=chars or None, groups=groups or None, whole=whole))
+                    j, chars=chars or None, groups=groups or None, whole=whole),
+                holds=hold)
             return self._json({"job": job.snapshot()})
         if path == "/api/export/video":
             q = self._q()

@@ -799,9 +799,13 @@ def _self_check(job, key: str) -> dict:
             if r.get("voice_miss"):
                 miss.append(f"语音缺 {r['voice_miss']}/{r['voices_ref']} 个")
             for k, label in (("stand", "立绘"), ("back", "背景"), ("cg", "CG")):
-                n = len(r.get(f"{k}_miss") or [])
-                if n:
-                    miss.append(f"{label}引用缺 {n} 个")
+                keys = [str(x) for x in (r.get(f"{k}_miss") or [])]
+                if keys:
+                    # 带上具体 key：只说"缺 2 个"没法判断是源资源缺还是合成漏了，
+                    # 排查还得让用户自己翻剧本。
+                    miss.append(f"{label}引用缺 {len(keys)} 个"
+                                f"（{', '.join(keys[:3])}"
+                                + ("…" if len(keys) > 3 else "") + "）")
             out = {"unit": key, "missing": miss, "detail": r}
         else:
             data = os.path.join(config.DATA, f"{key}.js")
@@ -942,6 +946,8 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
             if job is not None:
                 job.log(f"⑤ 合成表情差分立绘（{len(nums)} 套）")
             stages.compose_stands(nums)
+        # 剧本引用了、但包里没有对应表情的立绘（表情码其实是文本）→ 素体顶替
+        stages.fill_missing_stands(assets.get("stand") or (), job)
 
     if upscale and image:
         _upscale_assets(job, assets, scale, engine)
@@ -1016,6 +1022,7 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
             if job is not None:
                 job.log(f"④ 合成表情差分立绘（{len(nums)} 套）")
             stages.compose_stands(nums)
+            stages.fill_missing_stands(assets.get("stand") or (), job)
         else:
             # 非角色剧情也要章节横幅
             stages.export_story_topics()

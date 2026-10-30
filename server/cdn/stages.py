@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -634,6 +635,46 @@ def compose_stands(nums) -> None:
             for b in mine[:5]:
                 print(f"    {b['key']} slot={b['slot']} diff={b['diff']}")
     print(f"  合成用时 {time.time() - t0:.0f}s")
+
+
+def fill_missing_stands(keys, job=None) -> list[str]:
+    """给"剧本引用了、但合成不出对应表情"的立绘 key 兜一张同套素体立绘。
+
+    为什么需要：少数 key 的第三个字段不是脸部件编号，而是把文本（如 ボイス）
+    当成表情码在用，分层包里根本没有这个表情 —— 合成阶段会跳过它，播放到那句
+    就是**整张立绘消失**（e2e 里 char_2 装完自检报的"立绘引用缺 2 个"就是这种）。
+    这里用同一套衣服的素体表情（8AEE967B）复制一份顶上：表情未必对，但比空着强，
+    而且补了哪些 key 会写进日志，日后能核对。
+
+    只在 ``regen_maps`` 之前调用才有意义（imgmap 是按目录里的文件扫出来的）。
+    """
+    stand_dir = os.path.join(IMG, "stand")
+    out: list[str] = []
+    if not os.path.isdir(stand_dir):
+        return out
+    have = set(os.listdir(stand_dir))
+    for key in sorted(keys or ()):
+        fn = f"{key}.webp"
+        if fn in have:
+            continue
+        m = re.match(r"stand_(\d+)_([0-9A-Fa-f]+)_([0-9A-Za-z]+)$", key)
+        if not m:
+            continue
+        num, cloth = m.group(1), m.group(2)
+        prefix = f"stand_{int(num)}_{cloth}_"
+        cands = [f"{prefix}8AEE967B.webp"] + [
+            n for n in sorted(have) if n.startswith(prefix) and n.endswith(".webp")]
+        src = next((c for c in cands if c in have), None)
+        if not src:
+            continue
+        shutil.copy2(os.path.join(stand_dir, src),
+                     os.path.join(stand_dir, fn))
+        have.add(fn)
+        out.append(key)
+    if out and job is not None:
+        job.log(f"⑤b 立绘兜底：{len(out)} 个 key 没有对应表情，用素体顶替"
+                f"（{', '.join(out[:3])}{'…' if len(out) > 3 else ''}）")
+    return out
 
 
 # ================================================================ 映射表

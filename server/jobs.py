@@ -28,6 +28,15 @@ _LOCK = threading.RLock()
 _JOBS: "OrderedDict[str, Job]" = OrderedDict()
 _SEQ = itertools.count(1)
 
+#: 单元占用表：``unit -> job id``。
+#:
+#: 为什么需要：卸载会把 ``web/data/char_N.js`` 和该角色的素材删掉，而导出视频
+#: 正在读同一批文件。2026-10-30 的 e2e 就是这样炸的 —— 视频任务刚起，卸载在同一
+#: 秒删了 261 个文件，截帧进程直接 FileNotFoundError（0 帧），而任务状态还是 DONE。
+#: 现在提交任务时声明"我要用这些单元"，卸载前查这张表，占着就拒绝。
+_UNITS_LOCK = threading.Lock()
+_UNIT_HOLDERS: dict[str, str] = {}
+
 
 class Job:
     """一个可观测的耗时任务。"""
@@ -111,18 +120,25 @@ class Job:
             print(f"[log] 写审计日志失败：{e}", file=sys.stderr)
 
     def fail(self, err) -> None:
+        # 先摘掉单元占用，再置终态：调用方（e2e / 前端）是靠轮询 state 判断结束的，
+        # 若等线程 finally 里才释放，会出现"任务已 done 但卸载仍被判为占用"的假冲突。
+        _release(self)
         self.state = "failed"
         self.error = str(err)[:800]
         self.ended = time.time()
-        # 失败必须留完整堆栈：只留一句 str(err) 往往看不出是哪一行炸的
+        # 失败必须留完整堆栈：只留一句 str(err) 往往看不出是哪一行炸的。
+        # 但"业务失败"（如全部导出失败）是在没有异常的情况下主动调的，
+        # 此时 format_exc() 只有一句 "NoneType: None"，存进去会误导排查。
         try:
             import traceback
-            self.detail["traceback"] = traceback.format_exc()[-3000:]
+            if sys.exc_info()[0] is not None:
+                self.detail["traceback"] = traceback.format_exc()[-3000:]
         except Exception:                                      # noqa: BLE001
             pass
         self._audit("FAIL", self.error)
 
     def finish(self, message: str = "") -> None:
+        _release(self)                     # 同上：先摘占用，再置终态
         if self.state not in ("failed", "cancelled"):
             self.state = "done"
         if self.total and self.done < self.total:
@@ -228,14 +244,51 @@ class Job:
         }
 
 
+# ---------------------------------------------------------------- 单元占用
+def _hold(job: Job, units) -> None:
+    with _UNITS_LOCK:
+        for u in units or ():
+            _UNIT_HOLDERS[str(u)] = job.id
+
+
+def _release(job: Job) -> None:
+    with _UNITS_LOCK:
+        for u in [u for u, jid in _UNIT_HOLDERS.items() if jid == job.id]:
+            _UNIT_HOLDERS.pop(u, None)
+
+
+def holders(units) -> list[dict]:
+    """这些单元正被哪些**在跑的**任务占着 → [{unit, id, title, kind}]。
+
+    卸载前必须查它：占着就拒绝，否则会把别的任务正在读的文件删掉。
+    """
+    with _UNITS_LOCK:
+        pairs = [(str(u), _UNIT_HOLDERS.get(str(u))) for u in units or ()]
+    out, seen = [], set()
+    for u, jid in pairs:
+        if not jid or (u, jid) in seen:
+            continue
+        seen.add((u, jid))
+        j = get(jid)
+        if j and j.state in ("queued", "running"):
+            out.append({"unit": u, "id": j.id, "title": j.title, "kind": j.kind})
+    return out
+
+
 # ---------------------------------------------------------------- 管理器
-def submit(kind: str, title: str, fn, unit: str = "", **meta) -> Job:
-    """提交后台任务。``fn(job)`` 在工作线程里跑。"""
+def submit(kind: str, title: str, fn, unit: str = "", holds=(), **meta) -> Job:
+    """提交后台任务。``fn(job)`` 在工作线程里跑。
+
+    ``holds`` 是"本任务要用到哪些剧情单元"（如 ``["char_2"]``）。**在返回前同步登记**，
+    不是等线程跑起来再登记 —— 否则 submit 与线程启动之间有一小段窗口，刚好被
+    "提交导出 → 立刻卸载" 这种连点命中。
+    """
     job = Job(kind, title, unit=unit, **meta)
     with _LOCK:
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_KEEP:
             _JOBS.popitem(last=False)
+    _hold(job, holds)
 
     def runner():
         job.start()
@@ -243,7 +296,10 @@ def submit(kind: str, title: str, fn, unit: str = "", **meta) -> Job:
             fn(job)
             if job.cancelled:
                 job.state = "cancelled"
-            else:
+            elif not job.ended:
+                # fn 里自己调过 finish()/fail() 就别再收一次尾。
+                # 以前无条件调，结果是每个任务都在日志里出现两遍 DONE，
+                # 失败的任务还会被补写一条 "DONE" 掩盖掉 FAIL。
                 job.finish()
         except Exception as e:                                   # noqa: BLE001
             job.fail(e)
@@ -251,6 +307,7 @@ def submit(kind: str, title: str, fn, unit: str = "", **meta) -> Job:
                 f.write(f"\n[{time.strftime('%F %T')}] {job.id} {job.title}\n")
                 f.write(traceback.format_exc())
         finally:
+            _release(job)
             job.ended = job.ended or time.time()
 
     threading.Thread(target=runner, name=job.id, daemon=True).start()
@@ -273,6 +330,7 @@ def cancel(job_id: str) -> bool:
     if not job or job.state in ("done", "failed", "cancelled"):
         return False
     job.cancel_event.set()
+    _release(job)                      # 取消即视为不再使用这些单元
     job.state = "cancelled"
     job.message = "已取消"
     # 必须记结束时间：前端按 (结束时间 - 现在) 判断"留 6 秒就收起来"。

@@ -154,12 +154,16 @@ def export(job, key: str, parts: list[int], limit: int = 0,
     proc.reap(child)
     frames = len([n for n in os.listdir(fdir) if n.endswith(".png")])
     if rc != 0 or not frames:
+        blob = "\n".join(tail)
+        hints = ["· 没装 playwright 或找不到 Edge 浏览器",
+                 f"· 端口 {port} 上不是本程序（截图会拿到空白页）"]
+        if "FileNotFoundError" in blob or "No such file" in blob:
+            # 最容易被误判成"浏览器没装"的一种：文件在渲染过程中被删了
+            hints.insert(0, "· 剧本/素材在渲染期间被删除（是不是同时在卸载这部剧？"
+                            "渲染结束前请别卸载）")
         raise VideoExportError(
-            "截帧失败（退出码 %s，%d 帧）。常见原因：\n"
-            "· 没装 playwright 或找不到 Edge 浏览器\n"
-            "· 端口 %s 上不是本程序（截图会拿到空白页）\n"
-            "最后几行日志：\n%s"
-            % (rc, frames, port, "\n".join(tail[-5:])))
+            "截帧失败（退出码 %s，%d 帧）。常见原因：\n%s\n最后几行日志：\n%s"
+            % (rc, frames, "\n".join(hints), "\n".join(tail[-5:])))
     job.log(f"   截帧完成：{frames} 帧，用时 {time.time() - t0:.0f}s")
 
     # ---------------------------------------------------------------- ② 编码
