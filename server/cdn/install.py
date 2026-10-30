@@ -946,7 +946,15 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
             job.log(f"   图片包 {len(need)} 个 / {_sz / 1048576:.1f} MB"
                     f"（已存在的会跳过，不会重下）")
         stages.fetch(_entries(mf, need), workers, f"char{cid} 图片包", skip=True, pause_event=_pe(job), job=job)
-        stages.export_images(mf, assets)
+        ex = stages.export_images(mf, assets)
+        if job is not None:
+            # export_images 的 print 只在控制台；这里把"缺哪些 key / 失败多少张"
+            # 落进日志，否则事后只能看到"合成 N 套成功"，查不出缺图原因。
+            if ex.get("miss"):
+                head = ", ".join(f"{k}:{s}" for k, s in ex["miss"][:5])
+                job.log(f"   ⚠ 无对应包的图片 key {len(ex['miss'])} 个（{head}）")
+            if ex.get("fail"):
+                job.log(f"   ⚠ 图片导出失败 {ex['fail']} 张（包缺失或损坏）")
         stages.export_standfull(mf, nums)
         if nums:
             if job is not None:
@@ -1029,7 +1037,13 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
         if job is not None:
             job.log(f"   图片包 {len(need)} 个 / {_sz2 / 1048576:.1f} MB")
         stages.fetch(_entries(mf, need), workers, f"{key} 图片包", skip=True, pause_event=_pe(job), job=job)
-        stages.export_images(mf, assets)
+        ex = stages.export_images(mf, assets)
+        if job is not None:
+            if ex.get("miss"):
+                head = ", ".join(f"{k}:{s}" for k, s in ex["miss"][:5])
+                job.log(f"   ⚠ 无对应包的图片 key {len(ex['miss'])} 个（{head}）")
+            if ex.get("fail"):
+                job.log(f"   ⚠ 图片导出失败 {ex['fail']} 张（包缺失或损坏）")
         stages.export_standfull(mf, nums)
         if nums:
             if job is not None:

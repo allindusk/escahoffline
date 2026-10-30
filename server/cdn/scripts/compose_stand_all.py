@@ -404,6 +404,27 @@ if __name__ == "__main__":
              for (num, cloth), faces in groups.items()]
     total_faces = sum(len(t[2]) for t in tasks)
     print(f"分组 {len(tasks)} 个，需合成表情 {total_faces} 张", flush=True)
+
+    # 每组「用哪个分层包」必须留痕：立绘串成另一套（stand_36 被 036 的包覆盖）
+    # 这类问题，光看「合成 N 套成功」永远发现不了。
+    fell = []
+    for (num, cloth) in sorted(groups):
+        p = _find_pkg(num, cloth)
+        if not p:
+            print(f"  ✗ {num}/{cloth} → 找不到分层包"
+                  f"（{len(groups[(num, cloth)])} 个表情没有图）", flush=True)
+            continue
+        b = os.path.basename(p)
+        tok = b.split("_")[3] if b.count("_") >= 3 else ""
+        if tok and tok != str(num):
+            fell.append((num, cloth, tok))
+            print(f"  · {num}/{cloth} → {b}  "
+                  f"⚠补零宽度不同（要求 {num}，实际 {tok}）", flush=True)
+        else:
+            print(f"  · {num}/{cloth} → {b}", flush=True)
+    if fell:
+        print(f"  ⚠ 共 {len(fell)} 组用了不同补零宽度的包："
+              + "、".join(f"{n}/{c}->{t}" for n, c, t in fell[:8]), flush=True)
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as ex:
         for num, cloth, slot, out, msg, src, q, trim in ex.map(process_group, tasks, chunksize=4):

@@ -94,11 +94,29 @@ def run_script(name: str, *args, cwd: str = WS, quiet: bool = False):
         p = proc.run(cmd, cwd=cwd, capture_output=True, text=True,
                      encoding="utf-8", errors="replace", env=env)
         print(f"  [{name}] exit={p.returncode}")
-        tail = (p.stdout or "").strip().splitlines()[-8:]
-        for ln in tail:
+        lines = (p.stdout or "").strip().splitlines()
+        for ln in lines[-8:]:
             print("      " + ln)
+        # **必须落盘**：这些脚本打出来的正是"用了哪个包 / 缺哪一层 / 落点来源"
+        # 之类的关键决策，只 print 到控制台等于没记录（GUI 用户看不到控制台，
+        # 出事时只有 app.log 可查）。
+        try:
+            from .. import log as applog
+            tag = "stand" if name.startswith("compose") else name.replace(".py", "")[:10]
+            applog.log(f"  [{name}] exit={p.returncode}", tag=tag)
+            for ln in lines[:200]:
+                applog.log("    " + ln, tag=tag)
+            if len(lines) > 200:
+                applog.log(f"    …（其余 {len(lines) - 200} 行略）", tag=tag)
+        except Exception:                                      # noqa: BLE001
+            pass
         if p.returncode != 0 and p.stderr:
             print("      stderr: " + p.stderr.strip()[-400:])
+            try:
+                from .. import log as applog
+                applog.log("    stderr: " + p.stderr.strip()[-1500:], tag="script")
+            except Exception:                                  # noqa: BLE001
+                pass
         return p.returncode
     return proc.run(cmd, cwd=cwd, env=env).returncode
 
@@ -646,6 +664,57 @@ def export_avatar(cid, size: int = 96) -> bool:
 # ================================================================ 立绘合成
 
 
+def _say(msg: str, tag: str = "stand") -> None:
+    """既打到控制台也写进 app.log。
+
+    装剧情是后台任务（GUI 用户看不到控制台），出问题时只有 app.log 可查，
+    所以「关键决策 / 异常」必须落盘，不能只 print。
+    """
+    print(msg)
+    try:
+        from .. import log as applog
+        applog.log(msg, tag=tag)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def stand_size_report(nums) -> list[str]:
+    """检查同一 (编号, 服装) 下所有立绘的尺寸是否一致。
+
+    不一致通常意味着**串了另一套素材**：CDN 上 ``standimage_stand_36_*`` 与
+    ``standimage_stand_036_*`` 是两个不同角色/形态，一旦解析错，合成出来的图
+    尺寸就和同组其它表情对不上（历史上 stand_36 整组被 036 的包覆盖过，
+    表现就是「同一个地方立绘不对」）。
+    """
+    from PIL import Image
+    d = os.path.join(IMG, "stand")
+    want = {str(n) for n in nums}
+    bygrp: dict = {}
+    try:
+        files = os.listdir(d)
+    except OSError:
+        return []
+    for fn in files:
+        m = re.fullmatch(r"stand_(\d+)_([0-9A-F]+)_([0-9A-F]+)\.webp", fn)
+        if not m or m.group(1) not in want:
+            continue
+        bygrp.setdefault((m.group(1), m.group(2)), []).append(fn)
+    out = []
+    for (num, cloth), fns in sorted(bygrp.items()):
+        sizes: dict = {}
+        for fn in fns:
+            try:
+                with Image.open(os.path.join(d, fn)) as im:
+                    sizes.setdefault(im.size, []).append(fn)
+            except Exception:                                  # noqa: BLE001
+                continue
+        if len(sizes) > 1:
+            detail = "，".join(f"{w}x{h}×{len(v)}"
+                              for (w, h), v in sorted(sizes.items()))
+            out.append(f"{num}/{cloth}: {detail}")
+    return out
+
+
 def compose_stands(nums) -> None:
     """委派 ``compose_stand_all.py`` 合成表情差分，并**合并**落点文件。
 
@@ -666,7 +735,7 @@ def compose_stands(nums) -> None:
     t0 = time.time()
     rc = run_script("compose_stand_all.py", *args, quiet=True)
     if rc != 0:
-        print(f"  compose_stand_all 退出码 {rc}")
+        _say(f"  compose_stand_all 退出码 {rc}")
 
     # merge：旧值为底，本次结果覆盖
     if backup and os.path.exists(slot_path):
@@ -676,8 +745,8 @@ def compose_stands(nums) -> None:
         merged.update(new)
         with open(slot_path, "w", encoding="utf-8") as f:
             json.dump(merged, f, ensure_ascii=False, separators=(",", ":"))
-        print(f"  stand_slot.json merge：旧 {len(old)} + 新 {len(new)}"
-              f" -> {len(merged)}")
+        _say(f"  stand_slot.json merge：旧 {len(old)} + 新 {len(new)}"
+             f" -> {len(merged)}")
     # 落点质量自检结果（compose_stand_all.py 写在 _archive/stand_slot_qc.json）：
     # diff 大 = 表情层与底图在该落点对不上（历史"总有几张错位"就是靠这个兜住的）
     qc = os.path.join(ARCHIVE_DIR, "stand_slot_qc.json")
@@ -692,11 +761,20 @@ def compose_stands(nums) -> None:
             ids.add(f"{int(n):04d}")
         mine = [b for b in bad if b.get("key", "").split("_")[0] in ids]
         if mine:
-            print(f"  ⚠ 立绘落点可疑 {len(mine)} 组（表情/底图对不上，见 "
-                  f"_archive/stand_slot_qc.json）")
+            _say(f"  ⚠ 立绘落点可疑 {len(mine)} 组（表情/底图对不上，见 "
+                 f"_archive/stand_slot_qc.json）")
             for b in mine[:5]:
-                print(f"    {b['key']} slot={b['slot']} diff={b['diff']}")
-    print(f"  合成用时 {time.time() - t0:.0f}s")
+                _say(f"    {b['key']} slot={b['slot']} diff={b['diff']}")
+
+    # 尺寸一致性：串了另一套素材时，同组表情尺寸会对不上（这次立绘串号的直接症状）
+    bad_sz = stand_size_report(nums)
+    if bad_sz:
+        _say(f"  ⚠ 立绘尺寸不一致 {len(bad_sz)} 组（可能串了另一套素材）")
+        for b in bad_sz[:8]:
+            _say("    " + b)
+    else:
+        _say("  立绘尺寸一致 ✓")
+    _say(f"  合成用时 {time.time() - t0:.0f}s")
 
 
 def fill_missing_stands(keys, job=None) -> list[str]:
