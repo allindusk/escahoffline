@@ -18,7 +18,8 @@
    * @returns {Array} 新数组
    *
    * 规则（三页一致）：
-   *  - 日期排序时，**没有日期的一律沉底**，不参与新旧比较；
+   *  - 日期排序时，**空日期按"最早"处理**（升序排最前、降序排最后），
+   *    空日期之间再按 ID 升序排；
    *  - 名字用日文排序（あいうえお）；
    *  - ID 用自然序（char_2 在 char_10 前面）；
    *  - 传了 haveOf，**未下载的一律沉底**（以前只有播放器这么做，
@@ -31,13 +32,18 @@
 
     if (m === 'date-desc' || m === 'date-asc') {
       const dir = m === 'date-desc' ? -1 : 1;
+      const byId = (a, b) => String(p(a).id || '').localeCompare(
+        String(p(b).id || ''), 'en', { numeric: true });
       arr.sort(function (a, b) {
         const x = String(p(a).date || '');
         const y = String(p(b).date || '');
-        if (!x && !y) return 0;
-        if (!x) return 1;          // 没日期沉底（不论升降序）
-        if (!y) return -1;
-        return dir * x.localeCompare(y);
+        // 都没日期：同一档，内部按 ID 升序
+        if (!x && !y) return byId(a, b);
+        // 空日期当作"早于任何有日期的"：升序排最前、降序排最后
+        if (!x) return -dir;
+        if (!y) return dir;
+        // 同一天再按 ID，避免同日期时顺序随机
+        return dir * x.localeCompare(y) || byId(a, b);
       });
       return arr;
     }

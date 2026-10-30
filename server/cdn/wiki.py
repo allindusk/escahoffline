@@ -41,18 +41,21 @@ _PROD_PATH = "web/data/charmeta.js"
 _RAW = f"https://raw.githubusercontent.com/{_REPO}/{_BRANCH}/{_PROD_PATH}"
 
 # raw.githubusercontent.com 在国内时通时不通，所以按顺序多线路回退。
-# 前三条是 jsDelivr 的公共 CDN（国内基本可达），后面是官方直连 + 几个 gh 反代。
-#   实测可用：jsdelivr / fastly / gcore / raw / github-raw / gh-proxy.com / ghfast / edgeone
+# **时效优先**：raw / github.com 直连和几个 gh 反代每次都回源，CI 刚提交就能取到；
+# jsDelivr 对 @main 分支约缓存 12 小时，虽然国内可达性最好，但只能当兜底放最后。
+#   实测可用：raw / github-raw / gh-proxy.com / ghfast.top / edgeone
+#            / jsdelivr / fastly / gcore
 #   实测不可用（已剔除）：cdn.statically.io、raw.gitmirror.com、ghproxy.net
 CHAR_META_ROUTES = [
-    ("jsdelivr", "https://cdn.jsdelivr.net/gh/{repo}@{br}/{path}"),
-    ("jsdelivr-fastly", "https://fastly.jsdelivr.net/gh/{repo}@{br}/{path}"),
-    ("jsdelivr-gcore", "https://gcore.jsdelivr.net/gh/{repo}@{br}/{path}"),
     ("raw", _RAW),
     ("github-raw", "https://github.com/{repo}/raw/{br}/{path}"),
     ("gh-proxy.com", "https://gh-proxy.com/" + _RAW),
     ("ghfast.top", "https://ghfast.top/" + _RAW),
     ("edgeone", "https://edgeone.gh-proxy.org/" + _RAW),
+    # —— 以下 CDN 有 12 小时级缓存，放最后，只在国内直连全挂时兜底
+    ("jsdelivr", "https://cdn.jsdelivr.net/gh/{repo}@{br}/{path}"),
+    ("jsdelivr-fastly", "https://fastly.jsdelivr.net/gh/{repo}@{br}/{path}"),
+    ("jsdelivr-gcore", "https://gcore.jsdelivr.net/gh/{repo}@{br}/{path}"),
 ]
 _ROUTE_VARS = {"repo": _REPO, "br": _BRANCH, "path": _PROD_PATH}
 
@@ -149,7 +152,7 @@ def _http_get(url: str, timeout: int = 10) -> str:
         return r.read().decode("utf-8")
 
 
-def fetch_remote_charmeta(timeout: int = 10) -> tuple[dict | None, str]:
+def fetch_remote_charmeta(timeout: int = 8) -> tuple[dict | None, str]:
     """按 ``CHAR_META_ROUTES`` 顺序拉每日 CI 产出的 charmeta 成品。
 
     返回 ``(data, route)``：``data`` 形如 ``{角色id: {r,d,t}}``；
