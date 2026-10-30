@@ -114,7 +114,13 @@ def export(job, key: str, parts: list[int], limit: int = 0,
     if not total:
         raise VideoExportError(f"{key} 的第 {parts} 段没有可渲染的台词")
     job.set_total(total, "帧")          # 导出进度是"帧"，不是字节
-    job.log(f"{key}：{len(parts)} 段 / {total} 句 / 约 {tl.total / 60:.1f} 分钟剧情")
+    if limit and total < len(tl.lines):
+        # limit 是"只渲染前 N 句"的验链路模式；把全段时长一起念出来会自相矛盾
+        # （"24 句 / 约 16.5 分钟"），所以分开写清。
+        job.log(f"{key}：{len(parts)} 段，本次只渲染前 {total} 句"
+                f"（全段 {len(tl.lines)} 句 / 约 {tl.total / 60:.1f} 分钟）")
+    else:
+        job.log(f"{key}：{len(parts)} 段 / {total} 句 / 约 {tl.total / 60:.1f} 分钟剧情")
 
     seg = seg_label(parts)
     fdir = os.path.join(FRAME_ROOT, f"{key}_{seg}")
