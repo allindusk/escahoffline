@@ -250,6 +250,68 @@ def sync_advindex() -> int:
     return len(rows)
 
 
+def _hex_label(seg: str) -> str:
+    """CG 文件名里的十六进制段 → 人类可读标签。
+
+    ``83438378`` 是按 Shift-JIS 编码的字节串（= ``イベ``），``3032`` 是 ASCII
+    （= ``02``）。CG 页卡片角上显示的「イベ_02」就是这么来的。
+    """
+    try:
+        return bytes.fromhex(seg).decode("cp932", "replace")
+    except ValueError:
+        return seg
+
+
+def sync_cgmap(cid: int) -> int:
+    """把角色剧本里引用、而 ``cgmap.js`` 里还没有的 CG 组合并进去。
+
+    为什么需要它：``cgmap.js`` 以前只在打包时由旧工作区生成（仓库里没有生成器），
+    所以官方上了新角色后，即使剧情装了、图也解出来了，CG 页（读 cgmap.js）里
+    仍然是空的 —— 只能等下一次发版。这里按"剧本引用了哪些 CG"增量合并，
+    **只加不删、可重复跑**（老条目原样保留，连顺序都不动）。
+
+    分组规则与出厂数据一致：key ``イベ_02_００`` 拆成组标签 ``イベ_02``，
+    文件名是整串 + ``.jpg``。
+    """
+    try:
+        assets = select.collect_assets(select.load_char(cid))
+    except Exception as e:                                     # noqa: BLE001
+        print(f"  cgmap 跳过：读不到 char_{cid}（{e}）")
+        return 0
+    keys = sorted(assets.get("cg") or ())
+    if not keys:
+        return 0
+
+    path = os.path.join(DATA, "cgmap.js")
+    groups: list = []
+    if os.path.exists(path):
+        raw = open(path, encoding="utf-8-sig").read()
+        try:
+            groups = json.loads(raw[raw.index("["):raw.rindex("]") + 1])
+        except Exception:                                      # noqa: BLE001
+            groups = []
+    have = {(g.get("c"), g.get("k")) for g in groups}
+
+    by_group: dict[str, list[str]] = {}
+    for k in keys:
+        seg = k.split("_")
+        label = "_".join(_hex_label(s) for s in seg[:2]) if len(seg) >= 2 else k
+        by_group.setdefault(label, []).append(k + ".jpg")
+
+    added = 0
+    for label in sorted(by_group):
+        if (int(cid), label) in have:
+            continue
+        groups.append({"c": int(cid), "k": label, "f": by_group[label]})
+        added += 1
+    if added:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("window.__CGMAP=" + json.dumps(groups, ensure_ascii=False,
+                                                   separators=(",", ":")) + ";")
+        print(f"  cgmap.js：合并 {added} 组（角色 {cid}）")
+    return added
+
+
 def sync_index(force: bool = False) -> int:
     """把 ``char_*.js`` 的现状合并进 ``web/data/index.js``。
 

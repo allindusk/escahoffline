@@ -956,6 +956,7 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
         if job is not None:
             job.log("⑥ 刷新索引与映射表")
         stages.sync_index()
+        stages.sync_cgmap(cid)
         stages.regen_maps()
         stages.regen_names()
         stages.regen_charmeta()
