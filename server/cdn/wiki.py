@@ -311,6 +311,9 @@ def merge_meta(existing: dict, scraped: dict) -> dict:
                 merged[k] = m[k]
         if merged.get("r") not in valid_r:
             merged["r"] = m.get("r") or ""           # wiki 没给且旧的非法 → 清空
+        if m.get("d"):
+            # wiki 给出真日期 → 之前用资源包时间填的推定值作废
+            merged.pop("dEst", None)
         out[name] = merged
     for name, m in existing.items():
         if name not in out:

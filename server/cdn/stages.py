@@ -812,6 +812,57 @@ def regen_charmeta() -> None:
     run_script("gen_charmeta.py", quiet=True)
 
 
+def _pack_birth(path: str) -> str:
+    """文件创建时间（Windows 创建时间，退化到 mtime），格式 ``YYYY/MM/DD``。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    ts = getattr(st, "st_birthtime", None) or st.st_mtime
+    return time.strftime("%Y/%m/%d", time.localtime(ts))
+
+
+def ensure_char_date(cid: int) -> str:
+    """给「还没有实装日期」的新角色补一个**推定日期**（= 剧本资源包的创建时间）。
+
+    场景：新角色刚上架，用户点「更新剧情」能装到包，但 Wiki 是第三方、通常延后
+    一两天才收录这个角色。这段时间稀有度/类型只能空着，日期也不必干等 ——
+    先用包自己的时间顶上，并用 ``dEst`` 标记它是推定值。
+
+    之后用户再点「更新角色信息」，wiki 给出真日期时由
+    :func:`wiki.merge_meta` 覆盖（它只在 wiki 有值时才覆盖），并清掉 ``dEst``。
+
+    只对**本次安装的角色**调用，不会给历史角色乱填。
+    """
+    names = _load_names()
+    nm = names.get(str(cid))
+    if not nm:
+        return ""
+    base = re.sub(r"\s*\(\d+\)$", "", nm)
+    path = os.path.join(WS, "char_meta.json")
+    meta = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                meta = json.load(f) or {}
+        except Exception:                                      # noqa: BLE001
+            meta = {}
+    cur = dict(meta.get(base) or {})
+    if cur.get("d"):
+        return ""                       # 已有日期（wiki 给的或上次推定），不覆盖
+    d = _pack_birth(os.path.join(FILES_STORY,
+                                 f"bundle_scenarioscript_char_{cid}"))
+    if not d:
+        return ""
+    cur["d"] = d
+    cur["dEst"] = 1
+    meta[base] = cur
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+    return d
+
+
 def _load_names() -> dict:
     """读 ``{角色id: 日文名}``。
 

@@ -965,6 +965,12 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
         stages.sync_cgmap(cid)
         stages.regen_maps()
         stages.regen_names()
+        # 新角色 Wiki 可能还没收录：先把实装日期用剧本包创建时间顶上，
+        # 之后用户点「更新角色信息」拿到 wiki 数据会被自动覆盖。
+        d_est = stages.ensure_char_date(cid)
+        if d_est and job is not None:
+            job.log(f"   实装日期暂用资源包日期 {d_est}"
+                    "（Wiki 收录后会自动覆盖）")
         stages.regen_charmeta()
 
     chk = _self_check(job, f"char_{cid}")
