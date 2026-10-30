@@ -423,17 +423,10 @@ def main() -> int:
             rep.add(ok_imp, "译文导入（块式）",
                     f"新增{imp.get('added')} 坏{imp.get('bad')} "
                     f"失配{len(imp.get('mismatch') or [])}")
-            # 旧的「原文 ||| 译文」还得继续能吃，老 txt 不能报废
-            imp2 = http(port, "/api/import/trans",
-                        {"unit": args.unit,
-                         "text": "カーテンが開かれ ||| 窗帘被拉开\n"}, timeout=120)
-            rep.add((imp2.get("added") or 0) + (imp2.get("updated") or 0) > 0,
-                    "译文导入（旧 ||| 兼容）",
-                    f"新增{imp2.get('added')} 坏{imp2.get('bad')}")
             exp = http(port, f"/api/export/trans?unit={args.unit}", timeout=300)
             txt = exp.decode("utf-8-sig", "replace") \
                 if isinstance(exp, (bytes, bytearray)) else (exp.get("text") or "")
-            rep.add("端到端测试译文" in txt and "窗帘被拉开" in txt,
+            rep.add("端到端测试译文" in txt,
                     "译文导出含刚导入的内容", f"{len(txt)} 字符")
         except Exception as e:                                # noqa: BLE001
             rep.add(False, "译文导入导出", str(e)[:70])

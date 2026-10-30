@@ -274,7 +274,6 @@ def list_exports() -> list[dict]:
 #   3. 没有说话人、没有位置：AI 不知道谁在说，出错了也没法定位到某一句
 # 块头编号 = 剧情号-part 序号-句序号，是稳定的锚点；万一编号对不上（资源包
 # 重导导致索引漂移），还能用 ja: 行兜底匹配。两条路互为备份，不至于全丢。
-_LINE = re.compile(r"^(.*?) \|\|\| ?(.*)$")            # 旧格式，仅做嗅探兼容
 _BLOCK = re.compile(r"^#{2,4}\s+(.*?)\s*$")
 # 发言人译名块的块头：### spk:トキサダ / ### speaker トキサダ / ### 发言人：トキサダ
 _SPK_HEAD = re.compile(r"^(?:spk|speaker|发言人|角色名)\s*[:：]?\s*(.+)$", re.I)
@@ -287,10 +286,6 @@ _BOLD = re.compile(r"^\*\*(.+?)\*\*$")
 # 而全角空格是日文原文的真实缩进（换行后顶格的「　」），把它剥了等于改了原文。
 _WS = " \t\r\n"
 
-
-def _unesc(s: str) -> str:
-    """旧格式里 \n 转义的还原。"""
-    return s.replace("\\n", "\n").replace("\\\\", "\\")
 
 
 def _tidy(s: str) -> str:
@@ -338,13 +333,13 @@ def _parse_head(s: str) -> dict:
     return d
 
 
-def _parse_blocks(text: str) -> tuple[list, list]:
-    """→ (blocks, legacy)。legacy 是第一个块头之前的游离行（旧格式走这里）。
+def _parse_blocks(text: str) -> list:
+    """→ blocks（按 ### 切好的块列表）。块头之前的游离行一律丢弃。
 
     整段 Optimization：这里只做「切块 + 打标签」，真正的 ja/zh 分流要等拿到
     原文行数之后才能定，所以先攒在 raw 里。
     """
-    blocks, legacy = [], []
+    blocks = []
     cur = None
     for raw in text.replace("\ufeff", "").splitlines():
         line = raw.rstrip("\r")
@@ -369,12 +364,11 @@ def _parse_blocks(text: str) -> tuple[list, list]:
         if not line.strip(_WS):
             continue
         if cur is None:
-            legacy.append(line)
-            continue
+            continue                        # 第一个 ### 之前的游离行，丢弃
         kind, body = _split_line(line)
         if kind or body:
             cur["raw"].append((kind, body))
-    return blocks, legacy
+    return blocks
 
 
 def _classify(b: dict, n_hint: int, has_ja: bool) -> None:
@@ -515,8 +509,9 @@ def export_trans(unit: str) -> str:
 def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
     """解析并合并译文。
 
-    两种写法都吃：新的 ### 块式，以及旧的「原文 ||| 译文」单行式（嗅探兼容，
-    已有的 txt 继续能用）。
+    只吃 ### 块式（ja:/zh: 成对）。
+    早期的「原文 ||| 译文」单行式已移除 —— 那种写法把原文全文当主键，
+    AI 改一个标点就静默失配，且多行台词要靠转义换行，实际用起来问题更多。
     → {added, updated, skipped, bad, lineOver, mismatch, total, path}
       lineOver  译文行数多过原文的块编号（会撑破游戏文本框，建议改）
       mismatch  原文对不上的块编号（可能是串行了，已按编号落位）
@@ -532,7 +527,7 @@ def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
     if os.path.exists(fp) and mode != "replace":
         cur = dict((paths.load_json(fp, {}) or {}).get("messages", {}) or {})
 
-    blocks, legacy = _parse_blocks(text or "")
+    blocks = _parse_blocks(text or "")
     has_ja = any(k == "ja" for b in blocks if b.get("kind") == "msg" for k, _ in b["raw"])
     # 发言人表是全站共用的，所以永远 merge —— 「覆盖整部」也不许清它，
     # 否则导入 A 剧情就能把 B 剧情的角色名全抹掉。
@@ -595,16 +590,6 @@ def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
             mism.append(tag)
         else:
             bad += 1
-
-    for line in legacy:
-        if line.lstrip().startswith("#"):
-            continue
-        m = _LINE.match(line)
-        if not m:
-            continue                        # 文件头、AI 的寒暄都在这里被吃掉
-        ja, zh = _unesc(m.group(1)), _unesc(m.group(2))
-        row = by_ja.get(ja) or by_ja_ns.get(re.sub(r"\s+", "", ja))
-        put(row, zh, ja, row["id"] if row else "")
 
     os.makedirs(TRANS_DIR, exist_ok=True)
     paths.save_json(fp, {"unit": unit, "lang": "zh-Hans",
