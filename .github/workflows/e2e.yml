@@ -64,9 +64,15 @@ jobs:
             New-Item -ItemType Directory -Force -Path "$Dst/web/data" | Out-Null
             Copy-Item web/*.html, web/serve.py -Destination "$Dst/web"
             Copy-Item web/assets -Destination "$Dst/web" -Recurse
-            Get-ChildItem web/data/* | Where-Object {
-              $_.Name -notlike 'char_*.js' -and $_.Name -notlike 'adv_*.js'
-            } | Copy-Item -Destination "$Dst/web/data"
+            # 白名单：只带程序自带的索引（黑名单会把本机产物一起打包，
+            # 例如 imgmap.x2.js 会让新用户看到"没有需要超分的图"）
+            $INDEX = @('advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
+                       'imgmap.js', 'index.js', 'names.js', 'packs.links.js',
+                       'stand_layers.json')
+            foreach ($f in $INDEX) {
+              $s2 = Join-Path 'web/data' $f
+              if (Test-Path $s2) { Copy-Item $s2 -Destination "$Dst/web/data" }
+            }
             New-Item -ItemType Directory -Force -Path "$Dst/web/media", "$Dst/userdata" | Out-Null
 
             $pyVer = "3.11.9"

@@ -80,10 +80,28 @@ jobs:
           # 不放进发布包 —— 否则用户会看到两个都叫「启动」的脚本
           Copy-Item web/*.html -Destination "$dst/web"
           Copy-Item web/assets -Destination "$dst/web" -Recurse
-          # 索引要带上（播放器靠它画目录树），剧情正文不带（由资源包分发）
-          Get-ChildItem web/data/* | Where-Object {
-            $_.Name -notlike 'char_*.js' -and $_.Name -notlike 'adv_*.js'
-          } | Copy-Item -Destination "$dst/web/data"
+          # 索引要带上（播放器靠它画目录树）。
+          # **白名单**：只列程序自带的索引文件。
+          # 以前用黑名单（只排除 char_*/adv_*），结果把本机产物一起打包了：
+          #   imgmap.x2.js    超分记录 → 新用户打开画质页显示"没有需要超分的图"
+          #   imgmap.base.js  WebP 覆盖层
+          #   sfxmap.js/json  音频映射（依赖本机导出的 m4a）
+          #   stand_slot.json 立绘落点缓存
+          #   还有手工备份 *.orig
+          # 白名单模式：新增文件默认不进包，要进必须在这里加一行。
+          $INDEX_FILES = @(
+            'advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
+            'imgmap.js', 'index.js', 'names.js', 'packs.links.js',
+            'stand_layers.json'
+          )
+          foreach ($f in $INDEX_FILES) {
+            $src = Join-Path 'web/data' $f
+            if (Test-Path $src) {
+              Copy-Item $src -Destination "$dst/web/data"
+            } else {
+              Write-Host "::warning::索引缺失：$f"
+            }
+          }
 
           New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
           Set-Content -Path "$dst/web/media/.gitkeep" -Value "" -NoNewline
@@ -93,6 +111,17 @@ jobs:
           $app = "$dst/web/data/app.json"
           (Get-Content $app -Raw) -replace 'YOUR_GITHUB_NAME/[^"]+', "${{ github.repository }}" |
             Set-Content $app -Encoding utf8
+
+          # 硬自检：web/data 里只能有那 9 个索引。
+          # 多出任何文件都说明本机产物混进了发布包（曾因此让新用户看到
+          # "没有需要超分的图（都已做过）"）。
+          $extra = Get-ChildItem "$dst/web/data" -File |
+                   Where-Object { $_.Name -notin $INDEX_FILES }
+          if ($extra) {
+            $names = ($extra | Select-Object -ExpandProperty Name) -join ', '
+            throw "发布包里混进了本机产物：$names"
+          }
+          "web/data 索引检查通过（$((Get-ChildItem "$dst/web/data" -File).Count) 个文件）"
 
           "程序目录组装完成：$((Get-ChildItem $dst -Recurse -File | Measure-Object).Count) 个文件"
 
