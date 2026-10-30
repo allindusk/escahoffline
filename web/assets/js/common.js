@@ -82,4 +82,59 @@
     const meta = (window.CHARMETA || {})[ESC.charId(unit)] || {};
     return meta.d || '';
   };
+
+  /* ------------------------------------------------------------ 前端错误上报
+   * 浏览器里的未捕获异常只打在控制台，用户看不到、我们也拿不到；而"点了没反应
+   * / 白屏 / 播到某句卡住"这类反馈，没有堆栈基本查不动。这里把它们发到
+   * POST /api/clientlog 落进 app.log（tag=web）。
+   *   · 只在 http(s) 下工作（file:// 没有后端）
+   *   · 同一消息只报一次；每分钟最多 20 条 —— 页面进了死循环也不会刷爆日志
+   *   · 资源加载失败（img/script 404）不报：服务端已经有 static 404 日志
+   */
+  const _sent = new Set();
+  let _budget = 20;
+  let _budgetAt = Date.now();
+
+  function reportError(level, msg, src, stack) {
+    try {
+      if (!/^https?:$/.test(location.protocol)) return;
+      const key = level + '|' + msg + '|' + (src || '');
+      if (_sent.has(key)) return;
+      if (_sent.size > 500) _sent.clear();
+      const now = Date.now();
+      if (now - _budgetAt > 60000) { _budgetAt = now; _budget = 20; }
+      if (_budget <= 0) return;
+      _budget -= 1;
+      _sent.add(key);
+      fetch('/api/clientlog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          level: level,
+          msg: String(msg).slice(0, 500),
+          src: src || '',
+          stack: stack ? String(stack).slice(0, 1200) : '',
+          page: location.pathname + location.search,
+        }),
+      }).catch(function () { /* 上报失败不能再抛 */ });
+    } catch (e) { /* 同上 */ }
+  }
+
+  window.addEventListener('error', function (ev) {
+    // ev.message 为空的是资源加载失败（img/script），服务端已记录，跳过
+    if (!ev.message) return;
+    reportError('error', ev.message,
+      (ev.filename || '') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0),
+      ev.error && ev.error.stack ? ev.error.stack : '');
+  }, true);
+
+  window.addEventListener('unhandledrejection', function (ev) {
+    const r = ev.reason;
+    reportError('error', 'unhandledrejection: ' +
+      ((r && (r.message || r)) || ''),
+      '', (r && r.stack) ? r.stack : '');
+  });
+
+  ESC.reportError = reportError;
 })();

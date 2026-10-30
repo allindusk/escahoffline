@@ -816,6 +816,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             job = jobs.submit("rebuild", "重建超分覆盖层",
                               lambda j: media.rebuild_x2_overlay(j))
             return self._json({"job": job.snapshot()})
+        if path == "/api/clientlog":
+            # 前端未捕获异常 / Promise 拒绝落盘。浏览器控制台用户看不到，
+            # 反馈"点了没反应 / 白屏"时这是我们唯一的线索。
+            b = self._body()
+            items = b.get("items")
+            if items is None:
+                items = [b]
+            n = 0
+            for it in (items or [])[:30]:
+                if not isinstance(it, dict):
+                    continue
+                lv = str(it.get("level") or "error").lower()
+                page = str(it.get("page") or "")[:120]
+                msg = str(it.get("msg") or "")[:500]
+                src = str(it.get("src") or "")[:200]
+                stack = str(it.get("stack") or "")[:1200]
+                line = f"{page} {msg}" if page else msg
+                if src:
+                    line += f" @ {src}"
+                if stack:
+                    # 堆栈首行通常就是 "Error: <msg>"，和上面重复，去掉
+                    parts = stack.splitlines()
+                    if parts and parts[0].strip() == msg.strip():
+                        parts = parts[1:]
+                    if parts:
+                        line += "\n" + "\n".join(parts)
+                applog.log(line, tag="web",
+                           level="ERROR" if lv == "error" else "WARN")
+                n += 1
+            return self._json({"ok": True, "logged": n})
         return self._err("unknown api", 404)
 
     def _delayed_exit(self):
@@ -877,6 +907,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     paths.ensure_dirs()
+    # data/imgmap.x2.js 被三个页面无条件加载，缺它每次开页面都 404（刷日志 +
+    # 控制台噪声）。空覆盖层等价于"没有任何超分图"，这里补一个。
+    try:
+        if not os.path.exists(os.path.join(paths.DATA, "imgmap.x2.js")):
+            media.rebuild_x2_overlay()
+    except Exception:                                          # noqa: BLE001
+        pass
     handler = Handler
     try:
         httpd = http.server.ThreadingHTTPServer((host, port), handler)

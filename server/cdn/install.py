@@ -71,18 +71,46 @@ def _capture(job):
 
 
 # ---------------------------------------------------------------- 依赖自检
+#: 解包必需的三方库（模块名, 用途）
+_REQUIRED_MODS = (("UnityPy", "解 Unity 资源对象"),
+                  ("lz4", "解压 UnityFS 容器"),
+                  ("PIL", "写出 webp"),
+                  ("numpy", "立绘落点匹配"))
+
+
 def missing_deps() -> list[str]:
-    """解包必需的三方库。缺任何一个都不能安装。"""
+    """解包必需的三方库。缺任何一个都不能安装。
+
+    **真导入**一次：能发现"装了但装坏了"（位数 / ABI 不匹配）这种隐性故障。
+    只用在真正要解包之前（装剧情）；不要用在 ``/api/state`` 这种热路径上。
+    """
     out = []
-    for mod, note in (("UnityPy", "解 Unity 资源对象"),
-                      ("lz4", "解压 UnityFS 容器"),
-                      ("PIL", "写出 webp"),
-                      ("numpy", "立绘落点匹配")):
+    for mod, note in _REQUIRED_MODS:
         try:
             __import__(mod)
         except Exception:                                      # noqa: BLE001
             out.append(f"{mod}（{note}）")
     return out
+
+
+def _spec_ok(name: str) -> bool:
+    """只查"有没有装"，**不执行模块代码**。"""
+    import importlib.util
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:                                          # noqa: BLE001
+        return False
+
+
+def missing_deps_quick() -> list[str]:
+    """``status()`` 专用的轻量版：只 find_spec，不 import。
+
+    为什么必须分开：``import UnityPy`` 首次要 **850 ms**，而 ``status()`` 挂在
+    ``/api/state`` 上、页面一打开就会被调用 → 那一次请求从 20 ms 变成 1 秒
+    （日志里就是 ``GET /api/state 200 2099ms``）。
+    """
+    return [f"{mod}（{note}）" for mod, note in _REQUIRED_MODS
+            if not _spec_ok(mod)]
 
 
 _STATUS_CACHE: dict = {"at": 0.0, "data": None}
@@ -99,7 +127,8 @@ def status(force: bool = False) -> dict:
             and time.time() - _STATUS_CACHE["at"] < _STATUS_TTL:
         return _STATUS_CACHE["data"]
     config.ensure_dirs()
-    missing = missing_deps()
+    # 用 quick 版：这里只给前端显示"缺什么"，不能为了它去 import UnityPy（850 ms）
+    missing = missing_deps_quick()
     info = {
         "cdn": config.cdn_base(),
         "manifestReady": manifest.has_manifest(),
@@ -124,7 +153,19 @@ def status(force: bool = False) -> dict:
     return info
 
 
-def _cache_size() -> dict:
+_SIZE_CACHE: dict = {"at": 0.0, "data": None}
+_SIZE_TTL = 60.0
+
+
+def _cache_size(force: bool = False) -> dict:
+    """bundle 缓存体积。带 60 秒缓存。
+
+    这里要对缓存目录 scandir 上万个文件，而它同时挂在 ``/api/state``（被轮询）
+    与 ``coverage()`` 上，不缓存会持续拖慢接口。
+    """
+    if not force and _SIZE_CACHE["data"] is not None \
+            and time.time() - _SIZE_CACHE["at"] < _SIZE_TTL:
+        return _SIZE_CACHE["data"]
     n = b = 0
     for root in (config.FILES_STORY, config.FILES_IMG, config.FILES_AUDIO):
         if not os.path.isdir(root):
@@ -136,7 +177,9 @@ def _cache_size() -> dict:
                     b += entry.stat().st_size
             except OSError:
                 pass
-    return {"files": n, "bytes": b}
+    out = {"files": n, "bytes": b}
+    _SIZE_CACHE.update(at=time.time(), data=out)
+    return out
 
 
 # ---------------------------------------------------------------- 清单
