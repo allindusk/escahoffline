@@ -336,6 +336,19 @@ def upscale_plan(kinds=("stand", "back", "cg"),
     mp = (sample or {}).get("mp") or 0.92          # 取不到就按 720p 估
     per = _per_image_sec(mp, mode, scale)
     total = len(targets)
+
+    # total==0 有两种截然不同的原因，不能都说成"都已做过"：
+    #   ① 一张原图都没有（刚装好程序、还没装剧情）
+    #   ② 有原图，但全部超分过了
+    # 以前一律返回"没有需要超分的图（都已做过）"，全新安装时会让用户
+    # 以为程序搞错了 —— 明明什么都没做过。
+    if total == 0:
+        all_n = len(collect_upscale_targets(tuple(kinds), only_missing=False))
+        hint = ("还没有图片可超分 —— 先去「剧情安装」装一部剧情"
+                if all_n == 0 else f"没有需要超分的图（{all_n} 张都已做过）")
+    else:
+        hint = ""
+
     return {
         "total": total,
         "byKind": by,
@@ -346,8 +359,7 @@ def upscale_plan(kinds=("stand", "back", "cg"),
         "perImageSec": round(per, 2),
         "etaSec": round(per * total, 1),
         "etaText": _human_sec(per * total),
-        "hint": ("没有需要超分的图（都已做过）" if total == 0
-                 else ""),
+        "hint": hint,
     }
 
 
