@@ -251,6 +251,39 @@ details.explain li { margin-bottom: 2px; }
   display: flex; flex-direction: column; gap: 2px;
   pointer-events: none;
 }
+
+/* ---------------- 右下角操作记录浮窗 ----------------
+   有新消息自动展开、5 秒后自动收起；点标题栏或「展开/收起」手动切换。
+   bottom 由 setup.js 按底部任务条高度动态抬高，避免叠在一起。 */
+#actPanel {
+  position: fixed; right: 16px; bottom: 54px; width: 352px; z-index: 9400;
+  display: flex; flex-direction: column; max-height: 42vh;
+  background: rgba(11, 19, 29, .97); border: 1px solid var(--line2);
+  border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+  font-size: 12.5px; overflow: hidden;
+}
+#actPanel.collapsed { max-height: 34px; }
+.apHead {
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  padding: 7px 10px; background: #0e1a26; border-bottom: 1px solid var(--line);
+  cursor: pointer; user-select: none;
+}
+#actPanel.collapsed .apHead { border-bottom: 0; }
+.apTitle { flex: 1; color: var(--fg); font-weight: 600; }
+.apBtn {
+  background: #16283a; border: 1px solid var(--line2); color: var(--fg3);
+  border-radius: 6px; padding: 2px 8px; font-size: 11.5px; cursor: pointer;
+}
+.apBtn:hover { color: var(--fg); border-color: var(--acc); }
+.apBody { overflow: auto; padding: 6px 10px 10px; }
+.apRow { display: flex; gap: 8px; padding: 3px 0; line-height: 1.45;
+  color: var(--fg3); }
+.apRow b { flex: 0 0 auto; color: #6b8299; font-weight: 500;
+  font-variant-numeric: tabular-nums; }
+.apRow span { min-width: 0; word-break: break-word; }
+.apRow.ok span { color: #7fd6a0; }
+.apRow.warn span { color: #e5c07b; }
+.apRow.err span { color: #e79090; }
 .job {
   pointer-events: auto;
   display: flex; align-items: center; gap: 14px;

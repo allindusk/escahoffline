@@ -589,6 +589,16 @@
 
 <div id="jobbar"></div>
 
+<!-- 右下角操作记录：有新消息自动展开，几秒后自动收起；可手动收起/清空 -->
+<div id="actPanel" class="collapsed">
+  <div class="apHead" id="apHead">
+    <span class="apTitle">操作记录</span>
+    <button class="apBtn" id="apToggle" title="展开 / 收起">展开</button>
+    <button class="apBtn" id="apClear" title="清空记录">清空</button>
+  </div>
+  <div class="apBody" id="apBody"></div>
+</div>
+
 <!-- 角色名与章节标题：安装列表要用它显示人话名字（纯索引，很小） -->
 <script src="data/names.js"></script>
 <script src="data/charmeta.js"></script>

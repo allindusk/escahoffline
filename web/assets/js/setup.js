@@ -66,7 +66,89 @@
     el.style.opacity = '1';
     clearTimeout(el._t);
     el._t = setTimeout(() => { el.style.opacity = '0'; }, 3200);
+    // 顶部气泡 3 秒就没了，右下角留一份记录，方便回看刚做了什么
+    notify(msg, bad ? 'err' : 'info');
   }
+
+  /* ---------------------------------------------------------- 操作记录浮窗
+   * 右下角记录操作与提示；有新消息自动展开、5 秒后自动收起；
+   * 不想看就点标题栏或「收起」手动折叠。
+   */
+  const ACT = { rows: [], max: 150, hideTimer: null };
+  const apPanel = $('#actPanel');
+  const apBody = $('#apBody');
+  const apToggle = $('#apToggle');
+
+  function actExpand() {
+    if (!apPanel) return;
+    apPanel.classList.remove('collapsed');
+    if (apToggle) apToggle.textContent = '收起';
+    clearTimeout(ACT.hideTimer);
+    ACT.hideTimer = setTimeout(actCollapse, 5000);   // 5 秒后自动收起
+  }
+
+  function actCollapse() {
+    if (!apPanel) return;
+    apPanel.classList.add('collapsed');
+    if (apToggle) apToggle.textContent = '展开';
+    clearTimeout(ACT.hideTimer);
+  }
+
+  function renderAct() {
+    if (!apBody) return;
+    apBody.innerHTML = ACT.rows.length
+      ? ACT.rows.map(function (r) {
+        return '<div class="apRow ' + r.lv + '"><b>' + r.at + '</b><span>' +
+          esc(r.text) + '</span></div>';
+      }).join('')
+      : '<div class="apRow"><span>暂无记录</span></div>';
+    apBody.scrollTop = apBody.scrollHeight;
+  }
+
+  /** 记一条操作/提示。level: info | ok | warn | err */
+  function notify(text, level) {
+    if (!text) return;
+    const t = new Date();
+    const at = [t.getHours(), t.getMinutes(), t.getSeconds()]
+      .map(function (n) { return String(n).padStart(2, '0'); }).join(':');
+    ACT.rows.push({ at: at, text: String(text), lv: level || 'info' });
+    if (ACT.rows.length > ACT.max) ACT.rows = ACT.rows.slice(-ACT.max);
+    renderAct();
+    actExpand();
+  }
+
+  /** 底部任务条会占位置，浮窗跟着抬高，避免叠在一起 */
+  function syncActBottom() {
+    if (!apPanel) return;
+    const bar = $('#jobbar');
+    const h = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+    apPanel.style.bottom = (h > 0 ? h + 60 : 54) + 'px';
+  }
+
+  if (apToggle) {
+    apToggle.onclick = function (e) {
+      e.stopPropagation();
+      if (apPanel.classList.contains('collapsed')) actExpand();
+      else actCollapse();
+    };
+  }
+  const apClear = $('#apClear');
+  if (apClear) {
+    apClear.onclick = function (e) {
+      e.stopPropagation();
+      ACT.rows = [];
+      renderAct();
+      actCollapse();
+    };
+  }
+  const apHead = $('#apHead');
+  if (apHead) {
+    apHead.onclick = function () {
+      if (apPanel.classList.contains('collapsed')) actExpand();
+      else actCollapse();
+    };
+  }
+  renderAct();
 
   // ---------------------------------------------------------------- 数据
   async function loadAll() {
@@ -541,6 +623,7 @@
       try {
         const d = await api('jobs');
         renderJobs(d.jobs || []);
+        syncActBottom();          // 任务条高度变了，浮窗跟着抬高
       } catch (e) { /* 服务停了就别刷了 */ }
     };
     tick();
@@ -576,12 +659,27 @@
       if (!j || !j.id) continue;
       const prev = ST._jobSeen[j.id];
       ST._jobSeen[j.id] = j.state;
-      if (prev === undefined || prev === j.state) continue;   // 首次见到 / 状态没变 → 不动
-      if (j.state !== 'done') continue;
-      if (j.kind !== 'video' && j.kind !== 'cg') continue;
-      let auto = false;
-      try { auto = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
-      if (auto) openDir('export', '导出目录');
+      if (prev === undefined) {
+        // 首次见到：只有"正在跑"的才记为本次操作（页面打开时列表里那些历史
+        // 已完成的任务不再回顾，否则一进页面就刷一屏）
+        if (j.state === 'running' || j.state === 'queued') {
+          notify('开始：' + (j.title || j.kind || '任务'), 'info');
+        }
+        continue;
+      }
+      if (prev === j.state) continue;                        // 状态没变 → 不动
+      const ttl = j.title || j.kind || '任务';
+      if (j.state === 'running') notify('开始：' + ttl, 'info');
+      else if (j.state === 'done') notify('完成：' + ttl, 'ok');
+      else if (j.state === 'failed') {
+        notify('失败：' + ttl + (j.error ? '：' + j.error : ''), 'err');
+      }
+      // 导出任务刚跑完 → 按设置自动弹目录
+      if (j.state === 'done' && (j.kind === 'video' || j.kind === 'cg')) {
+        let auto = false;
+        try { auto = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
+        if (auto) openDir('export', '导出目录');
+      }
     }
     // 清掉已经不在列表里的 id，别让这个表无限膨胀
     const alive = new Set(jobsNow.map(j => j && j.id));
@@ -682,7 +780,7 @@
         (bsp ? `${human(bsp)}/s` : ''),
         eta,
       ].filter(Boolean).join(' · ');
-      return `<div class="job${cls}">
+      return `<div class="job${cls ? ' ' + cls : ''}">
         <span class="jt">${esc(j.title)}</span>
         <span class="jm" title="${esc(msg)}">${esc(msg)}</span>
         <span class="jp"><i style="width:${pct}%"></i></span>
