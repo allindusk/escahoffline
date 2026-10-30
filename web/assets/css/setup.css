@@ -65,6 +65,19 @@ h3 { font-size: 14px; margin: 0 0 8px; color: var(--acc2); }
 h3.mt { margin-top: 22px; }
 .lead { color: var(--fg2); margin: 0 0 18px; max-width: 76ch; }
 .dim { color: var(--fg3); font-size: 12.5px; }
+
+/* 外链。本文件原本没有 a 样式（只有 player/cg 的 nav a 有），裸 <a> 会是
+   浏览器默认的深蓝 #0000EE，在 --bg:#080d14 上几乎看不见，所以统一给一套。 */
+.panel p a { color: var(--acc2); text-decoration: none;
+  border-bottom: 1px dotted var(--line2); }
+.panel p a:hover { color: #fff; border-bottom-color: var(--acc2); }
+.alink { display: inline-flex; align-items: center; gap: 5px; color: var(--acc2);
+  background: var(--bg3); border: 1px solid var(--line2); border-radius: 8px;
+  padding: 5px 12px; font-size: 12.8px; text-decoration: none;
+  transition: color .15s, border-color .15s; }
+.alink:hover { color: #fff; border-color: var(--acc); }
+/* 箭头提示会开新窗口，别让用户以为会跳走当前页 */
+.alink::after { content: "↗"; font-size: 11px; opacity: .55; }
 .warn {
   color: #ffd9a3; background: #3a2a12; border: 1px solid #6b4a1c;
   border-radius: 9px; padding: 10px 14px; font-size: 12.5px;

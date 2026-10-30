@@ -24,20 +24,41 @@ from . import media, paths
 
 TRANS_DIR = os.path.join(paths.WEB, "assets", "i18n", "zh-Hans")
 
+#: 全局发言人译名表。以 _ 开头，所以译文统计不会把它当成"一部剧情"。
+#: 为什么不塞进每部剧情的译文文件：ShowMessageWindow.Name 是全站共用的口语
+#: 称呼（同一个角色在几百部剧情里都叫同一个名字），按剧情存等于把同一件事
+#: 翻几百遍，而且各部之间译名还会打架。
+SPK_FILE = "_speakers.json"
+
 TRANS_HEADER = """# ===== ESCAH 离线阅读器 · 剧情译文文件 =====
 # 剧情标识 : {unit}
 # 剧情名称 : {title}
 # 段落/句数: {parts} 段 / {lines} 句
 # 导出时间 : {at}
 #
-# 使用说明（给人和 AI 都看得懂）：
-#   1. 每行一句，格式为：   日文原文 ||| 中文译文
-#   2. 分隔符固定是三个竖线，两侧各一空格：空格|||空格
-#   3. 原文里的换行在导出时写成了 \\n，请不要改动它，也不要改动原文
-#   4. 只翻译右侧；左侧原文一个字都不能动，否则导入时会匹配不上
-#   5. 想跳过某句就把右侧留空（该句将回退显示日文）
-#   6. 以 # 开头的行是注释，导入时忽略
-#   7. 改完保存为 UTF-8，回到页面的「译文导入」里选中本文件即可
+# ===== 使用说明（给人和 AI 都看得懂）=====
+#
+# 每个 ### 块是一句台词，长这样：
+#
+#   ### 001-p01-m003 【トキサダ】 (3行)
+#   ja: 「それで……確かキミたちはイベントの
+#   ja: 　警備中に幻魔と遭遇したと聞いたが」
+#   zh: 「那么……我记得你们是
+#   zh: 在活动警备中和幻魔遭遇的吧」
+#
+#   1. ja: 是日文原文，一个字都不要动（它是核对用的锚点）
+#   2. zh: 是中文译文，填上就行；原文多行的，译文也写成多行 zh:
+#   3. 块头里 (3行) 是原文行数：译文行数不能多过它，少几行没关系
+#      （多了会撑破游戏文本框）
+#   4. 【】里是说话人，没写就是旁白——请按角色性格定语气和自称
+#   5. 不想翻的块就不写 zh: 行，导入时自动跳过
+#   6. 只给纯译文（不带 ja: 行）也支持，但建议保留 ja:——
+#      万一串行我能发现，你自己校对也方便
+#   7. 块头 ### 后面的句子编号不要改
+#   8. 文件末尾有一节「发言人译名」（### spk:名字），管的是对话框上方
+#      显示的角色名；全站共用的，翻过一次所有剧情都跟着变。
+#      不翻也行，那就原样显示日文名。
+#   9. 改完保存为 UTF-8，回到页面的「译文导入」里选中本文件即可
 #
 """
 
@@ -240,84 +261,364 @@ def list_exports() -> list[dict]:
 
 
 # ---------------------------------------------------------------- 译文导入导出
-_LINE = re.compile(r"^(.*?) \|\|\| ?(.*)$")
-
-
-def _esc(s: str) -> str:
-    return (s or "").replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n")
+# 块式双语对照：一个 ### 块是一句台词
+#
+#   ### 001-p01-m003 【トキサダ】 (3行)
+#   ja: 原文第一行
+#   ja: 原文第二行
+#   zh: 译文第一行
+#
+# 为什么不再用 "原文 ||| 译文"
+#   1. 多行台词只能把换行转义成 \n，而 AI 常常把它还原成真换行 → 一句变两句
+#   2. 拿原文全文当主键，AI 改一个标点就永久失配，而且是**静默**失配
+#   3. 没有说话人、没有位置：AI 不知道谁在说，出错了也没法定位到某一句
+# 块头编号 = 剧情号-part 序号-句序号，是稳定的锚点；万一编号对不上（资源包
+# 重导导致索引漂移），还能用 ja: 行兜底匹配。两条路互为备份，不至于全丢。
+_LINE = re.compile(r"^(.*?) \|\|\| ?(.*)$")            # 旧格式，仅做嗅探兼容
+_BLOCK = re.compile(r"^#{2,4}\s+(.*?)\s*$")
+# 发言人译名块的块头：### spk:トキサダ / ### speaker トキサダ / ### 发言人：トキサダ
+_SPK_HEAD = re.compile(r"^(?:spk|speaker|发言人|角色名)\s*[:：]?\s*(.+)$", re.I)
+_PFX_JA = re.compile(r"^(?:ja|jp|jpn|原文|日文)\s*[:：]\s?")
+_PFX_ZH = re.compile(r"^(?:zh|zho|chs|cn|译文|中文|汉语)\s*[:：]\s?")
+_MD = re.compile(r"^[>\-*•][ \t]+")                     # AI 爱加的列表/引用符号
+_ORD = re.compile(r"^[ \t]*(?:\d{1,3}|[①-⑳])[ \t]*[.、)）:：][ \t]+")   # AI 爱加的序号
+_BOLD = re.compile(r"^\*\*(.+?)\*\*$")
+# 下面两处刻意只写 [ \t] 而不是 \s：\s 在 unicode 下会吃掉 \u3000，
+# 而全角空格是日文原文的真实缩进（换行后顶格的「　」），把它剥了等于改了原文。
+_WS = " \t\r\n"
 
 
 def _unesc(s: str) -> str:
+    """旧格式里 \n 转义的还原。"""
     return s.replace("\\n", "\n").replace("\\\\", "\\")
 
 
-def export_trans(unit: str) -> str:
-    """生成某部剧情的双语对照 txt（可交给 AI 翻译后再导回）。"""
+def _tidy(s: str) -> str:
+    s = _ORD.sub("", s)
+    m = _BOLD.match(s)
+    if m:
+        s = m.group(1)
+    return s.strip(_WS)
+
+
+def _split_line(raw: str) -> tuple[str, str]:
+    """→ (kind, body)。kind 取 'ja' / 'zh' / ''，'' 表示没有前缀的裸行。"""
+    s = _MD.sub("", raw.rstrip("\r"))
+    m = _PFX_JA.match(s)
+    if m:
+        return "ja", _tidy(s[m.end():])
+    m = _PFX_ZH.match(s)
+    if m:
+        return "zh", _tidy(s[m.end():])
+    return "", _tidy(s)
+
+
+def _parse_head(s: str) -> dict:
+    """`001-p01-m003 【トキサダ】 (3行)` → {id, name, n}"""
+    s = s.replace("**", "").replace("`", "")
+    d = {"id": "", "name": "", "n": 0}
+    m = re.search(r"【([^】]*)】", s)
+    if m:
+        d["name"] = m.group(1).strip()
+    m = re.search(r"[（(](\d+)\s*行[)）]?", s)
+    if m:
+        try:
+            d["n"] = int(m.group(1))
+        except ValueError:
+            pass
+    for tok in s.split():
+        if re.fullmatch(r"[\w.\-]*\d+-p\d+-m\d+", tok):
+            d["id"] = tok
+            break
+    if not d["id"]:
+        for tok in s.split():
+            if re.fullmatch(r"[\w.\-]{3,}", tok):
+                d["id"] = tok
+                break
+    return d
+
+
+def _parse_blocks(text: str) -> tuple[list, list]:
+    """→ (blocks, legacy)。legacy 是第一个块头之前的游离行（旧格式走这里）。
+
+    整段 Optimization：这里只做「切块 + 打标签」，真正的 ja/zh 分流要等拿到
+    原文行数之后才能定，所以先攒在 raw 里。
+    """
+    blocks, legacy = [], []
+    cur = None
+    for raw in text.replace("\ufeff", "").splitlines():
+        line = raw.rstrip("\r")
+        m = _BLOCK.match(line)
+        if m:
+            head = m.group(1)
+            sm = _SPK_HEAD.match(head)
+            if sm:                              # ### spk:トキサダ → 发言人译名块
+                cur = {"kind": "spk", "spk": sm.group(1).strip(),
+                       "id": "", "name": "", "n": 0,
+                       "ja": [], "zh": [], "raw": []}
+            else:
+                cur = _parse_head(head)
+                cur["kind"] = "msg"
+                cur["ja"], cur["zh"], cur["raw"] = [], [], []
+            blocks.append(cur)
+            continue
+        if line.lstrip().startswith("#"):
+            # 块之间的注释（比如文件末尾「发言人译名」那节的分隔说明）
+            # 必须直接丢掉。否则它会被当成上一个块的裸行，灌进那句的译文里。
+            continue
+        if not line.strip(_WS):
+            continue
+        if cur is None:
+            legacy.append(line)
+            continue
+        kind, body = _split_line(line)
+        if kind or body:
+            cur["raw"].append((kind, body))
+    return blocks, legacy
+
+
+def _classify(b: dict, n_hint: int, has_ja: bool) -> None:
+    """把裸行分到 ja / zh。
+
+    AI 三种常见写法都要接住：
+      · 只给译文（全裸行）        → 全部当译文
+      · 原文译文都带前缀          → 按前缀走
+      · 原文多行但续行漏了 ja: 前缀 → 靠「ja 还没收满原文行数」补进去
+    所以裸行怎么判，取决于 ja 是否已经收够原文声明的行数。
+    """
+    for kind, body in b["raw"]:
+        if kind == "ja":
+            b["ja"].append(body)
+        elif kind == "zh":
+            b["zh"].append(body)
+        elif has_ja and n_hint and len(b["ja"]) < n_hint:
+            b["ja"].append(body)
+        else:
+            b["zh"].append(body)
+
+
+def _unit_no(unit: str, d: dict) -> str:
+    n = d.get("no")
+    if n is None:                                       # char_* 没有 no，取名字里的数字
+        m = re.search(r"(\d+)", unit)
+        n = m.group(1) if m else 0
+    try:
+        return f"{int(n):03d}"
+    except (TypeError, ValueError):
+        return "000"
+
+
+def unit_lines(unit: str) -> list[dict]:
+    """剧情里所有不重复的 ShowMessage → [{id, name, ja, n}]
+
+    剧本缺失时返回 []——资源包没下载也不该挡住导入。
+    编号只依赖遍历顺序（part 序号 + 该 part 内第几句），重复导出结果一致。
+    说话人取它前面最近那个 ShowMessageWindow 的 Name，旁白时为空。
+    """
     d = unit_data(unit)
     if not d:
-        raise FileNotFoundError(f"没有剧情数据：data/{unit}.js（该剧情的资源包还没下载）")
-    seen = set()
-    rows = []
-    for i, p in enumerate(d.get("parts") or []):
+        return []
+    no = _unit_no(unit, d)
+    rows, seen = [], set()
+    for pi, p in enumerate(d.get("parts") or []):
+        name, n = "", 0
         for m in p.get("methods") or []:
-            if m.get("Method") != "ShowMessage":
+            mt = m.get("Method")
+            if mt == "ShowMessageWindow":
+                name = (m.get("Name") or "").strip()
                 continue
-            ja = m.get("Message") or ""
+            if mt != "ShowMessage":
+                continue
+            ja = (m.get("Message") or "").replace("\r", "")
             if not ja.strip() or ja in seen:
                 continue
             seen.add(ja)
-            rows.append(ja)
+            n += 1
+            rows.append({"id": f"{no}-p{pi + 1:02d}-m{n:03d}", "name": name,
+                         "ja": ja, "n": ja.count("\n") + 1})
+    return rows
+
+
+def load_speakers() -> dict:
+    """全局发言人译名 ``{日文名: 中文}``。"""
+    d = paths.load_json(os.path.join(TRANS_DIR, SPK_FILE), {}) or {}
+    return {k: v for k, v in (d.get("messages") or {}).items() if k and v}
+
+
+def save_speakers(msgs: dict) -> None:
+    os.makedirs(TRANS_DIR, exist_ok=True)
+    paths.save_json(os.path.join(TRANS_DIR, SPK_FILE),
+                    {"lang": "zh-Hans",
+                     "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                     "messages": msgs})
+
+
+def unit_speakers(unit: str) -> list[str]:
+    """这部剧情里出现过的说话人，按首次出现顺序去重。
+
+    取值来自 ShowMessageWindow.Name —— 口语称呼（トキサダ / ハルカ），跟
+    names.js 里的全长名（神騎プラチネル）对不上，自动映射只有 2.3% 命中，
+    所以只能靠人/AI 翻，这里负责把"要翻哪些名字"列全。
+    """
+    d = unit_data(unit)
+    if not d:
+        return []
+    out, seen = [], set()
+    for p in d.get("parts") or []:
+        for m in p.get("methods") or []:
+            if m.get("Method") != "ShowMessageWindow":
+                continue
+            nm = (m.get("Name") or "").strip()
+            if nm and nm not in seen:
+                seen.add(nm)
+                out.append(nm)
+    return out
+
+
+def export_trans(unit: str) -> str:
+    """生成某部剧情的块式双语对照 txt（可交给 AI 翻译后再导回）。"""
+    d = unit_data(unit)
+    if not d:
+        raise FileNotFoundError(f"没有剧情数据：data/{unit}.js（该剧情的资源包还没下载）")
+    rows = unit_lines(unit)
     cur = {}
     fp = os.path.join(TRANS_DIR, f"{unit}.json")
     if os.path.exists(fp):
         cur = (paths.load_json(fp, {}) or {}).get("messages", {}) or {}
-    head = TRANS_HEADER.format(unit=unit, title=unit_title(unit),
-                              parts=len(d.get("parts") or []),
-                              lines=len(rows),
-                              at=time.strftime("%Y-%m-%d %H:%M:%S"))
-    body = "\n".join(f"{_esc(ja)} ||| {_esc(cur.get(ja, ''))}" for ja in rows)
-    return head + body + "\n"
+    buf = [TRANS_HEADER.format(unit=unit, title=unit_title(unit),
+                               parts=len(d.get("parts") or []),
+                               lines=len(rows),
+                               at=time.strftime("%Y-%m-%d %H:%M:%S"))]
+    for r in rows:
+        who = f" 【{r['name']}】" if r["name"] else ""
+        buf.append(f"### {r['id']}{who} ({r['n']}行)")
+        for ln in r["ja"].split("\n"):
+            buf.append(("ja: " + ln).rstrip(_WS))
+        zh = (cur.get(r["ja"]) or "").strip()
+        for ln in zh.split("\n"):
+            buf.append(("zh: " + ln).rstrip(_WS))
+        buf.append("")
+    spk = unit_speakers(unit)
+    if spk:
+        have = load_speakers()
+        buf += ["# ===== 发言人译名（对话框上方那个名字）=====",
+                "# 只给日文名补 zh: 就行；留空也完全可以，那就原样显示日文。",
+                "# 这张表全站共用：翻过一次，所有剧情里的同一个名字都跟着变。"]
+        for nm in spk:
+            buf += ["", f"### spk:{nm}",
+                    ("zh: " + have[nm]).rstrip(_WS) if have.get(nm) else "zh:"]
+    while buf and not buf[-1]:
+        buf.pop()
+    return "\n".join(buf) + "\n"
 
 
 def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
-    """解析并合并译文。→ {added, updated, skipped, total}"""
+    """解析并合并译文。
+
+    两种写法都吃：新的 ### 块式，以及旧的「原文 ||| 译文」单行式（嗅探兼容，
+    已有的 txt 继续能用）。
+    → {added, updated, skipped, bad, lineOver, mismatch, total, path}
+      lineOver  译文行数多过原文的块编号（会撑破游戏文本框，建议改）
+      mismatch  原文对不上的块编号（可能是串行了，已按编号落位）
+    """
+    rows = unit_lines(unit)
+    by_id = {r["id"]: r for r in rows}
+    by_ja = {r["ja"]: r for r in rows}
+    # 归一化索引：容忍 AI 把它揉成一坨的空白差异，避免逐句再算一遍
+    by_ja_ns = {re.sub(r"\s+", "", k): v for k, v in by_ja.items()}
+
     fp = os.path.join(TRANS_DIR, f"{unit}.json")
     cur = {}
     if os.path.exists(fp) and mode != "replace":
         cur = dict((paths.load_json(fp, {}) or {}).get("messages", {}) or {})
 
+    blocks, legacy = _parse_blocks(text or "")
+    has_ja = any(k == "ja" for b in blocks if b.get("kind") == "msg" for k, _ in b["raw"])
+    # 发言人表是全站共用的，所以永远 merge —— 「覆盖整部」也不许清它，
+    # 否则导入 A 剧情就能把 B 剧情的角色名全抹掉。
+    spk_cur = load_speakers()
+    spk_add = spk_upd = 0
     added = updated = skipped = bad = 0
-    for raw in text.splitlines():
-        line = raw.rstrip("\r")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        m = _LINE.match(line)
-        if not m:
-            bad += 1
-            continue
-        ja, zh = _unesc(m.group(1)), _unesc(m.group(2))
-        if not ja.strip():
-            bad += 1
-            continue
-        if not zh.strip():
+    over: list[str] = []
+    mism: list[str] = []
+
+    def put(row, zh: str, ja_txt: str = "", tag: str = "") -> None:
+        """落一句。row 是剧本里的句子（带 id / 行数），找不到就退回用原文文本当 key。"""
+        nonlocal added, updated, skipped
+        ja = row["ja"] if row is not None else ja_txt
+        if not ja or not zh.strip():
             skipped += 1
-            continue
-        if ja in cur and cur[ja] == zh:
+            return
+        n = row["n"] if row is not None else 0
+        if n and len(zh.split("\n")) > n:
+            over.append((row or {}).get("id") or tag or "(无编号)")
+        if cur.get(ja) == zh:
             skipped += 1
-            continue
+            return
         if ja in cur:
             updated += 1
         else:
             added += 1
         cur[ja] = zh
 
+    for b in blocks:
+        if b.get("kind") == "spk":
+            # 发言人块：裸行和 zh: 行都算译名（AI 写不写前缀都认）
+            nm = b["spk"]
+            zh_spk = "\n".join(t for k, t in b["raw"] if k in ("", "zh")).strip()
+            if nm and zh_spk and spk_cur.get(nm) != zh_spk:
+                if nm in spk_cur:
+                    spk_upd += 1
+                else:
+                    spk_add += 1
+                spk_cur[nm] = zh_spk
+            continue
+        tag = b["id"] or "(无编号)"
+        hit_id = by_id.get(b["id"]) if b["id"] else None
+        _classify(b, (hit_id or {}).get("n") or b.get("n") or 0, has_ja)
+        ja_txt = "\n".join(b["ja"]) if b["ja"] else ""
+        zh_txt = "\n".join(b["zh"])
+        hit_ja = (by_ja.get(ja_txt) or by_ja_ns.get(re.sub(r"\s+", "", ja_txt))) \
+            if ja_txt else None
+        if hit_id is not None:
+            # 编号命中就按编号落位。ja: 行却对不上 → 这块可能被人改过，
+            # 报告给用户，但不丢：总比整句静默消失强
+            if ja_txt and hit_ja is None:
+                mism.append(tag)
+            put(hit_id, zh_txt, ja_txt, tag)
+        elif hit_ja is not None:
+            put(hit_ja, zh_txt, ja_txt, tag)
+        elif ja_txt:
+            # 编号和原文都对不上：要么是资源包没下/重导过，要么导入错了剧情。
+            # 仍然按原文文本存下来（key 就是原文，游戏侧照样能命中），但要报
+            put(None, zh_txt, ja_txt, tag)
+            mism.append(tag)
+        else:
+            bad += 1
+
+    for line in legacy:
+        if line.lstrip().startswith("#"):
+            continue
+        m = _LINE.match(line)
+        if not m:
+            continue                        # 文件头、AI 的寒暄都在这里被吃掉
+        ja, zh = _unesc(m.group(1)), _unesc(m.group(2))
+        row = by_ja.get(ja) or by_ja_ns.get(re.sub(r"\s+", "", ja))
+        put(row, zh, ja, row["id"] if row else "")
+
     os.makedirs(TRANS_DIR, exist_ok=True)
     paths.save_json(fp, {"unit": unit, "lang": "zh-Hans",
                          "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                          "messages": cur})
+    if spk_add or spk_upd:
+        save_speakers(spk_cur)
     _update_trans_index(unit, len(cur))
     return {"added": added, "updated": updated, "skipped": skipped,
-            "bad": bad, "total": len(cur), "path": paths.rel(fp)}
+            "bad": bad, "lineOver": sorted(set(over))[:20],
+            "mismatch": sorted(set(mism))[:20],
+            "total": len(cur), "path": paths.rel(fp),
+            "speakers": {"added": spk_add, "updated": spk_upd,
+                         "total": len(spk_cur)}}
 
 
 def _update_trans_index(unit: str, n: int) -> None:
@@ -331,10 +632,12 @@ def _update_trans_index(unit: str, n: int) -> None:
 
 
 def trans_stats() -> dict:
-    out = {"units": 0, "messages": 0}
+    out = {"units": 0, "messages": 0,
+           "speakers": len(load_speakers())}
     if not os.path.isdir(TRANS_DIR):
         return out
     for name in os.listdir(TRANS_DIR):
+        # _ 开头是发言人表这类全局文件，不是"一部剧情"
         if not name.endswith(".json") or name.startswith("_"):
             continue
         d = paths.load_json(os.path.join(TRANS_DIR, name), {}) or {}

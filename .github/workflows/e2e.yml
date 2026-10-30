@@ -18,7 +18,12 @@ on:
         required: false
         default: 'char_2'
       with_base:
-        description: '连公共素材一起下（775 MB，用来验 BGM/背景）'
+        description: '连公共素材一起下（795 MB，用来验 BGM/背景/头像）'
+        type: boolean
+        required: false
+        default: false
+      full:
+        description: '连很慢的也测（实际超分 + 导出视频，多花 10-20 分钟）'
         type: boolean
         required: false
         default: false
@@ -145,6 +150,7 @@ jobs:
 
           $extra = @()
           if ("${{ inputs.with_base }}" -eq "true") { $extra += "--base" }
+          if ("${{ inputs.full }}" -eq "true") { $extra += "--full" }
           # 用**本次 checkout 的**脚本，而不是包里那份：
           # 测试脚本属于"测试工具"，若从被测物里取，就永远验不到新写的检查逻辑
           # （曾因此出现"源码已修好但 e2e 仍报旧错"的假失败）。

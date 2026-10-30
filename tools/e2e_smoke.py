@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -374,13 +375,74 @@ def main() -> int:
                         timeout=120)
             rep.add((plan.get("total") or 0) > 0, "超分预估有结果",
                     f"{plan.get('total')} 张 / {plan.get('etaText')}")
+            # --full 才真的跑（33 张约 1 分钟，4K 屏/弱 CPU 可能更久）
+            if args.full:
+                ju = http(port, "/api/upscale",
+                          {"kinds": ["stand", "back", "cg"], "scale": 2},
+                          timeout=120)["job"]
+                jru = wait_job(port, ju["id"], timeout=3600)
+                rep.add(jru["state"] == "done", "实际超分",
+                        jru.get("message") or str(jru)[:50])
+                x2 = os.path.join(web, "data", "imgmap.x2.js")
+                rep.add(os.path.exists(x2), "超分产出记录 imgmap.x2.js")
+            else:
+                rep.add(True, "实际超分", "跳过（加 --full 才跑）")
         except Exception as e:                                # noqa: BLE001
             rep.add(False, "超分预估", str(e)[:70])
 
-        # (d) 译文导入 / 导出：**暂不测**
-        #     这块功能正在改造中，接口与格式会变，现在断言没有意义，
-        #     等改完再补（届时用真实台词做往返校验）。
-        rep.add(True, "译文导入导出", "跳过（功能改造中，暂不校验）")
+        # (d) 译文导出 → 导入 → 再导出（块式格式往返）
+        #     导入会往真实译文库里写测试串，所以整段用备份/还原包住——
+        #     以前就是没还原，把 "E2E测试译文" 这种垃圾留在了用户译文里。
+        tfile = os.path.join(web, "assets", "i18n", "zh-Hans", f"{args.unit}.json")
+        tbak = tfile + ".e2ebak"
+        had_t = os.path.exists(tfile)
+        try:
+            if had_t:
+                shutil.copy2(tfile, tbak)
+            # 注意：这个路由在 **GET 分支**，参数走 query string，
+            # 返回纯文本（不是 json），所以按 bytes 解；导出带 UTF-8 BOM
+            exp0 = http(port, f"/api/export/trans?unit={args.unit}", timeout=300)
+            raw = exp0 if isinstance(exp0, (bytes, bytearray)) else b""
+            t0 = raw.decode("utf-8-sig", "replace") if raw else (exp0.get("text") or "")
+            lines0 = t0.splitlines()
+            heads = [l for l in lines0 if l.startswith("### ")]
+            rep.add(bool(heads) and "|||" not in t0 and raw[:3] == b"\xef\xbb\xbf",
+                    "译文导出为块式（带 BOM）", f"{len(heads)} 块")
+            # 取第一个真实块，模拟"AI 翻好了导回来"：块头 + 原有 ja 行 + 补一行 zh
+            i = next((k for k, l in enumerate(lines0) if l.startswith("### ")), -1)
+            pick = [lines0[i]] if i >= 0 else []
+            j = i + 1
+            while i >= 0 and j < len(lines0) and lines0[j].startswith("ja:"):
+                pick.append(lines0[j])
+                j += 1
+            imp = http(port, "/api/import/trans",
+                       {"unit": args.unit,
+                        "text": "\n".join(pick + ["zh: 端到端测试译文"]) + "\n"},
+                       timeout=120)
+            ok_imp = (imp.get("added") or 0) + (imp.get("updated") or 0) > 0
+            rep.add(ok_imp, "译文导入（块式）",
+                    f"新增{imp.get('added')} 坏{imp.get('bad')} "
+                    f"失配{len(imp.get('mismatch') or [])}")
+            # 旧的「原文 ||| 译文」还得继续能吃，老 txt 不能报废
+            imp2 = http(port, "/api/import/trans",
+                        {"unit": args.unit,
+                         "text": "カーテンが開かれ ||| 窗帘被拉开\n"}, timeout=120)
+            rep.add((imp2.get("added") or 0) + (imp2.get("updated") or 0) > 0,
+                    "译文导入（旧 ||| 兼容）",
+                    f"新增{imp2.get('added')} 坏{imp2.get('bad')}")
+            exp = http(port, f"/api/export/trans?unit={args.unit}", timeout=300)
+            txt = exp.decode("utf-8-sig", "replace") \
+                if isinstance(exp, (bytes, bytearray)) else (exp.get("text") or "")
+            rep.add("端到端测试译文" in txt and "窗帘被拉开" in txt,
+                    "译文导出含刚导入的内容", f"{len(txt)} 字符")
+        except Exception as e:                                # noqa: BLE001
+            rep.add(False, "译文导入导出", str(e)[:70])
+        finally:
+            # 还原译文库：测试数据一条都不许留下
+            if had_t and os.path.exists(tbak):
+                shutil.move(tbak, tfile)
+            elif not had_t and os.path.exists(tfile):
+                os.remove(tfile)
 
         # (e) 导出 CG
         try:

@@ -393,7 +393,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/export/trans":
             unit = q.get("unit") or ""
             text = exports.export_trans(unit)
-            body = text.encode("utf-8")
+            # 带 BOM：不加的话 Windows 记事本另存为时容易落成 GBK，导回来全乱码
+            body = text.encode("utf-8-sig")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Disposition",

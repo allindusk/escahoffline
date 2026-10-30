@@ -73,7 +73,9 @@
 .tp-cmp-col.good .tp-cmp-h { color: #8fe0a4; }
 .tp-cmp-code { font-family: Consolas, "Courier New", monospace; font-size: 12px;
   line-height: 1.9; color: #b9cde0; word-break: break-all; }
-.tp-bar { color: #ffb454; font-weight: 700; }
+/* 块头独立成行：窄栏里 ### 那行较长，跟着后面的 ja: 折行会看不清结构 */
+.tp-cmp-code b { display: block; color: #ffb454; font-size: 11.5px; }
+.tp-demo2 { color: #8fa8c2; }               /* 原文第二行，示意多行 */
 .tp-empty { color: #5c718a; font-style: italic; }
 .tp-fill { color: #8fe0a4; }
 .tp-cmp-f { margin-top: 7px; font-size: 11.5px; color: #7d92ab; }

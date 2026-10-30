@@ -134,7 +134,8 @@ escalation_heroines/escahoffline/
 - UI 文案：`web/assets/i18n/*.json`（`i18n.js` 加载），`data-i18n` 属性驱动
 - 剧情译文：`web/assets/i18n/zh-Hans/<unit>.json`，**key 是日文原文**，`messages` 子字典
 - 导入导出走 `server/exports.py` 的 `export_trans` / `import_trans`，
-  格式 `原文 ||| 译文`，文件头自带给 AI 的说明——改格式要同步改文件头
+  块式格式（一句一个 `### 编号 【说话人】 (N行)` 块，块内 `ja:` / `zh:`），
+  文件头自带给 AI 的说明——改格式要同步改文件头
 
 ### E. 改演出表现
 - 所有指令在 `player.js` 的 `playPart` 主循环 `case 'XxxMethod'` 里
@@ -229,7 +230,9 @@ curl -s -o /dev/null -w "%{time_total}s\n" http://127.0.0.1:8123/api/stats   # �
 这是本项目投入产出最高的方向，具体流程见 `docs/翻译指南.md`。要点：
 
 - 译文文件在 `web/assets/i18n/zh-Hans/<unit>.json`，`{"messages": {"日文原文": "中文"}}`
-- 导出格式 `原文 ||| 译文`，文件头有给人/AI 的说明，**不要改原文字符串**
+- 导出格式是块式：一句一个 `### 编号 【说话人】 (N行)` 块，块内 `ja:` 原文 / `zh:` 译文；
+  文件头有给人/AI 的说明，**不要改块头编号和 ja: 原文**（译文行数不能超过 N）
+- 发言人（对话框上方的名字）单独一张全局表 `zh-Hans/_speakers.json`，全站共用
 - 术语统一用 `output/custom_dict.json`（日文 Galgame 术语表）
 - 日文「ダメージを回復」是"恢复**所受伤害**"，「スタミナを回復」才是"恢复体力"，别混
 - 露骨内容按语义逐句判断：只有真正露骨才跳过，拟声/惊叫/擦边照常翻译

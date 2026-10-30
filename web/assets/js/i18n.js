@@ -133,7 +133,8 @@ window.I18N = (() => {
       })
       .catch(() => { wanted.delete(k); story.set(k, new Map()); return null; });
     wanted.set(k, p);
-    return p;
+    // 发言人名字表跟进台词一起等：否则第一句的名字会先显示日文再跳成中文
+    return Promise.all([p, loadSpeakers()]).then(([m]) => m);
   }
 
   /** 取一句台词：优先译文，没有就回退源文本。永不返回 null。 */
@@ -153,6 +154,37 @@ window.I18N = (() => {
   let _charFn = () => null;
   function ST_CHAR() { try { return _charFn(); } catch (e) { return null; } }
 
+  /* ---------- 发言人译名 ---------- */
+  /* 对话框上方那个名字来自 ShowMessageWindow.Name，是**口语称呼**
+     （トキサダ / ハルカ），而 names.js 存的是全长名（神騎プラチネル）——
+     两者实测只有 2.3% 能对上（按出现次数算），所以没法自动映射。
+     于是单独立一张全局表 assets/i18n/<lang>/_speakers.json：
+       { messages: { "トキサダ": "托基萨达", ... } }
+     全站共用一份（同一个角色在 383 部剧情里都叫トキサダ），翻一次终身受益，
+     不按剧情拆文件。文件名以 _ 开头，所以不会被译文统计当成一部剧情。 */
+  const spk = new Map();
+  let spkReady = null;
+
+  function loadSpeakers() {
+    if (lang === SOURCE) return Promise.resolve();
+    if (spkReady) return spkReady;
+    spkReady = loadJson(`assets/i18n/${lang}/_speakers.json`)
+      .then(d => {
+        for (const [k, v] of Object.entries((d || {}).messages || {})) {
+          if (k && v) spk.set(k, v);
+        }
+      })
+      .catch(() => { spkReady = null; });   // 没有这张表很正常，下次再试
+    return spkReady;
+  }
+
+  /** 发言人显示名：有译名用译名，没有就回退日文原文（永不返回空串以外的怪值）。 */
+  function speaker(name) {
+    if (!name) return '';
+    if (lang === SOURCE) return name;
+    return spk.get(name) || name;
+  }
+
   /* ---------- 语言切换 ---------- */
   function emit() {
     listeners.forEach(fn => { try { fn(lang); } catch (e) { console.warn(e); } });
@@ -162,6 +194,7 @@ window.I18N = (() => {
     next = norm(next);
     if (next === lang) return lang;
     lang = next;
+    spk.clear(); spkReady = null;           // 名字表按语言分开，切语言要重取
     try { localStorage.setItem(KEY_STORE, lang); } catch (e) { }
     applyDom();
     if (!silent) emit();
@@ -185,6 +218,7 @@ window.I18N = (() => {
     ready: uiReady,
     t, setLang, cycle, applyDom,
     loadStory, storyFor, msg,
+    speaker, loadSpeakers,
     hasDict: storyKey => (lang !== SOURCE) && story.has(key(storyKey)),
     on(fn) { listeners.push(fn); },
     bindChar(fn) { _charFn = fn; },

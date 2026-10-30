@@ -28,12 +28,20 @@ const $ = s => document.querySelector(s);
 /* 多语言层（web/i18n.js）。缺失时整套降级为「原文」，行为与加这层之前一致。 */
 const NOOP_I18N = {
   msg: m => (m == null ? '' : (m.Message != null ? m.Message : '')),
+  speaker: n => (n == null ? '' : n),
   t: (k, fb) => (fb != null ? fb : k),
   lang: () => 'ja', source: 'ja', label: () => '日本語',
   cycle: () => 'ja', applyDom: () => { }, loadStory: () => Promise.resolve(null),
   on: () => { }, bindChar: () => { }, ready: Promise.resolve(), supported: ['ja'],
 };
 const L10N = window.I18N || NOOP_I18N;
+
+/* 对话框上方的发言人名字。ShowMessageWindow.Name 是日文口语称呼（トキサダ），
+   译文放在全局表 _speakers.json 里，没译文就原样显示日文。 */
+function spkName(m) {
+  const n = m && m.Name;
+  return n ? (L10N.speaker ? L10N.speaker(n) : n) : '';
+}
 
 const ST = {
   char: null, key: null, part: 0,
@@ -518,9 +526,10 @@ function showWindow(m) {
   const w = $('#msgWindow'), n = $('#msgName');
   if (!SET.showWin) return Promise.resolve();
   w.classList.add('on');
-  if (m.Name) { n.textContent = m.Name; n.classList.add('on'); }
+  const who = spkName(m);
+  if (who) { n.textContent = who; n.classList.add('on'); }
   else n.classList.remove('on');
-  $('#msgText').classList.toggle('narr', !m.Name);
+  $('#msgText').classList.toggle('narr', !who);
   return wait(Math.max(num(m.Time, .2), .05) * 1000);
 }
 function hideWindow(m) {
@@ -703,7 +712,7 @@ function runOne(m, midx, isSeek) {
     case 'ShowMessageWindow':
       // VoiceMark: ○ 有配音 / ● 无配音（主角）
       ST.voiceHas = (m.VoiceMark === '○');
-      ST.curName = m.Name || '';
+      ST.curName = spkName(m);
       P(showWindow(m));
       return;
     case 'HideMessageWindow': P(hideWindow(m)); return;
@@ -846,7 +855,7 @@ function buildLineIndex() {
   const out = [];
   let name = '';
   ST.methods.forEach((m, i) => {
-    if (m.Method === 'ShowMessageWindow') name = m.Name || '';
+    if (m.Method === 'ShowMessageWindow') name = spkName(m);
     else if (m.Method === 'ShowMessage') {
       out.push({ midx: i, who: name, text: lineText(m) });
     }
@@ -1003,14 +1012,15 @@ async function seekTo(midx) {
     for (let i = 0; i < midx; i++) {
       if (ST.methods[i].Method === 'ShowMessageWindow') lastWindow = ST.methods[i];
     }
-    ST.curName = lastWindow ? (lastWindow.Name || '') : '';
+    const whoJump = lastWindow ? spkName(lastWindow) : '';
+    ST.curName = whoJump;
     ST.voiceHas = !!(lastWindow && lastWindow.VoiceMark === '○');
     if (lastWindow) {
       const w = $('#msgWindow'), n = $('#msgName');
       w.classList.add('on');
-      if (lastWindow.Name) { n.textContent = lastWindow.Name; n.classList.add('on'); }
+      if (whoJump) { n.textContent = whoJump; n.classList.add('on'); }
       else n.classList.remove('on');
-      $('#msgText').classList.toggle('narr', !lastWindow.Name);
+      $('#msgText').classList.toggle('narr', !whoJump);
     }
 
     // 3) 目标句的语音挂在 midx 前一条 VOICE 上，补播它
