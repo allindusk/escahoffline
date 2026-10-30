@@ -812,6 +812,42 @@ def regen_charmeta() -> None:
     run_script("gen_charmeta.py", quiet=True)
 
 
+def sync_wiki(job=None, proxy: str | None = None, deep: bool = False,
+             detail_limit: int = 0) -> dict:
+    """从公开 Wiki 抓取角色元信息（稀有度/类型/势力…），合并进本机
+    ``userdata/char_meta.json`` 并重建成 ``charmeta.js``。
+
+    这是把"角色信息数据源"从本地 ``escah`` WIKI 镜像换成公开页面的运行时入口：
+    * ``deep=False``：只抓角色一览页（一次请求，拿名前 + 类型/势力 + 属性），足够
+      让 CG 页/侧栏显示类型；
+    * ``deep=True`` / ``detail_limit>0``：再逐页补 レアリティ(稀有度)。
+
+    连不上 Wiki（多半没开代理）时抛 ``wiki.WikiUnreachable``，由 ``api`` 层捕获后
+    在 ``job.detail["proxy_needed"]`` 打标，前端据此提示用户开代理补下载。
+    """
+    from . import wiki as wiki_mod
+    scraped = wiki_mod.scrape(proxy=proxy, deep=deep, detail_limit=detail_limit)
+    path = os.path.join(WS, "char_meta.json")
+    existing = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                existing = json.load(f) or {}
+        except Exception:                                      # noqa: BLE001
+            existing = {}
+    merged = wiki_mod.merge_meta(existing, scraped)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=1)
+    if job is not None:
+        n_r = sum(1 for v in scraped.values() if v.get("r"))
+        job.log(f"Wiki 角色信息：合并 {len(scraped)} 条"
+                + (f"，其中稀有度 {n_r}" if deep or detail_limit else ""))
+    regen_charmeta()
+    return {"merged": len(merged), "scraped": len(scraped),
+            "with_rarity": sum(1 for v in merged.values() if v.get("r"))}
+
+
 # ================================================================ 自检
 
 

@@ -25,6 +25,8 @@ from . import (exports, jobs, media, mirrors, packs, paths, proc, updater,
                videxport)
 from .cdn import install as cdn_install
 from .cdn import manifest as cdn_manifest
+from .cdn import stages as cdn_stages
+from .cdn import wiki as cdn_wiki
 
 STOP = threading.Event()
 
@@ -248,6 +250,18 @@ def run_video_export(job, units: list[str], parts: list[int],
         # finish() → 界面上是"完成"，用户找一个不存在的 mp4（e2e 就是这么漏掉的）。
         job.fail("全部失败：" + (failed[0]["error"] if failed else ""))
     return {"done": ok, "failed": failed}
+
+
+def _sync_wiki(job, proxy: str | None, deep: bool, detail_limit: int) -> dict:
+    """从公开 Wiki 拉角色信息。连不上（多半没开代理）时把 proxy_needed 标进
+    job.detail，前端据此提示用户开启代理后补下载。"""
+    try:
+        return cdn_stages.sync_wiki(job=job, proxy=proxy, deep=deep,
+                                    detail_limit=detail_limit)
+    except cdn_wiki.WikiUnreachable as e:
+        job.detail["proxy_needed"] = bool(e.proxy_hint)
+        job.detail["wiki_error"] = str(e)[:300]
+        raise
 
 
 def _refresh_manifest(job) -> dict:
@@ -666,6 +680,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/manifest/refresh":
             job = jobs.submit("manifest", "刷新官方资源清单",
                               lambda j: _refresh_manifest(j))
+            return self._json({"job": job.snapshot()})
+        if path == "/api/wiki/sync":
+            b = self._body()
+            proxy = (b.get("proxy") or "") or None
+            deep = bool(b.get("deep"))
+            detail_limit = int(b.get("detail_limit") or 0)
+            job = jobs.submit("wiki", "从 Wiki 更新角色信息",
+                              lambda j: _sync_wiki(j, proxy, deep, detail_limit))
             return self._json({"job": job.snapshot()})
         if path == "/api/mirrors/test":
             b = self._body()

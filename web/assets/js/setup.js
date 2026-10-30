@@ -612,6 +612,31 @@
       }
     });
 
+    // 刷新官方清单成功后，顺带从 Wiki 补一次角色信息（用户要求：更新剧情时
+    // 也更新角色类型/稀有度）。只抓一览页 + 少量详情，一次请求为主，失败（没开代理）
+    // 也不影响清单本身。同一清单任务只触发一次。
+    const mfDone = (list || []).find(j => j.kind === 'manifest' && j.state === 'done');
+    if (mfDone && ST._wikiAfter !== mfDone.id) {
+      ST._wikiAfter = mfDone.id;
+      wikiSync(false, 60);
+    }
+
+    // 从 Wiki 更新角色信息：失败（多为没开代理）→ 提示开代理补下载；成功 → 显示条数
+    const wk = (list || []).find(j => j.kind === 'wiki');
+    const wtip = $('#wikiProxyTip');
+    const wres = $('#wikiResult');
+    if (wk) {
+      if (wk.state === 'failed' && wk.detail && wk.detail.proxy_needed) {
+        if (wtip) wtip.style.display = 'block';
+        if (wres) wres.textContent = '';
+      } else if (wk.state === 'done') {
+        if (wtip) wtip.style.display = 'none';
+        if (wres) wres.textContent = '已更新 ' + ((wk.detail && wk.detail.scraped) || '') + ' 个角色';
+      } else if (wk.state === 'running' || wk.state === 'queued') {
+        if (wres) wres.textContent = '抓取中（需代理）…';
+      }
+    }
+
     if (!list || !list.length) { bar.innerHTML = ''; return; }
     const now = Date.now() / 1000;
     // 只有"还在跑"的常驻；结束的（done / 取消 / 失败）留 6 秒就收起来。
@@ -1093,6 +1118,18 @@
     if (box) box.textContent = '已开始，进度见底部（首次约 10–20 秒）';
     startJob('manifest/refresh', {}, '开始刷新资源清单');
   };
+  // 从公开 Wiki 抓角色类型/稀有度。deep=false 只抓一览页（一次请求），
+  // detail_limit>0 再补抓前 N 个缺稀有度的角色子页面。站点在日本，需代理。
+  function wikiSync(deep, limit) {
+    const res = $('#wikiResult');
+    if (res) res.textContent = '抓取中（需代理）…';
+    const tip = $('#wikiProxyTip');
+    if (tip) tip.style.display = 'none';
+    startJob('wiki/sync', {deep: !!deep, detail_limit: limit || 0},
+             '从 Wiki 更新角色信息');
+  }
+  $('#btnWikiSync').onclick = () => wikiSync(false, 60);
+  $('#btnWikiRetry').onclick = () => wikiSync(false, 60);
 
   $('#btnCheckUpdate').onclick = async () => {
     $('#updResult').textContent = '检查中…';

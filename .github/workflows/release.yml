@@ -64,6 +64,16 @@ jobs:
           Write-Host "（缺素材时校验会失败，属预期，不阻断构建）"
         continue-on-error: true
 
+      # 构建时从公开 Wiki 抓取角色类型/稀有度，写进 char_meta.json 并重建 charmeta.js。
+      # Wiki 在日本、需代理，CI runner 多半没代理 → 失败就跳过，用仓库已提交的元信息。
+      - name: 刷新 Wiki 角色信息（可选，需代理）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          python tools/scrape_wiki.py
+          python server/cdn/scripts/gen_charmeta.py
+          Write-Host "（无法访问 Wiki 时跳过，使用仓库内已提交的 char_meta 生成）"
+
       # ---------------- 组装程序目录 ----------------
       # 拷贝清单 + 索引白名单 + 硬自检都在 tools/pack_app.ps1 里，与 e2e 共用一份。
       # 以前两处各写一遍，收紧白名单时改了两处还漏了 .gitkeep/自检，

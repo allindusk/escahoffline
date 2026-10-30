@@ -70,6 +70,7 @@ for (const c of Object.keys(NAMES).concat(Object.keys(META))) {
       name: NAMES[c] || ('ID ' + c),
       zh: (META[c] && META[c].zh) || '',
       r: (META[c] && META[c].r) || '',
+      t: (META[c] && META[c].t) || '',
       d: (META[c] && META[c].d) || '',
       groups: [],
       total: 0
@@ -177,7 +178,7 @@ function renderChars() {
         ? `<img alt="" loading="lazy">`
         : `<span class="ava-ph">${(c.zh || c.name || '?').trim().slice(0, 1)}</span>`) +
       `<span class="info"><span class="nm">${c.name}</span>` +
-      `<span class="sub">${c.zh ? c.zh + ' · ' : ''}${c.groups.length} 组 / ${c.total} 张${dTxt}</span></span>`;
+      `<span class="sub">${c.zh ? c.zh + ' · ' : ''}${c.t ? c.t + ' · ' : ''}${c.groups.length} 组 / ${c.total} 张${dTxt}</span></span>`;
     // 必须走候选链：头像实际是 .png，只写死一个 src 会 404 且不会回退
     if (have) setChain(d.querySelector('img'), avatarCands(c.id));
     d.onclick = () => { curChar = c.id; renderChars(); renderGrid(); };
