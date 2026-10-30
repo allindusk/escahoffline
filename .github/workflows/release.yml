@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 读取版本号
         id: ver
@@ -65,65 +65,14 @@ jobs:
         continue-on-error: true
 
       # ---------------- 组装程序目录 ----------------
+      # 拷贝清单 + 索引白名单 + 硬自检都在 tools/pack_app.ps1 里，与 e2e 共用一份。
+      # 以前两处各写一遍，收紧白名单时改了两处还漏了 .gitkeep/自检，
+      # 于是「现场组装」的包与真发布的包不是同一个东西，e2e 结论不可信。
       - name: 组装程序目录
         shell: pwsh
         run: |
-          $v = "${{ steps.ver.outputs.version }}"
-          $dst = "dist/ESCAH-Offline"
-          New-Item -ItemType Directory -Force -Path $dst | Out-Null
-
-          Copy-Item server, tools, docs -Destination $dst -Recurse
-          Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $dst
-
-          New-Item -ItemType Directory -Force -Path "$dst/web/data" | Out-Null
-          # serve.py / stop_server.ps1 是「纯前端预览」调试工具，只服务开发，
-          # 不放进发布包 —— 否则用户会看到两个都叫「启动」的脚本
-          Copy-Item web/*.html -Destination "$dst/web"
-          Copy-Item web/assets -Destination "$dst/web" -Recurse
-          # 索引要带上（播放器靠它画目录树）。
-          # **白名单**：只列程序自带的索引文件。
-          # 以前用黑名单（只排除 char_*/adv_*），结果把本机产物一起打包了：
-          #   imgmap.x2.js    超分记录 → 新用户打开画质页显示"没有需要超分的图"
-          #   imgmap.base.js  WebP 覆盖层
-          #   sfxmap.js/json  音频映射（依赖本机导出的 m4a）
-          #   stand_slot.json 立绘落点缓存
-          #   还有手工备份 *.orig
-          # 白名单模式：新增文件默认不进包，要进必须在这里加一行。
-          $INDEX_FILES = @(
-            'advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
-            'imgmap.js', 'index.js', 'names.js', 'packs.links.js',
-            'stand_layers.json'
-          )
-          foreach ($f in $INDEX_FILES) {
-            $src = Join-Path 'web/data' $f
-            if (Test-Path $src) {
-              Copy-Item $src -Destination "$dst/web/data"
-            } else {
-              Write-Host "::warning::索引缺失：$f"
-            }
-          }
-
-          New-Item -ItemType Directory -Force -Path "$dst/web/media", "$dst/userdata" | Out-Null
-          Set-Content -Path "$dst/web/media/.gitkeep" -Value "" -NoNewline
-          Set-Content -Path "$dst/userdata/.gitkeep" -Value "" -NoNewline
-
-          # 把 app.json 里的占位仓库名换成真实仓库，用户开箱即可检查更新
-          $app = "$dst/web/data/app.json"
-          (Get-Content $app -Raw) -replace 'YOUR_GITHUB_NAME/[^"]+', "${{ github.repository }}" |
-            Set-Content $app -Encoding utf8
-
-          # 硬自检：web/data 里只能有那 9 个索引。
-          # 多出任何文件都说明本机产物混进了发布包（曾因此让新用户看到
-          # "没有需要超分的图（都已做过）"）。
-          $extra = Get-ChildItem "$dst/web/data" -File |
-                   Where-Object { $_.Name -notin $INDEX_FILES }
-          if ($extra) {
-            $names = ($extra | Select-Object -ExpandProperty Name) -join ', '
-            throw "发布包里混进了本机产物：$names"
-          }
-          "web/data 索引检查通过（$((Get-ChildItem "$dst/web/data" -File).Count) 个文件）"
-
-          "程序目录组装完成：$((Get-ChildItem $dst -Recurse -File | Measure-Object).Count) 个文件"
+          pwsh tools/pack_app.ps1 -Dst dist/ESCAH-Offline -Repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw "程序目录组装失败" }
 
       # 纯代码更新包：只含程序与文档，不含 Python / 依赖 / 素材。
       # 程序内「检查程序更新」下的是它（3–5 MB），更新器按白名单覆盖即可。
@@ -225,7 +174,7 @@ jobs:
 
       # ---------------- 发布 ----------------
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ESCAH-Offline-v${{ steps.ver.outputs.version }}
           # 明确两个成品：不要 dist/py.zip（那是下载的 embedded Python 原始压缩包）

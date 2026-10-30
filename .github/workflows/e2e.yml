@@ -36,7 +36,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ============================================================
       #  1. 拿到被测的包
@@ -51,6 +51,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          # 把输入打出来：事后只看 workflow run 页面根本不知道这次跑了哪套参数
+          # （GitHub 的 run API 也不返回 inputs）。
+          Write-Host "输入：source=${{ inputs.source }} unit=${{ inputs.unit }} with_base=${{ inputs.with_base }} full=${{ inputs.full }}"
 
           function Build-Portable {
             param([string]$Dst)
@@ -58,22 +61,10 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
 
-            New-Item -ItemType Directory -Force -Path $Dst | Out-Null
-            Copy-Item server, tools, docs -Destination $Dst -Recurse
-            Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh, 启动.bat -Destination $Dst
-            New-Item -ItemType Directory -Force -Path "$Dst/web/data" | Out-Null
-            Copy-Item web/*.html, web/serve.py -Destination "$Dst/web"
-            Copy-Item web/assets -Destination "$Dst/web" -Recurse
-            # 白名单：只带程序自带的索引（黑名单会把本机产物一起打包，
-            # 例如 imgmap.x2.js 会让新用户看到"没有需要超分的图"）
-            $INDEX = @('advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
-                       'imgmap.js', 'index.js', 'names.js', 'packs.links.js',
-                       'stand_layers.json')
-            foreach ($f in $INDEX) {
-              $s2 = Join-Path 'web/data' $f
-              if (Test-Path $s2) { Copy-Item $s2 -Destination "$Dst/web/data" }
-            }
-            New-Item -ItemType Directory -Force -Path "$Dst/web/media", "$Dst/userdata" | Out-Null
+            # 程序目录的拷贝/白名单/自检与 release.yml 共用同一个脚本，
+            # 免得"现场组装的包"和"真发布的包"结构不一致（那样 e2e 结论没意义）。
+            pwsh tools/pack_app.ps1 -Dst $Dst -Repo $env:GH_REPO
+            if ($LASTEXITCODE -ne 0) { throw "程序目录组装失败" }
 
             $pyVer = "3.11.9"
             Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip" -OutFile "dist/py.zip"
@@ -113,6 +104,23 @@ jobs:
             if (($LASTEXITCODE -eq 0) -and (Get-ChildItem dist/*win64-portable.zip -ErrorAction SilentlyContinue)) {
               Write-Host "已从 Releases 下载真实发布产物"
               $got = $true
+              # 发布包可能比当前提交旧（VERSION 没 bump 时 release 不会重建），
+              # 那样测的是老代码，红绿都没有参考价值 —— 必须显式说出来。
+              try {
+                $rel = gh api "repos/$env:GH_REPO/releases/latest" | ConvertFrom-Json
+                $asset = $rel.assets |
+                         Where-Object { $_.name -like "*win64-portable.zip" } |
+                         Select-Object -First 1
+                $pub = [DateTimeOffset]::Parse($asset.created_at).UtcDateTime
+                $head = [DateTimeOffset]::FromUnixTimeSeconds(
+                          [int](git log -1 --format=%ct)).UtcDateTime
+                Write-Host "发布包上传 $($pub.ToString('u'))｜当前提交 $($head.ToString('u'))"
+                if ($pub -lt $head) {
+                  Write-Host "::warning::被测包比当前提交旧（多半是 VERSION 未 bump 的旧构建）—— 结果不代表 HEAD"
+                }
+              } catch {
+                Write-Host "::warning::核对发布包时间失败：$($_.Exception.Message)"
+              }
             } else {
               Write-Host "::warning::Releases 里没拿到包（还没发布？），回退到现场组装"
             }
@@ -167,7 +175,7 @@ jobs:
 
       - name: 上传日志（失败也传）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-logs
           path: |
