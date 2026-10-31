@@ -57,6 +57,15 @@ New-Item -ItemType Directory -Force -Path "$Dst/web/media", "$Dst/userdata" | Ou
 Set-Content -Path "$Dst/web/media/.gitkeep" -Value "" -NoNewline
 Set-Content -Path "$Dst/userdata/.gitkeep" -Value "" -NoNewline
 
+# 清掉 Python 缓存：release.yml 的「后端导入自检」会先 import server.*，
+# runner 上于是有了 server/**/__pycache__/*.pyc，而上面是 -Recurse 整目录拷贝
+# → v1.0.3 的 portable/update 包里混进了 25 个 .pyc（跨机器无用，纯脏东西）。
+Get-ChildItem $Dst -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem $Dst -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.pyc', '.pyo' } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
 # 把 app.json 里的占位仓库名换成真实仓库，用户开箱即可检查更新。
 # **必须显式按 UTF-8 读写**：Get-Content/Set-Content 的默认编码随 PowerShell 版本
 # 变化（5.1 读无 BOM 文件当 ANSI），实测会把 app.json 里的中文说明改成乱码。
@@ -74,6 +83,14 @@ $extra = Get-ChildItem "$Dst/web/data" -File | Where-Object { $_.Name -notin $IN
 if ($extra) {
     $names = ($extra | Select-Object -ExpandProperty Name) -join ', '
     throw "程序目录里混进了本机产物：$names"
+}
+
+# 同样的硬自检：Python 缓存一律不许进包（.pyc 是构建机上那条解释器编的，
+# 跨机器没用；还会让用户看到一堆陌生的 .pyc 而怀疑包不对）
+$junk = Get-ChildItem $Dst -Recurse -File |
+    Where-Object { $_.Extension -in '.pyc', '.pyo' }
+if ($junk) {
+    throw "程序目录里混进了 Python 缓存：$($junk[0].FullName)（共 $($junk.Count) 个）"
 }
 
 $n = (Get-ChildItem $Dst -Recurse -File | Measure-Object).Count

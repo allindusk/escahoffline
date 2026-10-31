@@ -15,10 +15,13 @@ Electron 更新器）都是同一套：
 白名单是关键 —— 只覆盖程序文件：
 
     server/**  web/*.html  web/assets/**  tools/*.py  docs/**  VERSION
-    README.md  requirements.txt  start.bat / start.sh
+    README.md  NOTICE.md  LICENSE  requirements.txt  start.bat / start.sh
 
-``web/media/**``、``web/data/**``、``userdata/**`` 永远不会被碰，
-所以更新不会丢资源、不会丢译文、不会丢配置。
+``web/media/**``、``web/data/**``、``userdata/**`` 默认不会被碰，所以更新不会丢
+资源、不会丢译文、不会丢配置。例外是**程序产出的几个索引**（见
+:data:`WEB_DATA_UPDATABLE`）：它们是程序逻辑的产物，不刷新的话老用户永远停在
+旧数据上 —— 而且这几个要和本机现状**合并**后再覆盖，逻辑在
+:mod:`server.index_merge`。
 """
 
 from __future__ import annotations
@@ -39,8 +42,12 @@ from . import mirrors, net, paths
 #: 允许被更新覆盖的路径前缀（相对项目根）
 WHITELIST = (
     "server/", "web/assets/", "tools/", "docs/",
-    "web/index.html", "web/cg.html", "web/setup.html", "web/serve.py",
+    "web/index.html", "web/cg.html", "web/setup.html", "web/notice.html",
+    "web/serve.py",
     "VERSION", "README.md", "requirements.txt",
+    # NOTICE.md / LICENSE 是**随版本变化的法律文件**（素材、免责说明改一版就得送达），
+    # update 包里明明带了却被白名单挡掉 —— 用户看到的永远是第一次安装时那份。
+    "NOTICE.md", "LICENSE",
     "start.bat", "start.sh", "停止.bat",
     # 「启动.bat」**可以**放行：仓库里那份优先用 python\python.exe（内置），
     # 找不到才退回系统 Python，便携版与源码版通用。
@@ -56,9 +63,16 @@ BLACKLIST = ("web/media/", "web/data/", "web/assets/i18n/", "userdata/",
              ".git/", ".github/")
 #: ``web/data/`` 整体是"装了哪些剧情"的用户侧状态，更新时不能碰；但里面有几个
 #: **程序自带的索引**必须能随更新刷新 —— 否则老用户永远停在旧数据（现实例子：
-#: charmeta.js 曾经带中文名，改成纯日文后，不刷新索引的老包还会一直显示中文）。
-#: 只放行明确是程序产出、且不会被安装流程重写的文件；要放行新的必须在这里加。
-WEB_DATA_UPDATABLE = ("web/data/charmeta.js", "web/data/names.js")
+#: charmeta.js 曾经带中文名，改成纯日文后，不刷新索引的老包还会一直显示中文；
+#: 2026-11-01 的 CG 分组重写也栽在这里：cgmap.js 不在名单里，老用户升到 1.0.3
+#: 后 CG 页仍是「3 组 / 13 张」，新装用户却是对的）。
+#: 只放行明确是程序产出、且**能与本机现状合并**的文件（合并规则见
+#: :mod:`server.index_merge`）；能从本机素材再生的（imgmap / othereps /
+#: stand_layers / sfxmap）不要放行 —— 本机那份才是最新的。
+WEB_DATA_UPDATABLE = (
+    "web/data/charmeta.js", "web/data/names.js",
+    "web/data/cgmap.js", "web/data/index.js", "web/data/advindex.js",
+)
 
 
 def app_meta() -> dict:
@@ -479,6 +493,11 @@ def stage(url: str, job) -> str:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with z.open(info) as src, open(dst, "wb") as out:
                 shutil.copyfileobj(src, out)
+    # 索引类（cgmap / index / advindex）要**合并**再落盘：本机那几份里有用户装过
+    # 的剧情带来的条目，整份覆盖会丢；不覆盖又拿不到程序逻辑的修正。
+    # 只改暂存区，本机文件仍由独立更新器按白名单覆盖。
+    from . import index_merge
+    index_merge.merge_staged(staging, paths.ROOT, job.log)
     return staging
 
 

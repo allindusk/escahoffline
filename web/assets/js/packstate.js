@@ -65,6 +65,11 @@ window.PACKSTATE = (() => {
     return (cache.data && cache.data.installed) || {};
   }
 
+  /** 是否已经问过服务端（成功或失败都算）。
+   *  页面首屏比 /api/state 早，这时 online 还是 false —— 不能把它当成
+   *  "确定离线"，否则全新环境会先按"有图"渲染一轮，白打出几千个 404。 */
+  function known() { return cache.at > 0; }
+
   function isInstalled(depot) {
     return !!installed()[depot];
   }
@@ -102,6 +107,20 @@ window.PACKSTATE = (() => {
     return total ? (p.avatar || 0) >= total * 0.98 : (p.avatar || 0) > 0;
   }
 
+  /** 剧情横幅图（media/img/story/*.webp）是否基本齐全。
+   *  侧栏每行第一眼画的就是横幅，没有它就别发请求（全新 / 只下了一小撮的
+   *  环境里，按"有 1 张就有 384 张"去猜，只会换来满屏 404）。
+   *  判定口径与头像一致：按已下载的横幅包数占总数比例（≥98%）算，
+   *  而不是"磁盘上有没有图" —— 用户清过缓存后图还在、但包没了，照样该显示；
+   *  反过来只下了一部分横幅时比例不够 → 整层不显示，避免个别文件 404。 */
+  function bannersReady() {
+    const p = cache.pub;
+    if (!p) return false;
+    const total = p.bannerTotal || 0;
+    return total ? (p.banner || 0) >= total * 0.98
+                : (p.bannerImg || 0) > 0;
+  }
+
   /** 某剧情数据文件是否真的存在（正文在单元包里） */
   function hasStoryData(unit) {
     const st = status(unit);
@@ -112,8 +131,9 @@ window.PACKSTATE = (() => {
   refresh();
 
   return {
-    refresh, status, installed, isInstalled, coverage, config,
+    refresh, status, installed, isInstalled, coverage, config, known,
     missingDepots, hasStoryData, on, publicAssets, avatarsReady,
+    bannersReady,
     get online() { return cache.online; },
     get data() { return cache.data; },
     human(n) {

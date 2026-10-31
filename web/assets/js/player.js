@@ -224,6 +224,26 @@ function imgSrc(path) {
   return path + (path.includes('?') ? '&' : '?') + 'v=' + IMG_VER;
 }
 
+/* 图片层到底有没有图可拿（侧栏横幅 / 头像 / 章节横幅都靠它决定要不要发请求）。
+ *
+ * 为什么必须问一句：media/ 下的东西**一个都不随程序分发**，全新环境里
+ * 384 行列表 × 6 个候选 = 5000 多个 404，把启动窗口刷成一片红，用户以为坏了。
+ *
+ * 三态，顺序很重要：
+ *   ① 还没问到服务端（首屏比 /api/state 早）→ 一律不发图，等 PACKSTATE.on 重画；
+ *   ② 问到了且离线（纯静态托管、file://）→ 无从判断，照旧发（老行为）；
+ *   ③ 在线 → 按"该层素材是否已下载"答。
+ */
+function imgLayer() {
+  const PS = window.PACKSTATE;
+  if (!PS || !PS.known || !PS.known()) return { banners: false, avatars: false };
+  if (!PS.online) return { banners: true, avatars: true };
+  return {
+    banners: !!(PS.bannersReady && PS.bannersReady()),
+    avatars: !!(PS.avatarsReady && PS.avatarsReady()),
+  };
+}
+
 /* 图片候选链：本地超分覆盖层 → 本地转码覆盖层 → 出厂映射。
    三层都缺才是真缺图。任何一层缺失只是画质降级，不会黑图。
    （覆盖层由 server/media.py 生成：data/imgmap.x2.js / data/imgmap.base.js） */
@@ -1674,18 +1694,21 @@ function renderSidebar(filter = '') {
       `ID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}` +
       (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '') +
       (st === 'soft-missing' ? '\n公共素材未下载：可播放但可能缺背景/音乐' : '');
-    // 头像要不要请求，看**头像素材本身**是否已下载，而不是"该角色剧情是否安装"。
-    // 以前只用剧情状态判定 → 只装 2 个角色却下了全部 378 张头像时，
-    // 另外 382 个角色全变成首字色块，用户会以为头像没加载出来。
-    // 头像没下载时才退回色块（避免 384×N 个 404 刷屏）。
-    const haveImg = (st === 'ready' || st === 'soft-missing' || st === 'partial')
-      || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
+    /* 图片要不要请求，必须"能确定磁盘上有图"才发 —— 横幅和头像都不随程序分发，
+       全新环境里 384 行一次会打出 5000 多个 404，把启动窗口刷成一片红。
+       判定口径与 CG 页一致：该角色剧情已装（装的时候会导出它自己的横幅/头像），
+       或者整层素材（头像 / 横幅）已经下过。没图就画首字色块占位。 */
+    const L = imgLayer();
+    const inst = st === 'ready' || st === 'soft-missing';
+    const avatarsOK = inst || L.avatars;
+    const bannersOK = inst || L.banners;
+    const haveImg = avatarsOK || bannersOK;
     // 侧栏一项 = 横幅（占一行）+ 标题/信息（占一行）
     d.className += ' bnr';
-    // 横幅（episode_character → media/img/story/char_<id>.webp）是**随程序分发**的，
-    // 跟"剧情资源装没装"无关，所以总是渲染；加载失败才退回首字色块。
     d.innerHTML =
-      `<span class="bnr"><img alt="" loading="lazy"></span>` +
+      `<span class="bnr">` + (haveImg ? '<img alt="" loading="lazy">'
+        : `<span class="ava-ph">${esc(String(nm).slice(0, 1))}</span>`) +
+      `</span>` +
       `<span class="info"><span class="nm">${esc(nm)}</span>` +
       `<span class="sub"><span class="rar" data-r="${rar}">${m.r || '—'}</span>` +
       `<span>${c.lines ? c.lines + ' 句' : '未安装'}</span>` +
@@ -1694,13 +1717,20 @@ function renderSidebar(filter = '') {
       `</span>` +
       `<span class="cpy" title="复制角色名">⧉</span></span>`;
     // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）
-    applyChain(d.querySelector('img'),
-      [imgSrc(bannerOfChar(c.id))].concat(avatarCands(c.id)));
+    if (haveImg) {
+      const chain = [];
+      if (bannersOK) chain.push(imgSrc(bannerOfChar(c.id)));
+      if (avatarsOK) chain.push(...avatarCands(c.id));
+      applyChain(d.querySelector('img'), chain);
+    }
     bindTip(d, () => {
       const parts = c.parts || 0;
       const tr = (typeof transStatsOf === 'function') ? '' : '';
-      return `<img src="${esc(imgSrc(bannerOfChar(c.id)))}" alt="" `
-        + `onerror="this.style.display='none'">`
+      // 浮窗里的缩略图同样只在"确定有图"时才请求（鼠标扫过侧栏就会触发）
+      return (bannersOK
+        ? `<img src="${esc(imgSrc(bannerOfChar(c.id)))}" alt="" `
+          + `onerror="this.style.display='none'">`
+        : '')
         + `<div style="font-weight:600;margin-bottom:4px">${esc(nm)}</div>`
         + `<dl><dt>ID</dt><dd>${c.id}</dd>`
         + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}${m.d ? ' · 实装 ' + esc(m.d) : ''}</dd>`
@@ -1772,10 +1802,9 @@ function avatarCands(id) {
   push(`media/img/avatar/${id}.png`);
   push(`media/img/avatar/${id}.webp`);
   push(`media/img/avatar/${id}.jpg`);
-  if (SET.useX2 !== false) {
-    push(`media/img_x2/avatar/${id}.webp`);
-    push(`media/img_x2/avatar/${id}.png`);
-  }
+  // **不再硬拼 media/img_x2/avatar/**：超分层是本机可选产物，只有 imgmap.x2.js
+  // 登记过的才算数（上面 IMGX2.avatar 那一条已经覆盖）。硬拼路径等于给每个角色
+  // 白送两个 404 —— 没跑过超分的人永远没有这个文件。
   return out.map(imgSrc);
 }
 /** 非角色剧情列表（主线 / 活动 / 其他） */
@@ -1808,13 +1837,15 @@ function renderOtherGroups(box, filter = '') {
     head.dataset.key = 'etc_' + (g.no ?? '?');
     // 横幅里已经写着 RAID BOSS / 拡域戦，标题里就不重复了，省出宽度给后半段
     const shortName = g.name.replace(/^RAID BOSS\s*/, '').replace(/^拡域戦\s*/, '拡域 ');
+    // 入口横幅也是解包产物：没下过公共素材就别请求（否则「其他」一展开就一片 404）
+    const hasBnr = !!g.no && imgLayer().banners;
     head.innerHTML =
-      (g.no ? `<img alt="" loading="lazy" src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
+      (hasBnr ? `<img alt="" loading="lazy" src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
         + ` onerror="this.style.display='none'">` : '')
       + `<span class="nm">${esc(shortName)}</span>`
       + `<span class="cnt">${eps.length}</span>`
       + `<span class="arw">${open ? '▾' : '▸'}</span>`;
-    if (g.no) bindTip(head, () => `<img src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
+    if (hasBnr) bindTip(head, () => `<img src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
       + ` alt="" onerror="this.style.display='none'">`
       + `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
       + `<dl><dt>入口</dt><dd>etc_${g.no}</dd>`
@@ -1874,8 +1905,21 @@ function renderAdvList(filter = '') {
   const box = $('#charList');
   if (!box) return;
   // 「其他」走入口分组视图（16 个入口 → 展开成话）
-  if (SRC === 'other' && window.__OTHER_EPS && window.__OTHER_EPS.length) {
-    renderOtherGroups(box, filter);
+  if (SRC === 'other') {
+    if (window.__OTHER_EPS && window.__OTHER_EPS.length) {
+      renderOtherGroups(box, filter);
+    } else if (!window.__OTHER_EPS_TRIED) {
+      // 清单可能没随更新包下来（1.0.3 增量更新漏过它）。按需拉一次，
+      // 缺失就静默降级到「暂不可用」，不再有 <script> 404 刷屏，也不会死循环重试。
+      window.__OTHER_EPS_TRIED = true;
+      box.innerHTML = '<div class="advEmpty">其他剧情清单加载中…</div>';
+      fetch('data/othereps.js?v=1118a').then(r => r.ok ? r.text() : null)
+        .then(t => { if (t) { try { (0, eval)(t); } catch (e) { } } })
+        .catch(() => { })
+        .finally(() => renderSidebar());
+    } else {
+      box.innerHTML = '<div class="advEmpty">其他剧情清单暂不可用</div>';
+    }
     return;
   }
   const f = filter.trim().toLowerCase();
@@ -1937,7 +1981,10 @@ function advItem(a) {
   d.dataset.key = a.key;                 // refreshSelection() 靠它判断选中
   d.dataset.id = a.key;
   if (startPart !== null) d.dataset.part = startPart;
-  const cover = bannerOfAdv(a);
+  /* 章节横幅同样是解包产物（bundle_image_story_*），没下过就别请求 */
+  const L = imgLayer();
+  const cover = (L.banners || st === 'ready' || st === 'soft-missing')
+    ? bannerOfAdv(a) : '';
   d.title = `${title}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
     + (a.first ? `\n${a.first}` : '')
     + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '');

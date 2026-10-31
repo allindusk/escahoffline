@@ -394,8 +394,10 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
    那类改成按宽 280 缩放、在 81 高的画框里垂直居中。 */
 #charList .char-btn.adv .bnr img{height:auto;width:280px;top:50%;
   transform:translateY(-50%)}
-#charList .char-btn.bnr .bnr .ava-ph{display:flex;height:40px;align-items:center;
-  justify-content:center;font-size:16.8px;color:var(--fg3)}
+/* 横幅没图时（新环境还没下公共素材）用首字色块填满整个画框，
+   否则 384 行都是空框，看起来像"图全裂了" */
+#charList .char-btn.bnr .bnr .ava-ph{display:flex;height:81px;align-items:center;
+  justify-content:center;font-size:16.8px;color:var(--fg3);background:#141a26}
 #charList .char-btn.bnr{width:296px}
 #charList .char-btn.bnr .info{display:flex;flex-direction:row;align-items:center;
   gap:7px;min-width:0}

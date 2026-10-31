@@ -118,12 +118,27 @@ window.I18N = (() => {
     return story.get(key(storyKey)) || null;
   }
 
+  /* 这门语言的整体译文包在不在：只发一次 index.json 探测。
+   * 纯净环境（没下过译文）里 index.json 也不存在 → 判"没有"，
+   * 之后不再逐个去请求 char_<id>.json / _speakers.json，避免一打开就刷 404。 */
+  let _langAvail = undefined;            // undefined=未知 / true=有 / false=无
+  function langAvailable() {
+    if (lang === SOURCE) { _langAvail = false; return Promise.resolve(false); }
+    if (_langAvail !== undefined) return Promise.resolve(_langAvail);
+    _langAvail = loadJson(`assets/i18n/${lang}/index.json`)
+      .then(d => !!(d && d.chars && Object.keys(d.chars).length))
+      .catch(() => false);
+    return _langAvail;
+  }
+
   /** 预加载某部剧情的译文。不阻塞调用方：失败也只是没有译文。 */
-  function loadStory(storyKey) {
-    if (lang === SOURCE) return Promise.resolve(null);
+  async function loadStory(storyKey) {
+    if (lang === SOURCE) return null;
     const k = key(storyKey);
-    if (story.has(k)) return Promise.resolve(story.get(k));
-    if (wanted.get(k)) return wanted.get(k);
+    if (story.has(k)) return story.get(k);
+    if (wanted.get(k)) return await wanted.get(k);
+    // 没有这门语言的译文包就别发了：直接回退日文，不给控制台刷 404
+    if (!await langAvailable()) return null;
     const p = loadJson(`assets/i18n/${lang}/${storyKey}.json`)
       .then(d => {
         const m = new Map(Object.entries(d.messages || {}));
@@ -134,7 +149,8 @@ window.I18N = (() => {
       .catch(() => { wanted.delete(k); story.set(k, new Map()); return null; });
     wanted.set(k, p);
     // 发言人名字表跟进台词一起等：否则第一句的名字会先显示日文再跳成中文
-    return Promise.all([p, loadSpeakers()]).then(([m]) => m);
+    await Promise.all([p, loadSpeakers()]);
+    return story.get(k) || null;
   }
 
   /** 取一句台词：优先译文，没有就回退源文本。永不返回 null。 */
@@ -168,13 +184,18 @@ window.I18N = (() => {
   function loadSpeakers() {
     if (lang === SOURCE) return Promise.resolve();
     if (spkReady) return spkReady;
-    spkReady = loadJson(`assets/i18n/${lang}/_speakers.json`)
-      .then(d => {
-        for (const [k, v] of Object.entries((d || {}).messages || {})) {
-          if (k && v) spk.set(k, v);
-        }
-      })
-      .catch(() => { spkReady = null; });   // 没有这张表很正常，下次再试
+    // 没有这门语言的译文包就别发请求（避免 _speakers.json 404 刷屏）
+    const probe = langAvailable();
+    spkReady = probe.then(ok => {
+      if (!ok) { spkReady = null; return; }          // 没译文包，下次再试
+      return loadJson(`assets/i18n/${lang}/_speakers.json`)
+        .then(d => {
+          for (const [k, v] of Object.entries((d || {}).messages || {})) {
+            if (k && v) spk.set(k, v);
+          }
+        })
+        .catch(() => { spkReady = null; });
+    });
     return spkReady;
   }
 
@@ -194,7 +215,7 @@ window.I18N = (() => {
     next = norm(next);
     if (next === lang) return lang;
     lang = next;
-    spk.clear(); spkReady = null;           // 名字表按语言分开，切语言要重取
+    spk.clear(); spkReady = null; _langAvail = undefined;  // 名字表/译文包按语言分开，切语言要重取
     try { localStorage.setItem(KEY_STORE, lang); } catch (e) { }
     applyDom();
     if (!silent) emit();

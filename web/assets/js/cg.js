@@ -39,8 +39,8 @@ function cgCands(f) {
   // 原图可能是 .png/.jpg（旧版导出），补几个扩展名兜底
   push('media/img/cg/' + encodeURIComponent(key + '.webp'));
   push('media/img/cg/' + encodeURIComponent(key + '.png'));
-  push('media/img_x2/cg/' + encodeURIComponent(key + '.webp'));
-  push('media/img_x2/cg/' + encodeURIComponent(key + '.png'));
+  // 不再硬拼 media/img_x2/cg/：超分层只有 imgmap.x2.js 登记过的才算数
+  // （上面 IMGX2.cg 那一条已覆盖），硬拼只会给每张图白送两个 404。
   return out;
 }
 
@@ -61,8 +61,7 @@ function avatarCands(id) {
   push('media/img/avatar/' + id + '.png?v=' + AVC);
   push('media/img/avatar/' + id + '.webp?v=' + AVC);
   push('media/img/avatar/' + id + '.jpg?v=' + AVC);
-  push('media/img_x2/avatar/' + id + '.webp?v=' + AVC);
-  push('media/img_x2/avatar/' + id + '.png?v=' + AVC);
+  // 超分头像不再硬拼路径，见上面 IMGX2.avatar（没跑过超分的人永远是 404）
   return out;
 }
 
@@ -148,9 +147,13 @@ async function loadDlState() {
   repaintGrid();
 }
 
-function dlHave(cid) {
-  const st = dlState['char_' + cid] || 'missing';
+function dlHaveUnit(unit) {
+  const st = dlState[unit] || 'missing';
   return st === 'ready' || st === 'soft-missing' || st === 'partial';
+}
+
+function dlHave(cid) {
+  return dlHaveUnit('char_' + cid);
 }
 let visible = [];        // 当前可见的 group 索引
 let shownCount = 0;      // 已渲染的卡片数
@@ -221,9 +224,15 @@ function renderChars() {
 }
 
 /* ---------- 卡片墙 ---------- */
-/* 某一组算不算"已下载"：主线/活动/其他 CG（负数 id）不在剧情包清单里，
-   一律当有图，否则它们会被误判成未下载。占位判断和筛选共用这一份口径。 */
+/* 某一组算不算"已下载"。占位判断和筛选共用这一份口径：
+ *   · 分类桶（-1/-2/-3，主线/活动/其他的 CG）挂在 adv_* 单元上（``g.u``），
+ *     按那个单元的状态算；
+ *   · 角色 CG 按 ``char_<id>`` 算；
+ *   · 没有单元信息（老数据）才退回"当有图"。
+ * 以前分类桶一律当有图 —— 全新环境一打开 CG 页就白请求一整墙不存在的缩略图
+ * （每张还要多试一个 .webp）。 */
 function groupHave(g) {
+  if (g.u) return dlHaveUnit(g.u);
   return isCat(g.c) ? true : dlHave(g.c);
 }
 

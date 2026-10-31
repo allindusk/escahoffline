@@ -236,6 +236,31 @@ jobs:
           Pop-Location
           if ($rc -ne 0) { throw "便携包自检失败：找不到 server 包（._pth 未删除？）" }
 
+          # 上面那条 import 会在便携包里留下 server/__pycache__/*.pyc —— 别打进 zip。
+          # 只清 server 的：python/Lib/site-packages 里的 .pyc 是 pip 装依赖的产物，
+          # 留着反而能让首次启动快一点，删了纯属浪费。
+          Get-ChildItem "$dst/server" -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+      # CI runner 是 UTC，zip 里存的就是 UTC 时间 —— 于是用户看到的「10-31 22:36」
+      # 其实是北京时间「11-01 06:36」，正好是这次 tag 的提交/构建时刻，
+      # 但每个版本都要被问一遍"包里的文件是不是旧的"。这里统一改成东八区。
+      # 只是给人看的元数据 → continue-on-error，绝不能因此让发布失败。
+      - name: 统一包内文件时间（UTC → 东八区）
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $epoch = [int64](git log -1 --format=%ct)
+          $t = ([DateTimeOffset]::FromUnixTimeSeconds($epoch)).ToOffset([TimeSpan]::FromHours(8)).DateTime
+          $n = 0
+          foreach ($d in 'dist/ESCAH-Offline-portable', 'dist/ESCAH-Offline-update') {
+            if (-not (Test-Path $d)) { continue }
+            Get-ChildItem $d -Recurse -File |
+              Where-Object { $_.FullName -notmatch '\\python\\' } |
+              ForEach-Object { try { $_.LastWriteTime = $t; $n++ } catch { } }
+          }
+          "已把 $n 个文件的时间改为 $t（东八区 = 提交时刻）"
+
       - name: 打 portable + update zip
         shell: pwsh
         run: |
