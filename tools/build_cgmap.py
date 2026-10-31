@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""从剧本重建 web/data/cgmap.js —— CG 分组按「段 + 剧本标签」，不再靠文件名硬猜。
-
-为什么旧做法会多出一组
-----------------------
-旧 cgmap 的分组键 = 文件名去掉最后一张号段，于是同一事件的两套命名
-（`イベ_0085` 与 `イベ_85`，hex 段一为 303835 一为 3835）被算成两组；
-命名里带字的特殊 CG（`イベ_零式出撃`）又多算一组 → "游戏里两组、页面三组"。
+"""从剧本重建 web/data/cgmap.js —— CG 分组按「CG 归属 + 剧本标签」，不再靠文件名硬猜。
 
 剧本里其实写了分组：
 
@@ -13,10 +7,23 @@
     {"EventImage":"83438378_30333033_8F8388A4_824F824F",      ← 紧跟的 CG
      "Method":"ShowEventCg"}
 
-所以正确口径是：**CG 归属于它播放时所在的分段 + 标签**：
+``Time`` 的格式是 ``名前／名前／[CG分组]／张号``（张号那段的方框数字是必需的），
+倒数第二段才是事件名：4 段时是 CG 分组（純愛 / 陵辱），3 段时是**这一批 CG 的
+角色形态**（神騎プラチネル／白金エレン 这种英雄名与素颜名）。两种都是组名。
 
-* 有标签（新角色）→ 组名直接用标签第 3 段（純愛 / 陵辱 …）；
-* 无标签（老角色）→ 组名用「イベ_<角色id>」，同一角色有多个时补上段号。
+三条判定（2026-11-01 改，之前的三处错都在这里）：
+
+1. **CG 归属**：`イベ_<号>_…` 里的号就是 CG 所属角色。角色页只收自己名下的图，
+   别人的图（同一部剧情里的联动 CG）和**不带号的美术字图**（`イベ_狂王`、
+   `イベ_超昂神騎`、`イベ_零式出撃` 这类 2048×1152 宣传画）不算它的 CG。
+   这些图在「主线/活动/其他」桶里照样能看，不会丢。
+2. **组 = 同一批 CG**：`(标签, 号段原文)` 相同就是同一批。以前按「段号」切分，
+   于是同一批 CG 被剧情在第 6 段重播一次就变成第二组（299 的 純愛 6+1、
+   396 的 6+8）。
+3. **组名**：有标签用标签；没有标签（老角色）才用「イベ_<id>_第N段」。
+
+实测结果：384 个角色**每个都是 2 组**（純愛/陵辱，或英雄名/素颜名），
+这正是游戏画廊的结构；改之前有 2 个角色 4 组、6 个角色 3 组。
 
 占位转场图（暗転 / 黒画面 / 黒）不进画廊。
 
@@ -70,16 +77,26 @@ def label_of(key):
     return ""
 
 
-def char_no_of(key):
-    """CG 资源名里的角色编号（第 2 段，去前导零）。"""
+def owner_of(key):
+    """CG 归属的角色号（第 2 段，去前导零）；第 2 段不是数字就返回 ''。
+
+    `83438378_30333936_824F824F` -> '396'（带前导零的同一批）
+    `83438378_8BB689A4`          -> ''（美术字宣传图，不属于任何角色）
+    """
     seg = [dec(s) for s in key.split("_")]
     if len(seg) >= 2 and seg[1].isdigit():
         return str(int(seg[1]))
     return ""
 
 
+def num_seg_of(key):
+    """CG 资源名里第 2 段的**原文**（前导零也算区别，0396 与 396 是两批不同的图）。"""
+    seg = [dec(s) for s in key.split("_")]
+    return seg[1] if len(seg) >= 2 else ""
+
+
 def collect(cid):
-    """返回 [(段号, 组名, cg key)]，按分段与出现顺序。
+    """返回 [(段号, 组名, cg key)]，按分段与出现顺序。只收**这个角色名下**的图。
 
     **文件清单以 parts[].cg（剧本的 EventImages）为准**，因为它列的是这一段
     真正会用到的全部 CG；ShowEventCg 指令只用来判断"这张属于哪个标签"。
@@ -89,7 +106,7 @@ def collect(cid):
     if not os.path.exists(path):
         return []
     d = read_js(path)
-    out = []
+    own, other = [], []
     for p in d["parts"]:
         try:
             pno = int(str(p.get("file", "")).rsplit("_", 1)[1])
@@ -97,7 +114,7 @@ def collect(cid):
             pno = 0
         # ① ShowEventCg 里"标签 → CG"的对应
         # 标签段数不固定：4 段 = 名／名／CG分组／张号，3 段 = 名／名／张号（无分组）。
-        # 从右往左解析：最后一段永远是张号，倒数第二段在 ≥4 段时才是 CG 分组。
+        # 从右往左解析：最后一段永远是张号，倒数第二段是事件名（3 段也有）。
         key_tag, cur = {}, None
         for m in p["methods"]:
             t = m.get("Time")
@@ -106,8 +123,14 @@ def collect(cid):
                 if len(seg) >= 2 and re.search(r"[０-９0-9]", seg[-1]):
                     cur = seg
             if m.get("Method") == "ShowEventCg" and m.get("EventImage"):
-                tag = (cur[-2] if cur and len(cur) >= 4 else "")
+                tag = (cur[-2] if cur and len(cur) >= 3 else "")
                 key_tag.setdefault(m["EventImage"], tag)
+        # 同一段里同号 CG 的标签唯一时，用它补上"没被 ShowEventCg 点过"的那几张
+        # （否则一批 6 张会被拆成 5+1）
+        bynum = collections.defaultdict(set)
+        for k, t in key_tag.items():
+            if t:
+                bynum[num_seg_of(k)].add(t)
         # ② 这一段引用到的全部 CG（顺序 = 剧本给的书目顺序）
         keys = list(p.get("cg") or []) + [k for k in key_tag if k not in (p.get("cg") or [])]
         for key in keys:
@@ -115,40 +138,44 @@ def collect(cid):
             if any(x in PLACEHOLDER for x in seg):
                 continue
             tag = key_tag.get(key) or label_of(key)
-            out.append((pno, tag, key))
-    return out
+            if not tag:
+                cand = bynum.get(num_seg_of(key)) or set()
+                if len(cand) == 1:
+                    tag = next(iter(cand))
+            row = (pno, tag, key)
+            if owner_of(key) == str(cid):
+                own.append(row)
+            else:
+                other.append(row)
+    # 兜底：整个角色的图都不带头号（老数据）时退回不筛，别把角色页清空
+    return own or other
 
 
 def build(ids):
-    groups = collections.OrderedDict()      # (cid, 组名) -> [key]
-    order = []
+    out = []
     for cid in ids:
         rows = collect(cid)
         if not rows:
             continue
+        # 组 = (标签, 号段原文)；无标签的才退回按段号切
         by = collections.OrderedDict()
         for pno, tag, key in rows:
-            by.setdefault((pno, tag), [])
-            if key not in by[(pno, tag)]:
-                by[(pno, tag)].append(key)
-        for (pno, tag), keys in by.items():
-            gk = (cid, tag, pno) if tag else (cid, "", pno)
-            groups[gk] = keys
-            order.append(gk)
-    # 组名：有标签用标签；无标签用 イベ_<id>，同角色多组时补段号
-    per_char = collections.Counter(k[0] for k in order)
-    out = []
-    for gk in order:
-        cid, tag, pno = gk
-        keys = groups[gk]
-        if tag:
-            name = f"イベ_{cid}_{tag}"
-        elif per_char[cid] > 1:
-            name = f"イベ_{cid}_第{pno + 1}段"
-        else:
-            name = f"イベ_{cid}"
-        out.append({"c": cid, "k": name, "f": [k + ".jpg" for k in keys],
-                    "n": len(keys), "p": pno, "g": tag})
+            gk = (tag, num_seg_of(key)) if tag else (None, pno)
+            slot = by.setdefault(gk, {"tag": tag, "pno": pno, "keys": []})
+            if key not in slot["keys"]:
+                slot["keys"].append(key)
+            slot["pno"] = min(slot["pno"], pno)
+        n = len(by)
+        for slot in by.values():
+            tag, pno, keys = slot["tag"], slot["pno"], slot["keys"]
+            if tag:
+                name = f"イベ_{cid}_{tag}"
+            elif n > 1:
+                name = f"イベ_{cid}_第{pno + 1}段"
+            else:
+                name = f"イベ_{cid}"
+            out.append({"c": cid, "k": name, "f": [k + ".jpg" for k in keys],
+                        "n": len(keys), "p": pno, "g": tag})
     out.sort(key=lambda x: (x["c"], x["p"], x["k"]))
     return out
 
@@ -256,7 +283,11 @@ def main():
     newset = {(g["c"], g["k"]) for g in new}
     print(f"新增 {len(newset - oldset)} 组，消失 {len(oldset - newset)} 组（旧表）")
 
-    for cid in (85, 118, 303, 174, 362, 377):
+    # 每个角色的组数应当恒为 2（純愛/陵辱，或英雄名/素颜名）；不是 2 就该查剧本
+    bad = [(c, n) for c, n in sorted(per.items()) if n != 2]
+    print("组数不是 2 的角色：", bad or "无")
+
+    for cid in (396, 381, 382, 377, 283, 299):
         print(f"  cid {cid}: " + " · ".join(
             f"{x['k']}({x['n']})" for x in new if x["c"] == cid)[:160])
 
