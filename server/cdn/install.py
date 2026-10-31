@@ -157,6 +157,11 @@ _SIZE_CACHE: dict = {"at": 0.0, "data": None}
 _SIZE_TTL = 60.0
 
 
+def invalidate_cache_size() -> None:
+    """清 bundle 缓存体积缓存（清理/安装之后调用，否则 /api/state 还报旧值）。"""
+    _SIZE_CACHE.update(at=0.0, data=None)
+
+
 def _cache_size(force: bool = False) -> dict:
     """bundle 缓存体积。带 60 秒缓存。
 
@@ -301,11 +306,37 @@ def unit_status_map() -> dict[str, str]:
 
 
 #: 公共素材的类别与体积（来自清单实测，2026-10-29）
+#:
+#: **avatar / banner 必须在这里登记**：`/api/install/base` 会用本字典做白名单
+#: 过滤（`parts = [p for p in raw if p in PUBLIC_PARTS]`），以前漏了 avatar，
+#: 前端又没显式传 parts → 头像分支永远不执行 → 用户"下完公共素材还是没头像"
+#: （侧栏与 CG 页都靠 `avatarsReady()`，于是整片首字色块）。
 PUBLIC_PARTS = {
     "bg": ("背景", "bundle_bgimage_", 205),
     "bgm": ("BGM 音乐", "bundle_music_", 539),
     "sfx": ("音效", "bundle_sound_", 31),
+    "avatar": ("角色头像", "bundle_chara_c-panel_", 20),
+    # 剧情横幅：角色剧情入口图 + 主线/活动/其他的章节横幅（播放器当标题用）
+    "banner": ("剧情横幅", "bundle_episodeicons_episode_character_|bundle_image_story_", 40),
 }
+
+#: 横幅类包的两种前缀
+BANNER_PREFIXES = ("bundle_episodeicons_episode_character_", "bundle_image_story_")
+
+#: **清理缓存时必须保留**的包前缀。
+#: 这些包不会被任何剧本引用（头像/横幅/背景/BGM/音效都是"全局共用"），
+#: 若交给"按引用差集删"，用户清理一次就会把它们全删掉 ——
+#: 表现就是「补全缺失」永远补不完（补完 → 清理 → 又缺）。
+PROTECTED_PREFIXES = (
+    "bundle_chara_c-panel_",              # 角色头像
+    "bundle_statusbase_",                 # 状态图
+    "bundle_episodeicons_",               # 角色剧情入口横幅
+    "bundle_image_story_",                # 主线/活动/其他的章节横幅
+    "bundle_miniicons_", "bundle_profileimages_",
+    "bundle_home2charathumbnails_",
+    "bundle_bgimage_",                    # 背景（公共素材）
+    "bundle_music_", "bundle_sound_",     # BGM / 音效（公共素材）
+)
 
 
 def install_base(job=None, workers: int = 48,
@@ -346,6 +377,20 @@ def install_base(job=None, workers: int = 48,
         _total += len([n for n in mf.index if n.startswith("bundle_sound_")])
     if "avatar" in parts:
         _total += len([n for n in mf.index if n.startswith("bundle_chara_c-panel_")])
+    if "banner" in parts:
+        _total += len([n for n in mf.index if n.startswith(BANNER_PREFIXES)])
+    fails: list[str] = []
+
+    def _collect(tag: str, res: dict) -> None:
+        """记录下载失败：写进任务日志（带包名），最后统一抛 CDNError。"""
+        bad = (res or {}).get("fail") or []
+        if not bad:
+            return
+        sample = "、".join(f"{n}（{str(e)[:40]}）" for n, e in bad[:5])
+        fails.append(f"{tag} {len(bad)} 个：{sample}")
+        if job is not None:
+            job.log(f"⚠ {tag} 有 {len(bad)} 个包下载失败：{sample}")
+
     done_base = 0
     if job is not None and _total:
         job.set_total(_total, "个")
@@ -358,6 +403,10 @@ def install_base(job=None, workers: int = 48,
             _bytes += sum(int(e.get("size") or 0)
                           for n, e in mf.index.items()
                           if n.startswith("bundle_chara_c-panel_"))
+        if "banner" in parts:
+            _bytes += sum(int(e.get("size") or 0)
+                          for n, e in mf.index.items()
+                          if n.startswith(BANNER_PREFIXES))
         for _pref in ("bundle_music_", "bundle_sound_"):
             if (_pref == "bundle_music_" and "bgm" not in parts) or \
                (_pref == "bundle_sound_" and "sfx" not in parts):
@@ -374,8 +423,9 @@ def install_base(job=None, workers: int = 48,
         sz = sum(int(e.get("size") or 0) for e in ents)
         if job is not None:
             job.log(f"① 背景 {len(ents)} 个包 / {sz / 1048576:.0f} MB")
-        stages.fetch(ents, workers, "背景素材", skip=True, pause_event=_pe(job),
-                     job=job, done_offset=done_base)
+        _collect("背景", stages.fetch(ents, workers, "背景素材", skip=True,
+                                     pause_event=_pe(job), job=job,
+                                     done_offset=done_base))
         done_base += len(ents)
         if job is not None:
             job.progress(message=f"解包背景图（{len(ents)} 个包，这步比下载还久）…")
@@ -396,8 +446,9 @@ def install_base(job=None, workers: int = 48,
         if job is not None:
             job.log(f"{'②' if kind == 'music' else '③'} {label} {len(ents)} 个包"
                     f" / {sz / 1048576:.0f} MB")
-        stages.fetch(ents, workers, f"{label}素材", skip=True,
-                     pause_event=_pe(job), job=job, done_offset=done_base)
+        _collect(label, stages.fetch(ents, workers, f"{label}素材", skip=True,
+                                     pause_event=_pe(job), job=job,
+                                     done_offset=done_base))
         done_base += len(ents)
         if job is not None:
             job.progress(message=f"解包 {label}（{len(ents)} 个包，这步比下载还久）…")
@@ -417,20 +468,28 @@ def install_base(job=None, workers: int = 48,
         sz = sum(int(e.get("size") or 0) for e in ents)
         if job is not None:
             job.log(f"④ 角色头像 {len(ents)} 个包 / {sz / 1048576:.0f} MB")
-        stages.fetch(ents, workers, "角色头像", skip=True,
-                     pause_event=_pe(job), job=job, done_offset=done_base)
+        _collect("角色头像", stages.fetch(ents, workers, "角色头像", skip=True,
+                                         pause_event=_pe(job), job=job,
+                                         done_offset=done_base))
         done_base += len(ents)
         if job is not None:
             job.progress(message=f"生成头像（{len(ents)} 个，这步比下载久）…")
         n_ok = 0
+        n_bad = 0
         for e in ents:
             name = str(e.get("bundle_name") or "")
             tail = name.rsplit("_", 1)[-1]
             try:
-                if stages.export_avatar(int(tail)):
+                # force=True：旧版本生成过一批错头像（同一张图贴到多个 id），
+                # 必须重做才能修好；x2 一起重做，否则播放器优先读的还是旧超分图。
+                if stages.export_avatar(int(tail), force=True):
                     n_ok += 1
-            except Exception:                                  # noqa: BLE001
-                pass
+                else:
+                    n_bad += 1
+            except Exception as ex:                            # noqa: BLE001
+                n_bad += 1
+                if job is not None and n_bad <= 3:
+                    job.log(f"   头像导出失败 cid={tail}：{str(ex)[:80]}")
         # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
         try:
             stages.regen_imgmap()
@@ -439,21 +498,83 @@ def install_base(job=None, workers: int = 48,
         out["avatar"] = n_ok
         out["bytes"] += sz
         if job is not None:
-            job.log(f"   头像生成完毕：{n_ok}/{len(ents)}")
+            job.log(f"   头像生成完毕：{n_ok}/{len(ents)}"
+                    + (f"，失败 {n_bad} 个" if n_bad else ""))
+        if n_bad:
+            fails.append(f"头像导出失败 {n_bad} 个（多为包损坏或缺少解码组件）")
+
+    # ⑤ 剧情横幅：角色剧情入口图（episode_character_<cid>）+ 主线/活动/其他的章节横幅
+    #    播放器现在拿横幅当标题（剧情列表的第一行），所以它们也是"公共"的：
+    #    没装某部剧情也该看得见它的横幅，装完才有图就不用每题都下一遍。
+    if "banner" in parts:
+        names = [n for n in mf.index if n.startswith(BANNER_PREFIXES)]
+        ents = _entries(mf, names)
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        if job is not None:
+            job.log(f"⑤ 剧情横幅 {len(ents)} 个包 / {sz / 1048576:.1f} MB")
+        _collect("剧情横幅", stages.fetch(ents, workers, "剧情横幅", skip=True,
+                                         pause_event=_pe(job), job=job,
+                                         done_offset=done_base))
+        done_base += len(ents)
+        if job is not None:
+            job.progress(message=f"导出剧情横幅（{len(ents)} 个包）…")
+        try:
+            stages.export_char_banners()
+        except Exception as e:                                 # noqa: BLE001
+            if job is not None:
+                job.log(f"   角色横幅导出失败：{e}")
+        try:
+            stages.export_story_topics()
+        except Exception as e:                                 # noqa: BLE001
+            if job is not None:
+                job.log(f"   章节横幅导出失败：{e}")
+        out["banner"] = len(ents)
+        out["bytes"] += sz
 
     # 记录本次各类的清单包数，下次刷新清单据此判断"有没有新增"
-    try:
-        counts = _cur_counts()
-        sub = {k: v for k, v in counts.items() if k in parts}
-        if sub:
-            write_stamp(sub)
-    except Exception:                                          # noqa: BLE001
-        pass
+    # **有失败就不写**：写了等于"这一类已经跟上清单"，下次刷新就不会自动补，
+    # 用户只能一直看到"补全缺失"却不知道为啥不自动补。
+    if not fails:
+        try:
+            counts = _cur_counts()
+            sub = {k: v for k, v in counts.items() if k in parts}
+            if sub:
+                write_stamp(sub)
+        except Exception:                                      # noqa: BLE001
+            pass
 
-    if job is not None:
-        job.detail["base"] = out
-        job.log(f"公共素材就绪：约 {out['bytes'] / 1048576:.0f} MB"
-                f"（以后装任何剧情都不用再补背景和音乐）")
+    # ⑤ 收尾体检：把"还没齐"的类别点出来，别让用户对着一个 98% 的数字猜
+    try:
+        st = public_status()
+        short = []
+        for name, have_k, total_k in (("背景", "back", "backTotal"),
+                                      ("BGM", "music", "musicTotal"),
+                                      ("音效", "sfx", "sfxTotal"),
+                                      ("头像", "avatar", "avatarTotal"),
+                                      ("横幅", "banner", "bannerTotal")):
+            have, total = int(st.get(have_k) or 0), int(st.get(total_k) or 0)
+            if total and have < total * 0.98:
+                short.append(f"{name} {have}/{total}")
+        out["public"] = st
+        out["short"] = short
+        if job is not None:
+            if short:
+                job.log("⚠ 仍未齐：" + "、".join(short)
+                        + "（官方源本身可能缺图；若是导出失败，日志里有原因）")
+            job.detail["base"] = out
+            job.log(f"公共素材就绪：约 {out['bytes'] / 1048576:.0f} MB"
+                    f"（以后装任何剧情都不用再补背景和音乐）")
+    except Exception:                                          # noqa: BLE001
+        if job is not None:
+            job.detail["base"] = out
+
+    if fails:
+        # 有失败就抛错：前端会弹提示（任务条显示 j.error），用户能看到"卡在哪"，
+        # 而不是对着一个永远 97% 的数字猜。完整清单在任务日志里。
+        raise CDNError("部分素材没装上 · " + fails[0]
+                       + (f"（另有 {len(fails) - 1} 类失败，详见日志）"
+                          if len(fails) > 1 else ""))
+
     return out
 
 
@@ -494,6 +615,7 @@ def _cur_counts() -> dict:
         "bgm": len([n for n in idx if n.startswith("bundle_music_")]),
         "sfx": len([n for n in idx if n.startswith("bundle_sound_")]),
         "avatar": len([n for n in idx if n.startswith("bundle_chara_c-panel_")]),
+        "banner": len([n for n in idx if n.startswith(BANNER_PREFIXES)]),
     }
 
 
@@ -505,15 +627,24 @@ def config_manifest_index() -> dict:
 
 
 def new_public() -> dict:
-    """相对上次装完时，清单里新增了多少个公共素材包（只返回 > 0 的分类）。"""
+    """相对上次装完时，清单里新增了多少个公共素材包（只返回 > 0 的分类）。
+
+    **新增的类别也要算进来**：旧版本的 stamp 只有 bg/bgm/sfx（avatar/banner
+    是这次才加进公共素材的），如果按"have == 0 就跳过"处理，老用户永远补不上
+    头像和横幅。所以「stamp 里没有这个键」= 这个类别从没下过 → 全量补。
+    """
     st = read_stamp()
     if not st:
-        return {}                     # 从没装过公共素材 → 不自动下 775 MB
+        return {}                     # 从没装过公共素材 → 不自动下 800 MB
     cur = _cur_counts()
     out = {}
     for k, v in cur.items():
+        if k not in st:               # 老版本 stamp 没这个类别 → 全量补
+            if v:
+                out[k] = v
+            continue
         have = int(st.get(k) or 0)
-        # have == 0 表示这一类用户压根没装过，别替他决定
+        # have == 0 表示这一类用户明确装过 0 个，别替他决定
         if have and v > have:
             out[k] = v - have
     return out
@@ -568,10 +699,32 @@ def public_status() -> dict:
     n_avatar = _count(adir2, (".png", ".webp", ".jpg"))
     avatar_total = len([n2 for n2 in idx if n2.startswith("bundle_chara_c-panel_")]) or 384
 
+    # 剧情横幅：按**包是否已下载**算（导出产物是 384 张角色图 + 若干章节图，
+    # 而分母用"清单里这两类包的数量"，官方新增时会自然变大 → 前端显示成
+    # 553/560 这类，用户点「补全」即可）
+    from .net import bundle_path as _bp
+    banner_names = [n for n in idx if n.startswith(BANNER_PREFIXES)]
+    banner_total = len(banner_names) or 389
+    n_banner = len([n for n in banner_names if os.path.exists(_bp(n))])
+    # 已导出的横幅**图**。列表要不要显示横幅看的是这个，不是 bundle 缓存：
+    # 用户清过「资源包缓存」后上面的 n_banner 会归零，但图还在磁盘上，
+    # 控制台列表照样应该显示横幅（否则会莫名退回纯文字，看着像功能没了）。
+    try:
+        n_banner_img = _count(os.path.join(config.IMG, "story"),
+                              (".webp", ".png", ".jpg"))
+    except Exception:                                          # noqa: BLE001
+        n_banner_img = 0
+
     return {"back": n_back, "backTotal": back_total,
             "music": min(n_music, music_total), "musicTotal": music_total,
             "sfx": min(n_sfx, sfx_total), "sfxTotal": sfx_total,
             "avatar": min(n_avatar, avatar_total), "avatarTotal": avatar_total,
+            "banner": min(n_banner, banner_total), "bannerTotal": banner_total,
+            "bannerImg": n_banner_img,
+            # 结构版本：前端据此判断"后端是不是还没重启/还是旧代码"。
+            # 加 banner 这一批字段时是 2 —— 前端看到 v<2 就不能把缺字段当成 0/0，
+            # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
+            "v": 2,
             "bytes": 0}
 
 
@@ -750,7 +903,12 @@ def prune_cache(job=None, dry: bool = True) -> dict:
                     have.append((e.name, e.stat().st_size, e.path))
             except OSError:
                 pass
-    unused = [(n, s, p) for n, s, p in have if n not in used]
+    keep = [n for n, _s2, _p2 in have if n.startswith(PROTECTED_PREFIXES)]
+    unused = [(n, s, p) for n, s, p in have
+              if n not in used and not n.startswith(PROTECTED_PREFIXES)]
+    if job is not None and keep:
+        job.log(f"其中 {len(keep)} 个是公共素材（头像/横幅/背景/BGM/音效），"
+                f"不按剧情引用判断，一律保留")
     total = sum(s for _n, s, _p in unused)
     if job is not None:
         job.log(f"缓存 {len(have)} 个包，其中 {len(unused)} 个没被引用"

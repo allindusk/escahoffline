@@ -1,0 +1,8 @@
+[x] 没有找到 Python。
+
+    便携版应该自带 python\python.exe —— 找不到说明这个包不完整，
+    请重新下载 ESCAH-Offline-v*-win64-portable.zip 并完整解压。
+
+    想改用系统 Python： https://www.python.org/downloads/
+    安装时记得勾选 "Add Python to PATH"。
+

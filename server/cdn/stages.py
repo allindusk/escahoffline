@@ -222,6 +222,34 @@ def _first_line(parts: list, limit: int = 34) -> str:
     return ""
 
 
+#: 主线三部的「序章」= ``bundle_scenarioscript_op`` 里的某几段（没有独立剧本包）。
+#: 用**首句**定位段号，官方以后追加段也不会错位。
+#: 首句来源：用户在游戏里逐部核对过的三句。
+PROLOGUES = [
+    ("0", "第1部 序章", 0.0, "トキサダ……トキサダ"),
+    ("0b", "第2部 序章", 23.5, "はぁっ、はぁっ"),
+    ("0c", "第3部 序章", 44.5, "あの激しい戦いから"),
+]
+
+
+def _part_title(parts: list) -> str:
+    """``_0`` 段只有一句时，那句就是**章节/活动的标题**（数据里真的有文本）。
+
+    例：``adv_main_1_0`` = 「超昂戦士、始動！」、``adv_event_1_0`` = 「別次元から来たあのこ」。
+    以前把它当"空占位段"跳过，于是只能靠横幅图看标题、还以为标题没有文本。
+    """
+    if len(parts) < 2:
+        return ""
+    p0 = next((p for p in parts if str(p.get("file", "")).endswith("_0")), None)
+    if not p0:
+        return ""
+    msgs = [" ".join(str(m.get("Message") or "").split())
+            for m in p0.get("methods") or [] if m.get("Method") == "ShowMessage"]
+    if len(msgs) != 1 or len(msgs[0]) < 2:
+        return ""
+    return msgs[0].strip("「」\"' ")
+
+
 def sync_advindex() -> int:
     """把已接入的非角色剧情汇总成 ``web/data/advindex.js``（侧栏列表数据源）。"""
     rows = []
@@ -236,10 +264,15 @@ def sync_advindex() -> int:
         vdir = os.path.join(AUDIO, key)
         kind = d.get("kind") or key.split("_")[1]
         n = d.get("no")
+        # 空占位包（例如 event_51 / event_52：2 段、0 句，官方还没放内容，
+        # 所以也没有 topic_event 横幅）不要进列表 —— 否则就是一行点不开的空条目。
+        if _count_lines(d["parts"]) == 0:
+            continue
         # 封面：章节标题横幅（游戏里标题本身就是图，没有文本资源）
+        # 不用 int(n)：序章拆出来的编号是 0 / 0b / 0c，对应 main_0 / main_0b / main_0c.webp
         cover = ""
         if n is not None:
-            rel = f"media/img/story/{kind}_{int(n)}.webp"
+            rel = f"media/img/story/{kind}_{n}.webp"
             if os.path.exists(os.path.join(WEB, rel)):
                 cover = rel
         rows.append({
@@ -247,6 +280,11 @@ def sync_advindex() -> int:
             "kind": kind,
             # tutorial / op 无编号，no = None（前端不显示「第X话」）
             "no": n,
+            # 序章这类需要有自定义标题（如「第2部 序章」）：数据里写了就用
+            "title": d.get("title") or _part_title(d["parts"]),
+            # 排序用：序章插在部与部之间（0 / 23.5 / 44.5），普通章节就是章号
+            "order": d.get("order") if d.get("order") is not None else (
+                n if isinstance(n, (int, float)) else 0),
             "cover": cover,
             "first": _first_line(d["parts"]),
             "parts": len(d["parts"]),
@@ -258,8 +296,46 @@ def sync_advindex() -> int:
             "voiceRes": len([f for f in os.listdir(vdir) if f.endswith(".m4a")])
             if os.path.isdir(vdir) else 0,
         })
+    def _ord(r):
+        v = r.get("order")
+        return v if isinstance(v, (int, float)) else 0
+
+    # ---- 主线三部的「序章」：不是独立剧本包，而是 op 包里的三段 ----
+    # 以前我把它们拆成 adv_main_0 / 0b / 0c 三个独立数据文件，结果用户那边
+    # **永远显示"未下载"且资源管理里也装不了**（清单里根本没有这个单元）。
+    # 现在改成"指向 adv_op 的第 i 段"，状态与资源都跟着 adv_op 走。
+    op = os.path.join(DATA, "adv_op.js")
+    if os.path.exists(op):
+        try:
+            opd = select.load_story("adv_op")
+            parts = opd["parts"]
+            vdir = os.path.join(AUDIO, "adv_op")
+            for no, title, order, needle in PROLOGUES:
+                i = next((k for k, p in enumerate(parts)
+                          if needle in _first_line([p], 60)), None)
+                if i is None:
+                    continue
+                cover = f"media/img/story/main_{no}.webp"
+                rows.append({
+                    "key": "adv_op",
+                    "kind": "main",
+                    "no": no,
+                    "part": i,                      # 从 op 包的第 i 段开始播
+                    "title": title,
+                    "order": order,
+                    "cover": cover if os.path.exists(os.path.join(WEB, cover)) else "",
+                    "first": _first_line([parts[i]]),
+                    "parts": 1,
+                    "lines": _count_lines([parts[i]]),
+                    "voices": sum(len(m.get("voices") or []) for m in parts[i]["methods"]),
+                    "voiceRes": len([f for f in os.listdir(vdir) if f.endswith(".m4a")])
+                    if os.path.isdir(vdir) else 0,
+                })
+        except Exception:                                   # noqa: BLE001
+            pass
+
     rows.sort(key=lambda r: (select.ADV_KINDS.index(r["kind"])
-                             if r["kind"] in select.ADV_KINDS else 9, r["no"] or 0))
+                             if r["kind"] in select.ADV_KINDS else 9, _ord(r)))
     p = os.path.join(DATA, "advindex.js")
     with open(p, "w", encoding="utf-8") as f:
         f.write("window.__ADV=" + json.dumps(rows, ensure_ascii=False,
@@ -646,11 +722,16 @@ def export_story_topics() -> dict:
                 continue
             try:
                 sp = obj.read()
-                m = re.fullmatch(r"topic_([a-z]+)_(\d+)", sp.m_Name or "")
+                # 编号后面可能带字母后缀：topic_chapter_000 / 000b / 000c
+                # 分别是第 1/2/3 部的「序章」横幅（游戏里确实有三张）。
+                # 旧正则只认 \d+，把 000b/000c 当成不匹配直接丢掉，
+                # 于是"第二三部序章横幅找不到"。
+                m = re.fullmatch(r"topic_([a-z]+)_(\d+)([a-z]?)", sp.m_Name or "")
                 if not m:
                     continue
                 base = name_map.get(m.group(1), m.group(1))
-                dst = os.path.join(out_dir, f"{base}_{int(m.group(2))}.webp")
+                num = f"{int(m.group(2))}{m.group(3)}"
+                dst = os.path.join(out_dir, f"{base}_{num}.webp")
                 if os.path.exists(dst):
                     n_skip += 1
                     continue
@@ -662,8 +743,61 @@ def export_story_topics() -> dict:
     return {"new": n_new, "skip": n_skip}
 
 
-def export_avatar(cid, size: int = 96) -> bool:
-    """从 c-panel 半身像左上角裁正方形做头像 -> ``web/img/avatar/<cid>.png``。"""
+def export_char_banners(only=None) -> dict:
+    """导出角色剧情的"横幅"：``episode_character_<cid>`` → ``media/img/story/char_<cid>.webp``。
+
+    为什么有这一节：主线/活动/其他在游戏里都有章节横幅图（topic_*），
+    角色剧情没有文字横幅，但有 ``bundle_episodeicons_episode_character_<cid>``
+    —— 游戏「角色剧情」入口上那张角色图。播放器要"用横幅当标题"，
+    角色剧情只能用这张，所以统一落到 ``img/story/`` 下、与 adv 封面同一目录。
+
+    包名是 **5 位补零**（``episode_character_00303``），别直接拼 cid。
+    """
+    import UnityPy
+
+    out_dir = os.path.join(IMG, "story")
+    os.makedirs(out_dir, exist_ok=True)
+    names = [n for n in os.listdir(FILES_STORY)
+             if n.startswith("bundle_episodeicons_episode_character_")]
+    if only:
+        want = {f"{int(c):05d}" for c in only}
+        names = [n for n in names if n.rsplit("_", 1)[1] in want]
+    n_new = n_skip = n_fail = 0
+    for bname in sorted(names):
+        try:
+            cid = int(bname.rsplit("_", 1)[1])
+        except ValueError:
+            continue
+        dst = os.path.join(out_dir, f"char_{cid}.webp")
+        if os.path.exists(dst):
+            n_skip += 1
+            continue
+        try:
+            env = UnityPy.load(os.path.join(FILES_STORY, bname))
+            for obj in env.objects:
+                if obj.type.name != "Sprite":
+                    continue
+                obj.read().image.save(dst, "WEBP", quality=90, method=4)
+                n_new += 1
+                break
+            else:
+                n_fail += 1
+        except Exception:                                   # noqa: BLE001
+            n_fail += 1
+    print(f"  角色横幅：新增 {n_new} 跳过 {n_skip} 失败 {n_fail}")
+    return {"new": n_new, "skip": n_skip, "fail": n_fail}
+
+
+def export_avatar(cid, size: int = 96, force: bool = False,
+                  x2: bool = True) -> bool:
+    """从 c-panel 半身像左上角裁正方形做头像 -> ``web/media/img/avatar/<cid>.png``。
+
+    ``force``：即使已存在也重做。**必须支持强刷**——旧版本导出的头像里
+    有整批错图（13/61/70 三个 id 字节完全相同、413 是别人的脸），
+    用户点了「补全」如果按"已存在就跳过"，永远是错的那张。
+    ``x2``：顺带把 ``media/img_x2/avatar/<cid>.webp``（256px）也重做，
+    否则播放器优先读超分层，仍显示旧图。
+    """
     from PIL import Image
     import UnityPy
 
@@ -680,7 +814,7 @@ def export_avatar(cid, size: int = 96) -> bool:
             break
     out = os.path.join(IMG, "avatar", f"{cid}.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    if os.path.exists(out) or not src:
+    if (os.path.exists(out) and not force) or not src:
         return os.path.exists(out)
     try:
         env = UnityPy.load(src)
@@ -690,8 +824,14 @@ def export_avatar(cid, size: int = 96) -> bool:
             im = obj.read().image
             side = min(im.width, im.height)
             half = min(im.width, side)            # 半身像取左侧正方形
-            im.crop((0, 0, half, min(im.height, half))).resize(
-                (size, size), Image.LANCZOS).save(out, optimize=True)
+            im = im.crop((0, 0, half, min(im.height, half)))
+            im.resize((size, size), Image.LANCZOS).save(out, optimize=True)
+            if x2:
+                x2dir = os.path.join(IMG_X2, "avatar")
+                os.makedirs(x2dir, exist_ok=True)
+                im.resize((size * 2, size * 2), Image.LANCZOS).save(
+                    os.path.join(x2dir, f"{cid}.webp"), "WEBP",
+                    quality=92, method=4)
             return True
     except Exception as e:
         print(f"    头像导出失败 {cid}: {e}")

@@ -295,6 +295,52 @@ def collect_upscale_targets(kinds=("stand", "back", "cg"),
     return out
 
 
+#: unit → (mtime, {(kind, key)})。一次超分可能带上几部剧情，没必要
+#: 每次都重读 200 KB 的剧本；重装会改 mtime，缓存自动失效。
+_UNIT_KEYS: dict = {}
+
+
+def unit_image_keys(unit: str) -> set:
+    """某部**已装**剧情引用到的图片键 → ``{(kind, key)}``。
+
+    依据是 ``web/data/<unit>.js``（播放器用的那份剧本）里每一段的
+    ``stand`` / ``back`` / ``cg`` 数组 —— 与 imgmap 的 key 同源，
+    所以"只超分这部剧的图"不用再解析一遍资源包。
+    """
+    key = str(unit or "")
+    if not (key.startswith("char_") or key.startswith("adv_")):
+        return set()
+    p = os.path.join(paths.DATA, key + ".js")
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        return set()
+    hit = _UNIT_KEYS.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    out: set = set()
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            s = f.read()
+        data = json.loads(s[s.find("=") + 1:].strip().rstrip(";"))
+        for part in data.get("parts") or []:
+            for kind in ("stand", "back", "cg"):
+                for k in part.get(kind) or []:
+                    out.add((kind, k))
+    except Exception:                                          # noqa: BLE001
+        out = set()
+    _UNIT_KEYS[key] = (mtime, out)
+    return out
+
+
+def units_image_keys(units) -> set:
+    """若干部剧情的图片键并集（前端勾了"只处理这几部"时用）。"""
+    out: set = set()
+    for u in units or ():
+        out |= unit_image_keys(u)
+    return out
+
+
 def _human_sec(s: float) -> str:
     s = int(round(s))
     if s < 60:
@@ -322,14 +368,17 @@ def _per_image_sec(mp: float, engine: str, scale: int = 2) -> float:
 
 
 def upscale_plan(kinds=("stand", "back", "cg"),
-                 scale: int = 2) -> dict:
+                 scale: int = 2, units=None) -> dict:
     """超分前的预估：多少张、单张多大、要多久。
 
     为什么需要：超分是最容易让用户后悔的操作（几分钟、CPU 满载）。
     光写"很慢"没有说服力，得给出"这次 87 张、原图 1280×720、
     放大后 2560×1440、预计 2 分 10 秒"，用户才好决定。
+
+    ``units`` 给了就只统计这几部剧情引用到的图（控制台③的"先选范围"）。
     """
-    targets = collect_upscale_targets(tuple(kinds))
+    only = units_image_keys(units) if units else None
+    targets = collect_upscale_targets(tuple(kinds), only=only)
     by: dict[str, int] = {}
     for kind, _key, _rel in targets:
         by[kind] = by.get(kind, 0) + 1
@@ -389,9 +438,14 @@ def upscale_plan(kinds=("stand", "back", "cg"),
     # 以前一律返回"没有需要超分的图（都已做过）"，全新安装时会让用户
     # 以为程序搞错了 —— 明明什么都没做过。
     if total == 0:
-        all_n = len(collect_upscale_targets(tuple(kinds), only_missing=False))
-        hint = ("还没有图片可超分 —— 先去「剧情安装」装一部剧情"
-                if all_n == 0 else f"没有需要超分的图（{all_n} 张都已做过）")
+        all_n = len(collect_upscale_targets(tuple(kinds), only_missing=False,
+                                           only=only))
+        if only is not None and not only:
+            hint = ("所选剧情没有可超分的图 —— 它们可能还没装，"
+                    "或者引用的图都已经超分过了")
+        else:
+            hint = ("还没有图片可超分 —— 先去「剧情安装」装一部剧情"
+                    if all_n == 0 else f"没有需要超分的图（{all_n} 张都已做过）")
     else:
         hint = ""
 
@@ -412,17 +466,20 @@ def upscale_plan(kinds=("stand", "back", "cg"),
 
 def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
             engine: str = "cugan", limit: int = 0,
-            only: set | None = None) -> dict:
+            only: set | None = None, units=None) -> dict:
     """批量超分，逐张写覆盖层（中断也能续跑）。
 
     ``engine`` 参数只为兼容旧调用保留 —— 现在**只有 Real-CUGAN 一种引擎**，
     没有引擎就直接报错，不再用 Lanczos 插值顶替（那只是像素变多、不增细节）。
+    ``units`` 给了就只处理这几部剧情引用到的图。
     """
     eng = find_engine()
     if eng["kind"] == "none":
         raise RuntimeError(eng["note"])
     mode = eng["kind"]
 
+    if units and only is None:
+        only = units_image_keys(units)
     targets = collect_upscale_targets(kinds, only=only)
     if limit:
         targets = targets[:limit]
@@ -431,7 +488,8 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
 
     job.set_total(len(targets))
     job.set_items(len(targets))
-    job.log(f"引擎：{eng['note']}；共 {len(targets)} 张")
+    job.log(f"引擎：{eng['note']}；共 {len(targets)} 张"
+            + (f"（仅所选 {len(units)} 部剧情）" if units else ""))
     x2 = load_overlay("x2")
     ok = fail = 0
     t0 = time.time()
@@ -555,6 +613,12 @@ def delete_originals(job=None, kinds=("stand", "back", "cg")) -> dict:
 
 _STATS_CACHE = {"at": 0.0, "data": None}
 _STATS_TTL = 30.0
+
+
+def invalidate_stats() -> None:
+    """清统计缓存。清理动作（删原图/删超分图）之后必须调用，
+    否则页面还会显示删除前的占用数字。"""
+    _STATS_CACHE.update(at=0.0, data=None)
 
 
 def _walk_size(root: str) -> tuple[int, int]:

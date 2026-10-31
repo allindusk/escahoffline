@@ -23,7 +23,7 @@ import traceback
 import urllib.parse
 
 from . import (exports, jobs, log as applog, media, mirrors, packs, paths, proc,
-               updater, videxport)
+               space, updater, videxport)
 from .cdn import install as cdn_install
 from .cdn import manifest as cdn_manifest
 from .cdn import stages as cdn_stages
@@ -166,17 +166,28 @@ def _missing_pkgs() -> list[str]:
 
 
 def _test_mirrors(job, kind: str = "pip") -> dict:
-    job.log(f"正在测速 {kind} 线路…")
+    """按类型展示线路：pip 是**测速排名**，github 是**固定顺序的探活结果**。"""
+    if kind == "github":
+        job.log("按顺序探测 GitHub 线路（不测速，有响应即用）…")
+    else:
+        job.log(f"正在测速 {kind} 线路…")
     res = mirrors.test(kind)
     mirrors.save_cache(kind, res)
     for r in res:
         if r.get("ok"):
-            job.log(f"  {r['name']}：{r['ttfb']} ms / {r['kbps']} KB/s"
-                    f"（评分 {r['score']}）")
+            if kind == "github":
+                job.log(f"  {r['name']}：有响应（{r['ttfb']} ms）")
+            else:
+                job.log(f"  {r['name']}：{r['ttfb']} ms / {r['kbps']} KB/s"
+                        f"（评分 {r['score']}）")
         else:
             job.log(f"  {r['name']}：不可用（{r.get('error', '')[:40]}）")
     ok = [r for r in res if r.get("ok")]
-    job.log(f"最快：{ok[0]['name']}" if ok else "全部不可用，将退回官方源")
+    if kind == "github":
+        job.log(f"按顺序首先使用：{ok[0]['name']}" if ok
+                else "五条线路（含官方直连）都没有响应")
+    else:
+        job.log(f"最快：{ok[0]['name']}" if ok else "全部不可用，将退回官方源")
     return {"results": res}
 
 
@@ -551,6 +562,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                "export": exports.list_exports()[:20],
                                "trans": exports.trans_stats(),
                                "coverage": packs.coverage()})
+        if path == "/api/space":
+            # 「设置 / 清理空间」的唯一数据源：整个程序目录按用途分桶的账本。
+            # 一次遍历（27 万文件，1–3 秒），服务端缓存 2 分钟。
+            return self._json(space.report(force=q.get("force") == "1"))
         if path == "/api/export/trans":
             unit = q.get("unit") or ""
             text = exports.export_trans(unit)
@@ -585,8 +600,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 scale = int(q.get("scale") or 2)
             except ValueError:
                 scale = 2
+            # units 留空 = 全部已装剧情（老行为）；给了就只统计这几部引用到的图
+            units = [u.strip() for u in (q.get("units") or "").split(",") if u.strip()]
             try:
-                return self._json(media.upscale_plan(kinds, scale))
+                return self._json(media.upscale_plan(kinds, scale, units or None))
             except Exception as e:                             # noqa: BLE001
                 return self._err(e)
         if path == "/api/export/video/info":
@@ -671,10 +688,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             scale = int(b.get("scale") or 2)
             engine = b.get("engine") or "cugan"
             limit = int(b.get("limit") or 0)
+            # 控制台③可以只对勾选的几部剧情做超分（空 = 全部已装剧情）
+            units = [str(u) for u in (b.get("units") or []) if str(u).strip()]
 
             def fn(job):
                 media.upscale(job, kinds=kinds, scale=scale, engine=engine,
-                              limit=limit)
+                              limit=limit, units=units or None)
             job = jobs.submit("upscale", "图片超分", fn,
                               holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
@@ -687,13 +706,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                               holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
         if path == "/api/delete-originals":
-            job = jobs.submit("cleanup", "删除已超分的原图",
-                              lambda j: media.delete_originals(j),
+            def _del_orig(j):
+                out = media.delete_originals(j)
+                space.invalidate()
+                return out
+            job = jobs.submit("cleanup", "删除已超分的原图", _del_orig,
                               holds=_installed_char_units())
+            return self._json({"job": job.snapshot()})
+        if path == "/api/space/clean":
+            # 清理空间：bundles / export / logs / downloads / backup / x2
+            # 默认 dry=false（前端在 confirm 里已经把后果说清楚）。
+            b = self._body()
+            what = (b.get("what") or "").strip()
+            if what not in space.ACTIONS:
+                return self._err("不支持的清理类型：" + (what or "(空)"))
+            dry = bool(b.get("dry", False))
+            label = space.ACTIONS[what][0]
+            job = jobs.submit("cleanup",
+                              label + ("（预演，不会删）" if dry else ""),
+                              lambda j: space.clean(j, what, dry=dry))
             return self._json({"job": job.snapshot()})
         if path == "/api/install/base":
             b = self._body()
-            raw = b.get("parts") or ["bg", "bgm", "sfx"]
+            # 默认 = 全部公共素材类别（背景 / BGM / 音效 / 头像 / 剧情横幅）。
+            # 以前默认写死 ["bg","bgm","sfx"]，而 avatar 又不在白名单里，
+            # 于是"下载公共素材"从来没下过头像 → 侧栏和 CG 页全是首字色块。
+            raw = b.get("parts") or list(cdn_install.PUBLIC_PARTS)
             parts = [p for p in raw if p in cdn_install.PUBLIC_PARTS]
             if not parts:
                 return self._err("没有选择要下载的公共素材")
@@ -723,9 +761,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/cdn/prune":
             b = self._body()
             dry = b.get("dry", True) is not False
+
+            def _prune(j):
+                out = cdn_install.prune_cache(j, dry=dry)
+                space.invalidate()
+                return out
             job = jobs.submit(
                 "prune", "清理未引用的资源包" + ("（预演，不会删）" if dry else "（真删）"),
-                lambda j: cdn_install.prune_cache(j, dry=dry))
+                _prune)
             return self._json({"job": job.snapshot()})
         if path == "/api/export/video":
             b = self._body()
@@ -965,6 +1008,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 已下载解压、等你点重启的新版本号（空串 = 没有待装更新）
             # health.js 每 60s 读一次，有值就顶部挂条
             "updateReady": updater.pending_version(),
+            # 启动时那一次自动检查的结果（设置里可关；只查不装）。
+            # health.js 用它挂"发现新版本 vX，去更新"的提示条。
+            "updateCheck": updater.startup_state(),
             # 路径含中文时的提示（前端顶部条显示），以及日志位置
             "warn": paths.path_warning(),
             "logPath": applog.log_path(),
@@ -1009,6 +1055,13 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     print(f"  资源根   {paths.MEDIA}")
     print("  关闭此窗口即停止服务（Ctrl+C）")
     print("=" * 56, flush=True)
+    # 启动后按设置查一次更新（默认开；控制台「更新」页可关）。只查不装 ——
+    # 结果只用于页面上挂提示条，装不装由用户点。关掉后这里零网络请求。
+    try:
+        if updater.auto_check():
+            print("  启动检查：后台查一次是否有新版本（设置里可关闭）", flush=True)
+    except Exception as e:                                     # noqa: BLE001
+        applog.warn(f"启动检查没能启动（不影响使用）：{e}", tag="update")
     try:
         httpd.serve_forever(poll_interval=0.3)
     except KeyboardInterrupt:
@@ -1018,11 +1071,12 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     return 0
 
 
-#: **不设任何定时检查**：只有用户点了「检查程序更新」才发一次外网请求。
+#: **没有定时/轮询检查**。唯一的自动联网是"启动后查一次"（``updater.auto_check``），
+#: 它由设置里的「每次启动检查更新」勾选框控制（**默认勾选**，可在控制台关掉）：
+#: 只读一次 release 信息、只挂提示条，**不下载也不重启**。
 #:
-#: 为什么要这么较真：这是个本地离线用工具，偷偷每隔几小时去 GitHub 发请求，
-#: 用户（还有他的网络环境）完全不知情 —— 也不该由我们来决定什么时候联网。
-#: 想查就在控制台点一下，查完想装再点一下，全程用户自己掌握。
+#: 除此之外所有对外请求都只发生在用户点过按钮之后：点「检查程序更新」→ 查一次；
+#: 点「下载并应用」→ 下载。这个尺度别再放大（曾经加过"每 6 小时检查一次"被否掉）。
 
 
 def _do_update(job, url: str) -> dict:

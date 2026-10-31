@@ -11,8 +11,9 @@
   const ST = {
     state: null, manifest: null, cg: null,
     sel: new Set(),           // 用户主动勾选的剧情单元
-    cat: 'char', dlFilter: '',        // '' | 'miss' | 'have'
+    cat: 'char',              // ② 列表默认停在哪一类（storylist 里切）
     cgSel: new Set(), vidSel: new Set(), jobs: {}, updUrl: '', links: null,
+    updShown: false,          // 启动检查的结果只回显一次
     // 云端可安装的单元与它们的本地状态（由 /api/cdn/units 提供）
     units: { char: [], adv: [], state: {}, loaded: false, at: 0, needManifest: false },
     pub: null,          // 公共素材（背景/BGM/音效）已下载数量
@@ -55,7 +56,7 @@
       el = document.createElement('div');
       el.id = 'setupToast';
       el.style.cssText = 'position:fixed;left:50%;top:66px;transform:translateX(-50%);' +
-        'z-index:9800;padding:9px 18px;border-radius:10px;font-size:13px;' +
+        'z-index:9800;padding:9px 18px;border-radius:10px;font-size:14.6px;' +
         'background:#16283c;border:1px solid #2f5478;color:#dff0ff;' +
         'box-shadow:0 10px 30px rgba(0,0,0,.5);transition:opacity .3s';
       document.body.appendChild(el);
@@ -199,7 +200,7 @@
     $('#hdrStat').textContent =
       `已装 ${cov.units || 0}/${cov.unitsTotal || 0} 部剧情`
       + (cov.bundleCache && cov.bundleCache.bytes
-        ? ` · bundle 缓存 ${human(cov.bundleCache.bytes)}` : '');
+        ? ` · 下载缓存 ${human(cov.bundleCache.bytes)}` : '');
     renderOverview();
     renderPacks();
     renderQuality();
@@ -222,13 +223,14 @@
 
   const cards = [
     ['已安装剧情', `${done}`, `/ ${total || '?'} 部`],
-    ['bundle 缓存', human((cov.bundleCache || {}).bytes),
+    ['下载缓存', human((cov.bundleCache || {}).bytes),
       `${(cov.bundleCache || {}).files || 0} 个包`],
     ['剩余磁盘', human((ST.state && ST.state.free) || 0), ''],
-    ['译文', `${(ST.state.trans && ST.state.trans.messages) || 0}<small>句</small>`,
+    ['翻译', `${(ST.state.trans && ST.state.trans.messages) || 0}<small>句</small>`,
       `${(ST.state.trans && ST.state.trans.units) || 0} 部剧情`],
-    ['下载源', (cdn.cdn || '').replace(/^https?:\/\//, '').split('/')[0] || '未配置',
-      cdn.manifestReady ? '官方 CDN' : '点「更新 → 刷新清单」'],
+    ['下载来源',
+      cdn.manifestReady ? '官方地址' : '还没弄好',
+      (cdn.cdn || '').replace(/^https?:\/\//, '').split('/')[0] || '点「更新」页更新剧情目录'],
   ];
   $('#ovStats').innerHTML = cards.map(function (c) {
     return '<div class="stat"><div class="k">' + esc(c[0]) + '</div>' +
@@ -240,6 +242,7 @@
     ST.sel.clear();
     goto('packs');
     renderPacks();
+    if (packList) packList.setSrc('char');
     toastMsg('在列表里挑一个角色勾上，然后点「开始安装」');
   };
   $('#ovInstallCore').onclick = async () => {
@@ -251,7 +254,10 @@
     if (!keys.length) { toastMsg('所有剧情都已安装'); return; }
     if (!confirm('将安装全部 ' + keys.length + ' 部剧情，约 ' +
       Math.round(keys.length * 45 / 1024) + ' GB。\n\n建议先装一两个试试再全量。确定吗？')) return;
-    ST.sel = new Set(keys);
+    // 注意：**不能**替换 Set 对象 —— storylist 组件握着这个 Set 的引用，
+    // 换成新对象后勾选状态就和组件脱钩了（列表看着没勾上）。
+    ST.sel.clear();
+    keys.forEach(k => ST.sel.add(k));
     ST.cat = 'char';
     goto('packs');
     renderPacks();
@@ -263,7 +269,8 @@
   /* 这里选的是「剧情」，不是我们自己打包的资源包 ——
      安装时直接从官方 CDN 拉 AssetBundle，再在本机解包成播放器能用的
      webp / m4a / js（实现见 server/cdn/install.py）。
-     所以界面上不再有 core / char_1.zip 这类概念，只有"哪部剧情装了没装"。 */
+     所以界面上不再有 core / char_1.zip 这类概念，只有"哪部剧情装了没装"。
+     列表本身由 storylist.js 渲染（与播放器侧栏同一套分类 / 排序 / 筛选）。 */
 
   async function loadUnits(force) {
     if (ST.units.loaded && !force && Date.now() - ST.units.at < 30000) return;
@@ -296,45 +303,38 @@
     } catch (e) { /* 忽略 */ }
   }
 
-  const ADV_LABEL = { main: '主线', event: '活动', other: '其他', tutorial: '新手教程', op: '开场动画' };
-
-  function unitName(key) {
-    if (key.indexOf('char_') === 0) {
-      const id = key.slice(5);
-      const nm = (window.__NAMES || {})[id] || '';
-      const m = (window.__CHARMETA || {})[id] || {};
-      return '角色 ' + id + (nm ? ' · ' + nm : '') + (m.r ? '（' + m.r + '）' : '');
-    }
-    const adv = (window.__ADV || []).find(a => a.key === key);
-    if (adv) {
-      const label = ADV_LABEL[adv.kind] || adv.kind;
-      return label + (adv.no ? ' 第 ' + adv.no + ' 话' : '');
-    }
-    return key;
-  }
+  /* 名字一律用人话（角色名 / 章节标题）。**不再拼「角色 415」「char_415」**：
+     角色一共 384 个、ID 却到 415，序号化的写法会让人以为"角色缺了 31 个"。
+     取名 / 稀有度 / 实装日期 / 横幅路径统一在 storylist.js 里（②③⑤ 三页共用），
+     剧情标题的推算（主线第N部第X章）统一在 common.js 的 ESC.storyTitle。 */
+  function unitName(key) { return SL.info(key).name; }
 
   const stateOf = key => ST.units.state[key] || 'missing';
 
-  function filteredUnits() {
-    const q = ($('#packSearch').value || '').trim().toLowerCase();
-    let list = ST.cat === 'adv' ? ST.units.adv : ST.units.char;
-    if (q) {
-      list = list.filter(k => k.toLowerCase().indexOf(q) >= 0 ||
-        unitName(k).toLowerCase().indexOf(q) >= 0);
-    }
-    // 状态筛选：'' 全部 / 'miss' 只看没装的 / 'have' 只看已装的
-    const dl = ST.dlFilter || '';
-    if (dl === 'miss') list = list.filter(k => stateOf(k) === 'missing');
-    if (dl === 'have') list = list.filter(k => stateOf(k) !== 'missing');
-
-    // 排序走共用函数（common.js）：播放器 / CG 页 / 安装列表口径完全一致
-    const by = ($('#packSort') || {}).value || 'date-desc';
-    return ESC.sortItems(list, by, k => ({
-      id: k,
-      name: unitName(k),
-      date: ESC.dateOf(k),
-    }));
+  /** 某个分类（char / main / event / other）下的全部剧情单元 */
+  function packUnits(src) {
+    return src === 'char' ? ST.units.char : ST.units.adv;
   }
+
+  /** 剧情横幅属于「公共素材」：下过才显示横幅图，没下过列表只显示名字。
+   *  判据用**磁盘上的横幅图**（bannerImg），不用 bundle 缓存计数 ——
+   *  清过资源包缓存后缓存计数会归零，但图还在，列表不该莫名退回纯文字。 */
+  function bannersReady() {
+    // ?nobanner=1 是测试/排错钩子：模拟"还没下公共素材"，列表退回纯文字
+    try {
+      if (new URLSearchParams(location.search).has('nobanner')) return false;
+    } catch (e) { }
+    const p = ST.pub || {};
+    return +((p.bannerImg != null ? p.bannerImg : p.banner) || 0) > 0;
+  }
+
+  const UNIT_BADGE = {
+    ready: ['ok', '已安装'],
+    'soft-missing': ['must', '缺语音'],
+    partial: ['no', '不完整'],
+    missing: ['no', '未安装'],
+  };
+
 
   /* ---------------------------------------------------------------- 基础数据
    * 就是"基础包"：浏览剧情**必须先有**的东西。现在它只有一个成员 ——
@@ -350,37 +350,46 @@
     const pub = ST.pub || {};
     // 背景允许 2% 缺口：官方源本身有 11 个 bgimage 包里没有图
     const near = (a, b) => (b ? (a || 0) >= b * 0.98 : true);
-    const pubAll = ready && near(pub.back, pub.backTotal)
-      && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal)
-      && near(pub.avatar, pub.avatarTotal);
     const pubAny = (pub.back || 0) + (pub.music || 0) + (pub.sfx || 0)
-      + (pub.avatar || 0) > 0;
+      + (pub.avatar || 0) + (pub.banner || 0) > 0;
+    // 后端结构版本：v<2 说明这个服务进程还是加 banner 之前的旧代码
+    // （本地服务是常驻进程，改完 Python 必须重启程序；否则前端会看到缺字段，
+    //   以前被 `|| 0` 兜成「横幅 0/0」，看起来像"没有横幅"）
+    const pubVer = +(pub.v || 0);
+    const pubStale = pubAny && pubVer < 2;
+    const cnt = (have, total) => (total == null ? '—'
+      : (have || 0) + '/' + (total || 0));
+    const pubAll = ready && !pubStale && near(pub.back, pub.backTotal)
+      && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal)
+      && near(pub.avatar, pub.avatarTotal) && near(pub.banner, pub.bannerTotal);
 
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');
 
     const pubLine = pubAny
-      ? '背景 ' + (pub.back || 0) + '/' + (pub.backTotal || 0)
-      + ' · BGM ' + (pub.music || 0) + '/' + (pub.musicTotal || 0)
-      + ' · 音效 ' + (pub.sfx || 0) + '/' + (pub.sfxTotal || 0)
-      + ' · 头像 ' + (pub.avatar || 0) + '/' + (pub.avatarTotal || 0)
-      : '约 <b>775 MB</b>（背景 205 + BGM 539 + 音效 31）';
+      ? '背景 ' + cnt(pub.back, pub.backTotal)
+      + ' · 音乐 ' + cnt(pub.music, pub.musicTotal)
+      + ' · 音效 ' + cnt(pub.sfx, pub.sfxTotal)
+      + ' · 头像 ' + cnt(pub.avatar, pub.avatarTotal)
+      + ' · 横幅 ' + cnt(pub.banner, pub.bannerTotal)
+      + (pubStale ? ' · <b style="color:#f0c05a">程序该重启了</b>' : '')
+      : '约 <b>835 MB</b>（背景 205 + 音乐 539 + 音效 31 + 头像 20 + 横幅 40）';
 
     box.innerHTML =
       '<div class="bp-head"><b>基础数据（必需）</b>' +
       '</div>' +
 
-      // ① 资源清单
-      '<div class="bp-row"><span class="nm">资源清单</span>' +
+      // ① 剧情目录
+      '<div class="bp-row"><span class="nm">剧情目录</span>' +
       '<span class="dim">' +
-      (ready ? esc(mfTxt || '已下载') : '约 5 MB · 决定"现在有哪些剧情可装"') +
+      (ready ? esc(mfTxt || '已下载') : '约 5 MB · 决定"现在有哪些剧情能装"') +
       '</span>' +
       (ready ? '<span class="st ok">已就绪</span>'
         : '<button class="primary" id="bpGet">下载</button>') +
       '</div>' +
 
       // ② 公共素材
-      '<div class="bp-row"><span class="nm">公共素材（背景 / BGM / 音效）</span>' +
+      '<div class="bp-row"><span class="nm">公共素材（背景图 / 背景音乐 / 音效 / 头像 / 剧情横幅）</span>' +
       '<span class="dim" title="官方更新后点「补全」只会下新增的，已有的跳过">' +
       pubLine + '</span>' +
       // 已就绪后不再给「更新」入口：公共素材的增量补齐已经并进
@@ -393,16 +402,17 @@
           + (pubAny ? '补全缺失' : '下载') + '</button>') +
       '</div>' +
 
-      // ③ 素材本身
-      '<div class="bp-row"><span class="nm">素材本身（立绘 / 语音 / 剧本）</span>' +
+      // ③ 剧情本体
+      '<div class="bp-row"><span class="nm">剧情本体（立绘 / 语音 / 剧本）</span>' +
       '<span class="dim">按剧情单独装，见下方列表</span>' +
       '<span class="st none">按剧情</span></div>';
 
     const bp = $('#bpPub');
     if (bp) {
       bp.onclick = () => {
-        if (!confirm('下载公共素材（背景 / BGM / 音效，约 775 MB）？\n\n'
+        if (!confirm('下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅，约 835 MB）？\n\n'
           + '· 所有剧情共用，下过之后装任何剧情都不会缺背景、也不会没音乐\n'
+          + '· 头像与剧情横幅也在这里：下完侧栏/CG 页才有头像，剧情列表才有标题横幅\n'
           + '· 已有的会跳过，重复点不会重下；官方更新后再点也只补新增的\n'
           + '· 下载 + 解包合计约 10–20 分钟（取决于网速），期间可关掉页面\n\n开始？')) return;
         startJob('install/base', {}, '开始下载公共素材');
@@ -453,134 +463,149 @@
     // ② 清单还没下载（仓库不附带，必须现拉最新的）
     if (ST.units.needManifest) {
       box.innerHTML = '<div style="padding:22px">' +
-        '<div class="warn" style="margin:0 0 14px">还没有资源清单。<br>' +
-        '清单决定"现在有哪些剧情可装"，会随官方更新变化，所以不随程序附带，' +
+        '<div class="warn" style="margin:0 0 14px">还没有剧情目录。<br>' +
+        '目录决定"现在有哪些剧情能装"，官方出新剧情它会变，所以不随程序附带，' +
         '需要先下载一次（约 5 MB）。</div>' +
-        '<button class="primary" id="btnGetManifest">下载资源清单</button>' +
-        '<div class="dim" style="margin-top:10px">下载后会解密 25,000+ 个资源包的索引，约 10–20 秒。</div></div>';
+        '<button class="primary" id="btnGetManifest">下载剧情目录</button>' +
+        '<div class="dim" style="margin-top:10px">约 10–20 秒。</div></div>';
       $('#btnGetManifest').onclick = () => startJob('manifest/refresh', {},
-        '开始下载资源清单');
+        '开始更新剧情目录');
       updateSelBar();
       return;
     }
 
     if (!ST.units.loaded) {
-      box.innerHTML = '<div style="padding:22px;color:#7b90a8">正在读取官方资源清单…</div>';
+      box.innerHTML = '<div style="padding:22px;color:#7b90a8">正在读取剧情目录…</div>';
       loadUnits().then(() => { renderPacks(); renderOverview(); })
         .catch(e => {
-          box.innerHTML = '<div style="padding:22px;color:#ff9aa5">清单读取失败：' +
-            esc(e.message) + '<br>点「更新 → 刷新官方清单」重试。</div>';
+          box.innerHTML = '<div style="padding:22px;color:#ff9aa5">目录读取失败：' +
+            esc(e.message) + '<br>点「更新 → 更新剧情目录」重试。</div>';
         });
       updateSelBar();
       return;
     }
 
-    $('#nChar').textContent = '(' + ST.units.char.length + ')';
-    $('#nAdv').textContent = '(' + ST.units.adv.length + ')';
+    // 装好 / 补齐之后把"已经没问题"的从勾选里剔掉：否则「开始安装」一直是灰的，
+    // 看着像卡住了（而 selSummary 又不认它们，用户只能手动取消勾选）
+    ST.sel.forEach(function (k) { if (stateOf(k) === 'ready') ST.sel.delete(k); });
 
-    const list = filteredUnits();
-    const BADGE = {
-      ready: ['ok', '已安装'],
-      'soft-missing': ['must', '缺语音'],
-      partial: ['no', '不完整'],
-      missing: ['no', '未安装'],
-    };
-    if (!list.length) {
-      box.innerHTML = '<div style="padding:22px;color:#7b90a8;text-align:center">' +
-        (ST.dlFilter === 'miss' ? '这一类都装好了 —— 把筛选切回「全部剧情」查看'
-        : ST.dlFilter === 'have' ? '这一类还没装 —— 把筛选切回「全部剧情」查看'
-          : '没有匹配的剧情') +
-        '</div>';
-    } else {
-      box.innerHTML = list.map(function (k) {
-        const st = stateOf(k);
-        const b = BADGE[st] || BADGE.missing;
-        const checked = ST.sel.has(k);
-        return '<label class="packrow" data-id="' + esc(k) + '">' +
-          '<input type="checkbox" data-id="' + esc(k) + '"' +
-          (checked ? ' checked' : '') + (st !== 'missing' ? ' disabled' : '') + '>' +
-          '<span class="ttl"><b>' + esc(unitName(k)) + '</b>' +
-          '<span class="sub">' + esc(k) + '</span></span>' +
-          '<span class="st ' + b[0] + '">' + b[1] + '</span>' +
-          (st !== 'missing'
-            ? '<button class="rowrm" data-rm="' + esc(k) +
-              '" title="删除已解包的资源，释放空间">卸载</button>'
-            : '') +
-          '</label>';
-      }).join('');
-    }
-
-    box.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
-      cb.onchange = function () {
-        if (cb.checked) ST.sel.add(cb.dataset.id); else ST.sel.delete(cb.dataset.id);
-        updateSelBar();
-      };
-    });
-
-    // 卸载：只删"这部剧独占"的东西，背景/CG 与 bundle 缓存默认保留
-    box.querySelectorAll('[data-rm]').forEach(function (btn) {
-      btn.onclick = function (ev) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const k = btn.dataset.rm;
-        if (!confirm('卸载「' + unitName(k) + '」？\n\n'
-          + '会删除：剧本、语音、头像、该角色独占的立绘（通常几十 MB）。\n'
-          + '背景 / CG 可能被别的剧情共用，会保留。\n\n'
-          + '资源包缓存默认保留 —— 以后重装不用重新下载。')) return;
-        startJob('uninstall', { units: [k] }, '正在卸载…');
-      };
-    });
+    ensurePackList().refresh();
     updateSelBar();
   }
 
+  /* ---------------------------------------------------------------- 列表实例
+   * ②③⑤ 三页的"挑剧情"列表都是 storylist.js 那一套（角色 / 主线 / 活动 / 其他，
+   * 实装日期排序、安装状态筛选、稀有度 SSR/SR/R）。这里只负责给它数据和身份。
+   */
+  let packList = null;      // ② 剧情安装
+  let trListEl = null;      // ⑤ 翻译（命名避开转写用的 trList 变量）
+  let upListEl = null;      // ③ 提高CG画质
+
+  function ensurePackList() {
+    if (packList) return packList;
+    packList = SL.create({
+      bar: '#packBar', list: '#packList', sel: ST.sel, src: ST.cat || 'char',
+      units: packUnits,
+      status: stateOf,
+      banners: bannersReady,
+      /* 只有「已装好」的不给再勾。缺语音（soft-missing）/ 不完整（partial）
+         必须能勾 —— 勾上再点「开始安装」就是**补齐**：后端按磁盘上已有文件跳过，
+         只下缺的那些包再重新导出语音，不用整个卸载重装（以前这几行被禁用，
+         用户只能卸载后重下几十 MB）。 */
+      disabled: k => stateOf(k) === 'ready',
+      badge: k => {
+        const b = UNIT_BADGE[stateOf(k)] || UNIT_BADGE.missing;
+        return { cls: b[0], text: b[1] };
+      },
+      rowTitle: k => {
+        const st = stateOf(k);
+        if (st === 'soft-missing') {
+          return '剧本已装、语音没装（能播但没声音）—— 勾上后点「开始安装」只补语音';
+        }
+        if (st === 'partial') {
+          return '剧本文件异常小（上次解包中断）—— 勾上后点「开始安装」重下并重新解包';
+        }
+        return '';
+      },
+      actions: k => {
+        const st = stateOf(k);
+        if (st === 'missing') return [];
+        const out = [{ act: 'rm', label: '卸载', cls: 'rm', title: '删除已解包的资源，释放空间' }];
+        if (st !== 'ready') {
+          out.unshift({ act: 'fill', label: '补齐', cls: 'ok',
+            title: '只下载缺的语音 / 图片并重新导出，不用整个重装' });
+        }
+        return out;
+      },
+      onAction: (k, act) => {
+        // 补齐：和「开始安装」走同一个任务，只是这一部、只补缺的
+        if (act === 'fill') {
+          runInstall([k], '正在补齐「' + unitName(k) + '」缺的部分…');
+          return;
+        }
+        if (act !== 'rm') return;
+        if (!confirm('卸载「' + unitName(k) + '」？\n\n'
+          + '会删除：剧本、语音、头像、该角色独占的立绘（通常几十 MB）。\n'
+          + '背景 / CG 可能被别的剧情共用，会保留。\n\n'
+          + '下载缓存会保留 —— 以后重装不用重新下载。')) return;
+        startJob('uninstall', { units: [k] }, '正在卸载…');
+      },
+      onChange: () => updateSelBar(),
+    });
+    return packList;
+  }
+
+  /** 勾选统计：fresh = 全新安装，fill = 已装但缺东西（缺语音 / 不完整） */
   function selSummary() {
-    const keys = [];
-    ST.sel.forEach(function (k) { if (stateOf(k) === 'missing') keys.push(k); });
-    return { todo: keys.length, keys: keys };
+    const fresh = [];
+    const fill = [];
+    ST.sel.forEach(function (k) {
+      const st = stateOf(k);
+      if (st === 'missing') fresh.push(k);
+      else if (st !== 'ready') fill.push(k);
+    });
+    return { fresh: fresh.length, fill: fill.length,
+             todo: fresh.length + fill.length,
+             keys: fresh.concat(fill) };
   }
 
   function updateSelBar() {
     const s = selSummary();
     const bar = $('#selInfo');
     if (!bar) return;
-    bar.innerHTML = s.todo
-      ? '将安装 <b>' + s.todo + '</b> 部剧情 · 约 <b>' +
-        Math.round(s.todo * 45) + ' MB</b>（按每部 45 MB 估算）'
-      : (ST.sel.size ? '选中的都已安装' : '未选择');
+    if (s.fresh && s.fill) {
+      bar.innerHTML = '将安装 <b>' + s.fresh + '</b> 部 · 补齐 <b>' + s.fill +
+        '</b> 部 · 约 <b>' + Math.round(s.fresh * 45) +
+        ' MB</b>（补齐只下缺的包，通常几 MB）';
+    } else if (s.fresh) {
+      bar.innerHTML = '将安装 <b>' + s.fresh + '</b> 部剧情 · 约 <b>' +
+        Math.round(s.fresh * 45) + ' MB</b>（按每部 45 MB 估算）';
+    } else if (s.fill) {
+      bar.innerHTML = '将补齐 <b>' + s.fill +
+        '</b> 部剧情缺的语音 / 图片（只下缺的包，通常几 MB）';
+    } else {
+      bar.innerHTML = ST.sel.size
+        ? '选中的都装好了（要重装先卸载）'
+        : '未选择';
+    }
     const btn = $('#btnInstall');
     if (btn) btn.disabled = !s.todo;
   }
 
-  $('#packSearch').oninput = () => renderPacks();
-  if ($('#packSort')) {
-    $('#packSort').onchange = () => renderPacks();
-  }
-  if ($('#packDl')) {
-    $('#packDl').onchange = () => {
-      ST.dlFilter = $('#packDl').value;
-      renderPacks();
-    };
-  }
-  $$('#packTabs button').forEach(b => {
-    b.onclick = () => {
-      $$('#packTabs button').forEach(x => x.classList.remove('on'));
-      b.classList.add('on');
-      ST.cat = b.dataset.k;
-      renderPacks();
-    };
-  });
   if ($('#pickAll')) {
     $('#pickAll').onclick = () => {
-      filteredUnits().forEach(function (k) {
-        if (stateOf(k) === 'missing') ST.sel.add(k);
-      });
-      renderPacks();
+      // 只勾"当前分类 + 当前筛选"里还没装的那些（全选不会越界到别的分类）
+      ensurePackList().selectAll();
+      updateSelBar();
     };
   }
   if ($('#pickNone')) {
-    $('#pickNone').onclick = () => { ST.sel.clear(); renderPacks(); };
+    $('#pickNone').onclick = () => {
+      ST.sel.clear();
+      ensurePackList().refresh();
+      updateSelBar();
+    };
   }
-  if ($('#pickByChar')) $('#pickByChar').hidden = true;
   if ($('#optSoft')) $('#optSoft').hidden = true;
   if ($('#optWebp')) $('#optWebp').closest('.optrow').hidden = true;
 
@@ -592,10 +617,10 @@
   }
   const n = +$('#optThreads').value;
     const map = {
-      8: '保守：约 0.5–1 MB/s，几乎不会失败',
-      16: '稳妥：约 1–3 MB/s',
-      32: '推荐：约 3–9 MB/s（实测 32 并发能到 9 MB/s）',
-      64: '极限：能吃满带宽，但个别包失败率会上升',
+      8: '最稳，但最慢（网络很差时选这个）',
+      16: '比较稳，速度中等',
+      32: '最快最省时间',
+      64: '最快，但网络不稳时容易失败',
     };
     $('#threadHint').textContent = map[n] || '';
   }
@@ -608,29 +633,43 @@
   }
 
   // ---------------------------------------------------------------- 安装
-  $('#btnInstall').onclick = async () => {
-    const s = selSummary();
-    if (!s.todo) return;
-    const threads = +$('#optThreads').value;
-    if (!confirm('将从官方 CDN 安装 ' + s.todo + ' 部剧情。\n\n' +
-      '· 每部角色剧情约 30–60 MB（语音 + 背景 + 立绘 + CG）\n' +
-      '· 下载并发 ' + threads + '（官方 CDN 单连接只有 60–100 KB/s，并发越高越快）\n' +
-      '· 装完会在本机解包并合成立绘，单部约 30–90 秒\n\n开始？')) return;
+  /** 提交一次安装任务。安装与「补齐」走同一个后端流程：
+   *  下载层按磁盘上已有文件跳过，所以对已装的剧情重跑只会补缺的包。 */
+  async function runInstall(units, msg, withUpscale) {
+    const threads = (+($('#optThreads') || {}).value) || 32;
     try {
       await api('download', {
         method: 'POST',
         body: JSON.stringify({
-          selected: s.keys,
+          selected: units,
           threads: threads,
-          upscale: $('#optUpscale') ? $('#optUpscale').checked : false,
+          upscale: withUpscale === false ? false
+            : ($('#optUpscale') ? $('#optUpscale').checked : false),
           scale: 2,
         }),
       });
-      toastMsg('已开始安装，进度见底部');
+      toastMsg(msg || '已开始安装，进度见底部');
       connectJobs(true);
+      return true;
     } catch (e) {
       toastMsg('启动失败：' + e.message, true);
+      return false;
     }
+  }
+
+  $('#btnInstall').onclick = async () => {
+    const s = selSummary();
+    if (!s.todo) return;
+    const threads = +$('#optThreads').value;
+    const what = [];
+    if (s.fresh) what.push('安装 ' + s.fresh + ' 部（约 ' + Math.round(s.fresh * 45) + ' MB）');
+    if (s.fill) what.push('补齐 ' + s.fill + ' 部（缺语音/不完整，只下缺的包）');
+    if (!confirm('即将' + what.join(' + ') + '。\n\n' +
+      '· 每部角色剧情约 30–60 MB（语音 + 背景 + 立绘 + CG）\n' +
+      '· 下载速度：同时下 ' + threads + ' 个\n' +
+      '· 单部约 30–90 秒装好\n' +
+      '· 已经下过的文件会跳过，重复点不会重新下载\n\n开始？')) return;
+    runInstall(s.keys, '已开始安装，进度见底部');
   };
 
   // ---------------------------------------------------------------- 任务
@@ -694,6 +733,32 @@
       }
       const g = $('#btnPruneGo');
       if (g) g.hidden = !(r.unused && r.dry);
+      if (!r.dry && ST._pruneDone !== pr.id) {
+        ST._pruneDone = pr.id;
+        _space = null;
+        loadStats(true);
+      }
+    }
+
+    // 清理空间的执行结果（任务几秒后从底部条消失，结论要留在页面上）
+    const cl = (list || []).find(j => j.kind === 'cleanup' && j.state === 'done'
+      && j.detail && j.detail.clean);
+    if (cl) {
+      const r = cl.detail.clean;
+      const box = $('#cleanResult');
+      if (box) {
+        box.innerHTML = '上次清理：<b>' + esc(r.label || r.what) + '</b> —— '
+          + (r.dry
+            ? '预演，共 ' + r.files + ' 个文件 / ' + human(r.bytes) + '（未删除）'
+            : '删除 ' + r.deleted + ' 个文件，释放 <b>' + human(r.bytes) + '</b>'
+              + (r.skipped ? '，跳过 ' + r.skipped + ' 个（被占用）' : ''));
+      }
+      // 清理完数字肯定变了：强制重算一次（否则页面还显示清理前的占用）
+      if (ST._cleanDone !== cl.id) {
+        ST._cleanDone = cl.id;
+        _space = null;
+        loadStats(true);
+      }
     }
 
     // 导出任务「刚跑完」→ 按用户设置自动弹出文件夹。
@@ -781,11 +846,10 @@
       const md = mfJob.detail;
       const box = $('#wikiResult');
       if (md.scraped) {
-        const src = md.source === 'wiki' ? '（直连 Wiki）' : '（GitHub）';
-        if (box) box.textContent = '角色信息已更新 ' + md.scraped + ' 个' + src;
+        if (box) box.textContent = '角色资料已更新 ' + md.scraped + ' 条';
       } else if (box) {
-        box.textContent = '角色信息未更新：'
-          + (md.wiki_error || md.metaError || '见底部日志');
+        box.textContent = '角色资料没更新成功（详情见底部「操作记录」）';
+        box.title = md.wiki_error || md.metaError || '';
         if (md.proxy_needed) {
           const tip = $('#wikiProxyTip');
           if (tip) tip.style.display = 'block';
@@ -802,13 +866,15 @@
       if (wk.state === 'failed') {
         // GitHub 和直连 Wiki 都失败才会到这；直连 Wiki 失败才可能 proxy_needed
         if (d.proxy_needed && wtip) wtip.style.display = 'block';
-        if (wres) wres.textContent = '获取失败：' + (d.wiki_error || '见底部日志');
+        if (wres) {
+          wres.textContent = '没获取到角色资料（详情见底部「操作记录」）';
+          wres.title = d.wiki_error || '';
+        }
       } else if (wk.state === 'done') {
         if (wtip) wtip.style.display = 'none';
-        const src = d.source === 'wiki' ? '（直连 Wiki）' : '（GitHub）';
-        if (wres) wres.textContent = '已更新 ' + (d.scraped || '') + ' 个角色' + src;
+        if (wres) wres.textContent = '角色资料已更新 ' + (d.scraped || '') + ' 条';
       } else if (wk.state === 'running' || wk.state === 'queued') {
-        if (wres) wres.textContent = '获取中…';
+        if (wres) wres.textContent = '正在获取角色资料…';
       }
     }
 
@@ -888,15 +954,70 @@
   }
 
   // ---------------------------------------------------------------- 画质
+  /* ③ 也有一个"挑剧情"列表：不选 = 处理全部已装剧情（老行为），
+     选了就只超分这几部剧情**引用到的图**（后端按 data/<unit>.js 里的
+     立绘 / 背景 / CG 引用算，不会多跑一张）。 */
+  ST.upSel = ST.upSel || new Set();
+
+  function updateUpInfo() {
+    const el = $('#upSelInfo');
+    if (!el) return;
+    el.innerHTML = ST.upSel.size
+      ? '只处理所选 <b>' + ST.upSel.size + '</b> 部剧情引用到的图'
+      : '未选择：处理全部已装剧情';
+  }
+
+  function ensureUpList() {
+    if (upListEl) return upListEl;
+    upListEl = SL.create({
+      bar: '#upBar', list: '#upList', sel: ST.upSel, src: 'char',
+      units: packUnits,
+      status: stateOf,
+      banners: bannersReady,
+      disabled: k => stateOf(k) === 'missing',   // 没装的没图可超分
+      badge: k => {
+        const b = UNIT_BADGE[stateOf(k)] || UNIT_BADGE.missing;
+        return { cls: b[0], text: b[1] };
+      },
+      onChange: () => { updateUpInfo(); refreshPlan(); },
+      empty: () => '还没有已安装的剧情 —— 先到「剧情安装」装一部再做高清',
+    });
+    return upListEl;
+  }
+
   function renderQuality() {
     const eng = (ST.state && ST.state.engine) || {};
-    $('#engineInfo').textContent = '当前引擎：' + (eng.note || '未知')
-      + (ST.state && ST.state.pillow ? '（Pillow 已就绪）' : '（缺少 Pillow，超分与转码不可用）');
+    const el = $('#engineInfo');
+    const okEng = !!eng.kind && eng.kind !== 'none';
+    const okPy = !!(ST.state && ST.state.pillow);
+    if (el) {
+      el.textContent = (okEng && okPy)
+        ? '高清化引擎已就绪，可以放心用'
+        : (okEng ? '⚠ 缺少一个组件（Pillow），暂时不能超分'
+          : '⚠ 这台电脑上没找到高清化引擎，暂时不能超分');
+      // 引擎名和参数只放在鼠标悬停里，正文不展示
+      el.title = (eng.note || '未知引擎') + (okPy ? ' / Pillow 已就绪' : ' / 缺少 Pillow');
+    }
+    if (ST.units.loaded) {
+      ensureUpList().refresh();
+    } else {
+      loadUnits().then(() => {
+        if (upListEl) upListEl.refresh();
+        updateUpInfo();
+        refreshPlan();
+      }).catch(() => { });
+    }
+    updateUpInfo();
     refreshPlan();
   }
 
   /* 超分预估：多少张 / 原图多大 / 放大到多少 / 估计要多久
      超分是最容易让人后悔的操作（几分钟、CPU 满载），光写"很慢"没说服力。 */
+  /** 当前"只处理这些剧情"的选择（空数组 = 全部已装剧情） */
+  function upUnitsParam() {
+    return Array.from(ST.upSel || []);
+  }
+
   async function refreshPlan() {
     const box = $('#upPlan');
     if (!box) return;
@@ -907,10 +1028,12 @@
       return;
     }
     box.innerHTML = '<span class="dim">统计中…</span>';
+    const units = upUnitsParam();
     try {
       const d = await api('upscale/plan?kinds='
         + encodeURIComponent(kinds.join(','))
-        + '&scale=' + encodeURIComponent($('#upScale').value));
+        + '&scale=' + encodeURIComponent($('#upScale').value)
+        + (units.length ? '&units=' + encodeURIComponent(units.join(',')) : ''));
       ST._plan = d;
       if (!d.total) {
         box.innerHTML = '<span class="dim">'
@@ -928,13 +1051,15 @@
         return (LAB[k] || k) + ' ' + v.w + '×' + v.h
           + ' → <b>' + v.outW + '×' + v.outH + '</b>';
       }).join(' ｜ ');
+      const scope = units.length
+        ? '范围：所选 <b>' + units.length + '</b> 部剧情'
+        : '范围：全部已装剧情';
       box.innerHTML =
-        '<b>本次待超分 ' + d.total + ' 张</b>（' + esc(by) + '）<br>'
+        '<b>本次待超分 ' + d.total + ' 张</b>（' + esc(by) + '）· ' + scope + '<br>'
         + (szTxt ? '尺寸：' + szTxt + '（' + d.scale + ' 倍）<br>' : '')
         + '平均单张约 <b>' + d.perImageSec + ' 秒</b>，预计共 <b>' + esc(d.etaText) + '</b>'
-        + '<div class="dim" style="margin-top:6px">按当前引擎（'
-        + esc(d.engineNote || d.engine) + '）估算，实际有 ±30% 波动。'
-        + '超分会占满 CPU，期间电脑变卡、风扇会响；随时可取消，已完成的不白做。</div>';
+        + '<div class="dim" style="margin-top:6px">按当前电脑估的，实际可能有 ±30% 出入。'
+        + '跑的时候电脑会变卡、风扇会响；随时能取消，做完的不会白做。</div>';
     } catch (e) {
       box.innerHTML = '<span class="dim">预估失败：' + esc(e.message) + '</span>';
       ST._plan = null;
@@ -943,80 +1068,151 @@
 
   $$('.upk').forEach(c => { c.onchange = () => refreshPlan(); });
   if ($('#upScale')) $('#upScale').onchange = () => refreshPlan();
+  if ($('#upAll')) {
+    $('#upAll').onclick = () => {
+      ensureUpList().selectAll();
+      updateUpInfo();
+      refreshPlan();
+    };
+    $('#upNone').onclick = () => {
+      ST.upSel.clear();
+      ensureUpList().refresh();
+      updateUpInfo();
+      refreshPlan();
+    };
+  }
 
-  /* 磁盘统计要遍历 24 万个文件（服务端约 1–2 秒），所以只在真的打开这一页时算，
-     并且服务端本身还带 30 秒缓存。 */
+  /* ---------------------------------------------------------- 空间账本
+   * 数据来自 /api/space：服务端**一次遍历**把整个程序目录按用途分桶
+   * （语音 / 原图 / 超分图 / 剧本 / 资源包缓存 / 导出…），27 万个文件约 1–3 秒，
+   * 服务端缓存 2 分钟。
+   * 为什么不再用 /api/stats 拼页面：那个接口只给三个 media 目录的数字，
+   * 用户算不出"30 GB 都花在哪"，也看不到"哪些能删"。
+   */
   let _statsAt = 0;
+  let _space = null;
   async function loadStats(force) {
-    if (!force && Date.now() - _statsAt < 20000) return;
+    if (!force && _space && Date.now() - _statsAt < 20000) { renderSpace(_space); return; }
     _statsAt = Date.now();
     const disk = $('#diskStats');
     if (!disk) return;
-    disk.innerHTML = '<div class="dim">统计中…（首次约 1–2 秒）</div>';
+    disk.innerHTML = '<div class="dim">统计中…（首次约 1–3 秒）</div>';
+    const detail = $('#diskDetail');
+    if (detail) detail.innerHTML = '';
     try {
-      const d = await api('stats' + (force ? '?force=1' : ''));
-      const img = d.img || {};
-      const rows = [
-        ['原图 img/', human((img.img || {}).bytes), `${(img.img || {}).files || 0} 个文件`],
-        ['超分 img_x2/', human((img.img_x2 || {}).bytes), `${(img.img_x2 || {}).files || 0} 个文件`],
-        ['语音 audio/', human((img.audio || {}).bytes), `${(img.audio || {}).files || 0} 个文件`],
-        ['剩余磁盘', human(img.free), '统计于 ' + (img.at || '-')],
-      ];
-      // 两个数字口径不同（img/ 是全部图片，待超分只算映射表登记过的 stand/back/cg），
-      // 不解释的话用户一定会问"为什么 28042 个文件只有 3481 张要超分"。
-      const up = img.upscalable || null;
-      const bk = img.byKindFiles || {};
-      const imgAll = (img.img || {}).files || 0;
-      const standAll = bk.stand || 0;
-      const standMap = (up && up.byKind && up.byKind.stand && up.byKind.stand.total) || 0;
-      const cgAll = bk.cg || 0;
-      const cgMap = (up && up.byKind && up.byKind.cg && up.byKind.cg.total) || 0;
-      // 逐项列出"不参与超分"的构成，并用它们的和作为总数，
-      // 免得分项之和与总数差一两个，反而更像 bug。
-      const parts = [
-        ['未被任何剧情引用的立绘', Math.max(0, standAll - standMap)],
-        ['剧情插图', bk.story || 0],
-        ['头像', bk.avatar || 0],
-        ['全身立绘', bk.standfull || 0],
-        ['未登记的背景', Math.max(0, (bk.back || 0)
-          - ((up && up.byKind && up.byKind.back && up.byKind.back.total) || 0))],
-        ['未登记的 CG', Math.max(0, cgAll - cgMap)],
-      ].filter(function (x) { return x[1] > 0; });
-      const outside = parts.reduce(function (s, x) { return s + x[1]; }, 0);
-      const note = up
-        ? '<div class="dim" style="margin-top:10px;line-height:1.85">'
-          + '<b>为什么图片数量对不上：</b><br>'
-          + '「待超分」只统计<b>图片映射表里登记过</b>的图 —— 立绘 '
-          + standMap + ' · 背景 ' + ((up.byKind.back || {}).total || 0)
-          + ' · CG ' + cgMap + '，共 <b>' + up.total + '</b> 个；已超分 '
-          + up.done + ' 个，剩 <b>' + up.left + '</b> 个。<br>'
-          + 'img/ 里的 ' + imgAll + ' 个文件是解出来的<b>全部</b>图片，其中 '
-          + outside + ' 张<b>不参与超分</b>：'
-          + parts.map(function (x) { return x[0] + ' ' + x[1] + ' 张'; })
-            .join('、')
-          + '。</div>'
-        : '';
-      disk.innerHTML = rows.map(([k, v, s]) => `
-        <div class="stat"><div class="k">${esc(k)}</div>
-          <div class="v">${esc(v)}</div><div class="k">${esc(s)}</div></div>`).join('')
-        + note;
+      const d = await api('space' + (force ? '?force=1' : ''));
+      _space = d;
+      renderSpace(d);
     } catch (e) {
       disk.innerHTML = '<div class="dim">统计失败：' + esc(e.message) + '</div>';
     }
+  }
+
+  function renderSpace(d) {
+    const disk = $('#diskStats');
+    if (!disk) return;
+    const by = {};
+    (d.groups || []).forEach(g => { by[g.key] = g; });
+    const size = k => (by[k] ? by[k].bytes : 0);
+    const cnt = k => (by[k] ? by[k].files : 0);
+    const dk = d.disk || {};
+    const usedPct = dk.total ? Math.round(100 * dk.used / dk.total) : 0;
+
+    const cells = [
+      ['本程序总占用', human((d.root || {}).bytes),
+        `${(d.root || {}).files || 0} 个文件`],
+      ['剧情语音', human(size('audio')), `${cnt('audio')} 个文件`],
+      ['剧情图片（原图）', human(size('img')), `${cnt('img')} 个文件`],
+      ['超分高清图', human(size('x2')), `${cnt('x2')} 个文件`],
+      ['剧本数据', human(size('script')), `${cnt('script')} 个文件`],
+      ['可删的缓存', human(size('bundles')), `${cnt('bundles')} 个压缩包`],
+      ['可安全清理', human(d.reclaim), '缓存 · 原图 · 导出 · 日志'],
+    ];
+    disk.innerHTML = cells.map(function (c) {
+      return '<div class="stat"><div class="k">' + esc(c[0]) + '</div>' +
+        '<div class="v">' + esc(c[1]) + '</div>' +
+        '<div class="k">' + esc(c[2]) + '</div></div>';
+    }).join('')
+      // 磁盘余量单独一格，带一条占用率条：用户真正关心的是"还能装几部"
+      + '<div class="stat"><div class="k">所在磁盘</div>'
+      + '<div class="v">' + human(dk.free) + '<small>可用</small></div>'
+      + '<div class="k">已用 ' + usedPct + '% · 共 ' + human(dk.total) + '</div>'
+      + '<div class="bar"><i style="width:' + usedPct + '%"></i></div></div>';
+
+    // 逐项明细（像账单一样一行一项）：只列有内容的桶。
+    // 具体目录只放在鼠标悬停里 —— 小白看路径没意义，排错时悬停就能看到。
+    const rows = (d.groups || []).map(function (g) {
+      return '<div class="kv" title="' + esc(g.path || '') + '">'
+        + '<span class="nm">' + esc(g.label) + '</span>'
+        + '<span class="sz">' + human(g.bytes) + '</span></div>';
+    }).join('');
+
+    // "为什么图片数量对不上"：两个口径不同（磁盘上全部图片 vs 映射表里可超分的图），
+    // 不解释的话用户一定会问"为什么 2.8 万个文件只有 3500 张要超分"。
+    const up = d.upscale || null;
+    const bk = d.byKindFiles || {};
+    const standAll = bk.stand || 0;
+    const cgAll = bk.cg || 0;
+    const standMap = (up && up.byKind && up.byKind.stand && up.byKind.stand.total) || 0;
+    const cgMap = (up && up.byKind && up.byKind.cg && up.byKind.cg.total) || 0;
+    const rest = [
+      ['未被任何剧情引用的立绘', Math.max(0, standAll - standMap)],
+      ['剧情插图', bk.story || 0],
+      ['头像', bk.avatar || 0],
+      ['全身立绘', bk.standfull || 0],
+      ['未登记的背景', Math.max(0, (bk.back || 0)
+        - ((up && up.byKind && up.byKind.back && up.byKind.back.total) || 0))],
+      ['未登记的 CG', Math.max(0, cgAll - cgMap)],
+    ].filter(function (x) { return x[1] > 0; });
+    const outside = rest.reduce(function (s, x) { return s + x[1]; }, 0);
+    const note = up
+      ? '<div class="dim" style="margin-top:12px;line-height:1.85">'
+        + '<b>高清化进度：</b>能做 <b>' + up.total + '</b> 张'
+        + '（立绘 ' + standMap + ' · 背景 ' + ((up.byKind.back || {}).total || 0)
+        + ' · CG ' + cgMap + '），已做 <b>' + up.done + '</b>，还剩 <b>' + up.left + '</b>。'
+        + (outside ? '另有 ' + outside + ' 张不参与高清化（头像、剧情插图等）。' : '')
+        + '<span style="display:block;margin-top:4px">统计于 ' + esc(d.at || '-') + '</span>'
+        + '</div>'
+      : '';
+    const detail = $('#diskDetail');
+    if (detail) {
+      detail.innerHTML = '<div class="kvList">' + rows + '</div>' + note;
+    }
+
+    // 清理区顶部的"这项占多少"
+    const fmt = (k) => {
+      const g = by[k];
+      return g ? human(g.bytes) + ' · ' + g.files + ' 个文件' : '0 B（没有可删的）';
+    };
+    const setTxt = (sel, txt) => { const el = $(sel); if (el) el.textContent = txt; };
+    setTxt('#cBundles', fmt('bundles'));
+    setTxt('#cX2', fmt('x2'));
+    setTxt('#cExport', fmt('export'));
+    const og = d.originals || {};
+    setTxt('#cOriginals', og.bytes
+      ? human(og.bytes) + ' · ' + og.files + ' 张'
+      : '0 B（没有可删的）');
+    const junk = ['logs', 'downloads', 'backup']
+      .map(k => size(k)).reduce(function (a, b) { return a + b; }, 0);
+    setTxt('#cJunk', junk ? human(junk) : '0 B（没有可删的）');
   }
 
   $('#btnUpscale').onclick = async () => {
     const kinds = $$('.upk').filter(c => c.checked).map(c => c.value);
     if (!kinds.length) { toastMsg('至少选一类图', true); return; }
     const p = ST._plan;
+    const units = upUnitsParam();
     const eta = (p && p.total)
       ? `\n本次 ${p.total} 张，单张约 ${p.perImageSec} 秒，预计 ${p.etaText}` : '';
-    if (!confirm(`将对已下载的【${kinds.join(' / ')}】做超分（${$('#upScale').value} 倍）。${eta}\n\n` +
+    const scope = units.length ? `所选 ${units.length} 部剧情里的` : '已下载的';
+    if (!confirm(`将对${scope}【${kinds.join(' / ')}】做超分（${$('#upScale').value} 倍）。${eta}\n\n` +
       `这会占用大量 CPU，期间电脑会变卡；可以随时取消，已完成的不会重做。继续？`)) return;
     try {
       await api('upscale', {
         method: 'POST',
-        body: JSON.stringify({ kinds, scale: +$('#upScale').value }),
+        body: JSON.stringify({
+          kinds: kinds, scale: +$('#upScale').value, units: units,
+        }),
       });
       toastMsg('超分已开始');
       connectJobs(true);
@@ -1055,11 +1251,61 @@
   const btnPruneGo = $('#btnPruneGo');
   if (btnPruneGo) {
     btnPruneGo.onclick = () => {
-      if (!confirm('确认删除这些"没有被任何已装剧情引用"的资源包？\n\n' +
+      if (!confirm('确认删掉这些没人用的旧压缩包？\n\n' +
         '删掉后如果以后重新装回那部剧情，会重新下载一遍。')) return;
-      startJob('cdn/prune', { dry: false }, '开始清理未引用的缓存');
+      startJob('cdn/prune', { dry: false }, '开始清理没用的旧缓存');
     };
   }
+
+  /* ---------------------------------------------------------- 清理空间
+   * 每一项的 confirm 文案都要写清"删了会怎样" —— 这些操作不可撤销，
+   * 而用户点之前唯一的信息来源就是这几行字。
+   */
+  const CLEAN_CONFIRM = {
+    bundles: () => '删除全部下载缓存（原始压缩包）？\n\n'
+      + '这些是下载回来的原始压缩包，解包成图片 / 语音 / 剧本之后就再也用不到了。\n'
+      + '删掉不影响已完成解包的剧情播放，只是以后重新安装、或「补全缺失」'
+      + '某部剧情时会重新下载。\n\n确定删除？',
+    x2: () => '删除全部超分高清图？\n\n'
+      + '删完立刻用回原图播放，不会黑图、不影响剧情，但画质会变回原样。\n'
+      + '想再要高清得重新做一次（比较慢）。\n\n确定删除？',
+    export: () => '清空导出成品目录？\n\n'
+      + '里面的视频、CG 压缩包、导出的翻译 txt 都会被删掉，删了要重新导一次。\n'
+      + '想要的东西先拷走。\n\n确定清空？',
+    logs: () => '清理日志文件？\n\n只用于排错，删了不影响任何功能。'
+      + '正在写的那个文件会被系统占用，会自动跳过。\n\n确定清理？',
+    downloads: () => '清理下载残留？\n\n'
+      + '中断下载留下的临时文件与视频导出的临时上传文件，删了不影响已装剧情。'
+      + '\n\n确定清理？',
+    backup: () => '清理旧备份目录？\n\n确定清理？',
+  };
+
+  async function runClean(what, btn) {
+    const f = CLEAN_CONFIRM[what];
+    if (f && !confirm(f())) return;
+    if (btn) btn.disabled = true;
+    try {
+      await api('space/clean', {
+        method: 'POST', body: JSON.stringify({ what, dry: false }),
+      });
+      toastMsg('已开始清理，进度见底部任务条');
+      connectJobs(true);
+      // 任务跑完才准再点（避免重复提交同一件事）
+      setTimeout(() => { if (btn) btn.disabled = false; }, 4000);
+    } catch (e) {
+      toastMsg('清理失败：' + e.message, true);
+      if (btn) btn.disabled = false;
+    }
+  }
+  $$('[data-clean]').forEach(b => {
+    b.onclick = () => runClean(b.dataset.clean, b);
+  });
+  const goClean = $('#btnGoClean');
+  if (goClean) goClean.onclick = () => goto('settings');
+  const goPacks = $('#btnGoPacks');
+  if (goPacks) goPacks.onclick = () => goto('packs');
+  const openExp2 = $('#btnOpenExport2');
+  if (openExp2) openExp2.onclick = () => openDir('export', '导出目录');
 
   // ---------------------------------------------------------------- 导出
   /* 视频导出：**每个角色一条视频**，所选段落连续录进同一条
@@ -1072,78 +1318,104 @@
     return _vidDep;
   }
 
-  function renderExport() {
-    const kind = $('#vidKind').value;
-    const q = ($('#vidSearch').value || '').trim().toLowerCase();
-    let list = (kind === 'char' ? ST.units.char : ST.units.adv)
-      .filter(k => (ST.units.state[k] || 'missing') !== 'missing');   // 只列已装的
-    if (q) {
-      list = list.filter(k => k.toLowerCase().indexOf(q) >= 0 ||
-        unitName(k).toLowerCase().indexOf(q) >= 0);
-    }
-    // 排序走共用函数（common.js），与播放器、CG 页、安装列表完全一致
-    list = ESC.sortItems(list, ($('#vidSort') || {}).value || 'date-desc',
-      k => ({ id: k, name: unitName(k), date: ESC.dateOf(k) }));
-    const box = $('#vidList');
-    if (!box) return;
+  /* ④ 的剧情选择列表：与 ②③⑤ 共用 storylist.js。
+     只列「已安装」的剧情 —— 没装就没有剧本可渲染，列出来也点不动，
+     所以状态筛选整个不显示（noStatus）。 */
+  let vidList = null;
+  function ensureVidList() {
+    if (vidList) return vidList;
+    vidList = SL.create({
+      bar: '#vidBar', list: '#vidList', sel: ST.vidSel, src: 'char',
+      units: src => (src === 'char' ? ST.units.char : ST.units.adv)
+        .filter(k => stateOf(k) !== 'missing'),
+      status: stateOf,
+      noStatus: true,
+      banners: bannersReady,
+      // 切分类就清空勾选：段落数按分类定（角色 6 段、章节最多 9 段），
+      // 混选会让"第 7 段"这种勾选落到只有 6 段的角色身上，导出时那个角色直接失败。
+      onSrc: () => {
+        ST.vidSel.clear();
+        renderParts();
+      },
+      // 勾选变了要重排「录哪几段」：不同剧情段数差别很大（角色 6 段、
+      // 其他剧情有 2 段的也有 28 段的），段数必须跟着所选剧情走
+      onChange: () => renderParts(),
+      onRender: () => updateVidInfo(),
+      empty: () => '还没有已安装的剧情 —— 先到「② 剧情安装」装一部',
+    });
+    return vidList;
+  }
 
-    // 导出视频要 playwright + av + numpy（离线渲染 mp4），缺了先提示
+  function renderExport() {
+    const warn = $('#vidWarn');
+    const box = $('#vidBox');
+    if (!warn || !box) return;
+
+    /* 导出视频要 playwright + av + numpy（离线渲染 mp4），缺了先提示。
+       提示放在列表**上方**并且把列表收起来：以前是把提示写进列表容器里，
+       用户会以为"列表就是空的"。 */
     if (_vidDep === null) {
-      box.innerHTML = '<div class="dim" style="padding:14px">检查导出环境…</div>';
+      warn.hidden = false;
+      warn.className = 'dim';
+      warn.textContent = '检查导出环境…';
+      box.hidden = true;
       checkVidDeps().then(() => renderExport());
       return;
     }
     if (!_vidDep.ready) {
-      box.innerHTML = '<div class="warn" style="margin:0 0 12px;line-height:2">' +
-        '缺少导出视频所需的组件：<b>' +
-        esc((_vidDep.missing || []).join('、')) + '</b><br>' +
+      warn.hidden = false;
+      warn.className = 'warn';
+      warn.innerHTML =
+        '缺少导出视频所需的组件：<b>' + esc((_vidDep.missing || []).join('、')) + '</b><br>' +
         '它们用来驱动无头浏览器截帧、以及编码 mp4。<br>' +
         '<b>用便携包的：</b>便携版自带，出现这个多半是解压不完整或被杀软拦了，' +
         '重新解压并加白名单。<br>' +
         '<b>从源码克隆的：</b>双击 <code>启动.bat</code>，或手动 ' +
-        '<code>pip install playwright av</code>。</div>';
+        '<code>pip install playwright av</code>。';
+      box.hidden = true;
       return;
     }
     // 列表数据可能还没加载（直接进本页时）——加载完自己重画
     if (!ST.units.loaded) {
-      box.innerHTML = '<div class="dim" style="padding:14px">正在读取剧情列表…</div>';
+      warn.hidden = false;
+      warn.className = 'dim';
+      warn.textContent = '正在读取剧情列表…';
+      box.hidden = true;
       loadUnits().then(() => { renderExport(); renderBasePack(); }).catch(() => { });
       return;
     }
-    if (!list.length) {
-      box.innerHTML = '<div class="dim" style="padding:14px">' +
-        '还没有已安装的剧情 —— 先到「剧情安装」装一部' +
-        '</div>';
-    } else {
-      box.innerHTML = list.map(function (k) {
-        return '<label class="charrow" data-id="' + esc(k) + '">' +
-          '<input type="checkbox" data-id="' + esc(k) + '"' +
-          (ST.vidSel.has(k) ? ' checked' : '') + '>' +
-          '<span class="nm">' + esc(unitName(k)) +
-          ' <span class="n">' + esc(k) + '</span></span>' +
-          '<span class="n">' + (ST.units.state[k] === 'ready' ? '完整' : '缺语音') + '</span>' +
-          '</label>';
-      }).join('');
-      box.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
-        cb.onchange = function () {
-          if (cb.checked) ST.vidSel.add(cb.dataset.id);
-          else ST.vidSel.delete(cb.dataset.id);
-          updateVidInfo();
-        };
-      });
-    }
+    warn.hidden = true;
+    box.hidden = false;
+    ensureVidList().refresh();
     renderParts();
+  }
+
+  /** 段落数：按**勾选的剧情**取真实段数（其他剧情常常只有 3 段，
+   *  一律给 9 段等于让人勾到不存在的段，导出时那部会直接失败）。
+   *  没勾选时退回该类别的常见段数（角色 6 段、章节 9 段）。 */
+  function partCount() {
+    let n = 0;
+    ST.vidSel.forEach(function (k) {
+      const p = SL.info(k).parts;
+      if (p > n) n = p;
+    });
+    if (n) return n;
+    return (vidList ? vidList.getSrc() : 'char') === 'char' ? 6 : 9;
   }
 
   function renderParts() {
     // 段落对所有选中角色通用；勾相邻几段 = 连续录制，合成一条
-    const count = $('#vidKind').value === 'adv' ? 9 : 6;
+    const count = partCount();
+    // 重画时保留已勾的段（搜索、勾选都会触发重画，以前会把用户选的段冲掉）
+    let keep = vidParts().filter(v => v >= 1 && v <= count);
+    if (!keep.length) keep = [1];
     // value 用 **1 基**（第 1 段 = 1）：后端 story.Timeline 是 `_build_part(pi - 1)`，
     // 导出文件名 seg_label 也是 p<该值>。以前这里给 0 基，选第 2 段会被当成第 1 段，
     // 选第 1 段更会因为 -1 变成"最后一段"。
     $('#vidParts').innerHTML = Array.from({ length: count }, function (_, i) {
-      return '<label class="' + (i < 1 ? 'on' : '') + '">' +
-        '<input type="checkbox" value="' + (i + 1) + '"' + (i < 1 ? ' checked' : '') + '>' +
+      const on = keep.indexOf(i + 1) >= 0;
+      return '<label class="' + (on ? 'on' : '') + '">' +
+        '<input type="checkbox" value="' + (i + 1) + '"' + (on ? ' checked' : '') + '>' +
         '第 ' + (i + 1) + ' 段</label>';
     }).join('');
     $$('#vidParts label').forEach(function (lb) {
@@ -1166,36 +1438,42 @@
     const info = $('#vidSelInfo');
     if (info) {
       info.textContent = n
-        ? '已选 ' + n + ' 个 · 第 ' + parts.join('、') + ' 段'
-        : '未选择角色';
+        ? '已选 ' + n + ' 部剧情 · 第 ' + parts.join('、') + ' 段'
+        : '未选择剧情';
     }
     const h = $('#vidHint');
     if (h) {
       h.innerHTML = n
-        ? '将导出 <b>' + n + '</b> 条 mp4（每个角色一条，各含所选 ' + parts.length +
-          ' 段，连续段落合并成同一条）'
-        : '选角色 → 选段落 → 开始导出';
+        ? '将导出 <b>' + n + '</b> 条 mp4（每部剧情一条，各含所选 ' + parts.length +
+          ' 段，连续段落合并成同一条）' + mixedPartsNote()
+        : '选剧情 → 选段落 → 开始导出';
     }
   }
 
-  $('#vidKind').onchange = () => { ST.vidSel.clear(); renderExport(); };
-  if ($('#vidSort')) $('#vidSort').onchange = () => renderExport();
-  $('#vidSearch').oninput = () => renderExport();
-  $('#vidAll').onclick = () => {
-    const kind = $('#vidKind').value;
-    (kind === 'char' ? ST.units.char : ST.units.adv).forEach(function (k) {
-      if ((ST.units.state[k] || 'missing') !== 'missing') ST.vidSel.add(k);
+  /** 所选剧情的段数不一致时提醒一句：段号是"每部剧情各自数"的，
+   *  勾了第 5 段而某部只有 3 段，那部在导出时会失败（其余照常导出）。 */
+  function mixedPartsNote() {
+    const ns = [];
+    ST.vidSel.forEach(function (k) {
+      const p = SL.info(k).parts;
+      if (p && ns.indexOf(p) < 0) ns.push(p);
     });
-    renderExport();
-  };
-  $('#vidNone').onclick = () => { ST.vidSel.clear(); renderExport(); };
+    if (ns.length < 2) return '';
+    ns.sort((a, b) => a - b);
+    return '<br><span style="color:#e5c98a">注意：所选剧情段数不同（最少 '
+      + ns[0] + ' 段 / 最多 ' + ns[ns.length - 1] + ' 段），勾到超出某部段数的段号时，'
+      + '那一部会导出失败，其余照常。</span>';
+  }
+
+  $('#vidAll').onclick = () => ensureVidList().selectAll();
+  $('#vidNone').onclick = () => ensureVidList().clear();
 
   $('#btnVidQueue').onclick = async () => {
-    if (!ST.vidSel.size) { toastMsg('先选角色', true); return; }
+    if (!ST.vidSel.size) { toastMsg('先选剧情', true); return; }
     const parts = vidParts();
     if (!parts.length) { toastMsg('至少选一段', true); return; }
     const units = Array.from(ST.vidSel);
-    if (!confirm('将导出 ' + units.length + ' 条 mp4（每个角色一条，各含所选 ' +
+    if (!confirm('将导出 ' + units.length + ' 条 mp4（每部剧情一条，各含所选 ' +
       parts.length + ' 段，连续段落合并成同一条）。\n\n' +
       '· 离线渲染：逐句定格截图后编码，画面稳定、无掉帧\n' +
       '· 实测每句约 2 秒 → 单段约 3–5 分钟，6 段全导约 15–25 分钟\n' +
@@ -1218,48 +1496,71 @@
     return ST.cg;
   }
 
-  function renderCgList() {
-    const q = ($('#cgSearch').value || '').trim().toLowerCase();
-    const chars = ((ST.cg && ST.cg.chars) || []).filter(c =>
-      !q || String(c.id).includes(q) || (c.name || '').toLowerCase().includes(q));
-    const box = $('#cgList');
-    box.innerHTML = chars.slice(0, 400).map(c => `
-      <label class="charrow" data-id="${c.id}">
-        <input type="checkbox" data-id="${c.id}" ${ST.cgSel.has(c.id) ? 'checked' : ''}>
-        <span class="nm">${esc(c.name)} <span class="n">ID ${c.id}</span></span>
-        <span class="n">${c.groups.length} 组 · ${c.total} 张</span>
-      </label>`).join('') || '<div style="padding:16px;color:#7b90a8">没有匹配</div>';
-    box.querySelectorAll('input').forEach(cb => {
-      cb.onchange = () => {
-        const id = +cb.dataset.id;
-        if (cb.checked) ST.cgSel.add(id); else ST.cgSel.delete(id);
-        updateCgInfo();
-      };
+  const cgOf = k => ((ST.cg && ST.cg.chars) || [])
+    .find(c => c.id === +String(k).slice(5)) || null;
+
+  /* ④ 的 CG 选择列表：同一套 storylist.js。CG 只有角色侧（主线/活动没有
+     「角色」这种分组），所以只给一个分类页签；组数/张数放在副标题里。 */
+  let cgList = null;
+  function ensureCgList() {
+    if (cgList) return cgList;
+    cgList = SL.create({
+      bar: '#cgBar', list: '#cgList', sel: ST.cgSel, src: 'char',
+      srcs: ['char'],
+      units: () => ((ST.cg && ST.cg.chars) || []).map(c => 'char_' + c.id),
+      status: () => 'ready',
+      noStatus: true,
+      banners: bannersReady,
+      // cgmap 里有三个负数分组装「不属于某个角色」的 CG（NPC / 路人），
+      // 服务端兜底名是「角色-2」，直接显示等于没说；这里讲明白它是什么。
+      name: k => {
+        const c = cgOf(k);
+        if (!c) return '';
+        return c.id < 0 ? ('非角色 CG #' + (-c.id)) : (c.name || '');
+      },
+      extra: k => {
+        const c = cgOf(k);
+        return c ? [(c.groups || []).length + ' 组 · ' + c.total + ' 张'] : [];
+      },
+      onChange: () => updateCgInfo(),
+      onRender: () => updateCgInfo(),
+      empty: () => '没有可导出的 CG —— 先到「② 剧情安装」装一部剧情',
     });
-    updateCgInfo();
+    return cgList;
+  }
+
+  function renderCgList() {
+    const warn = $('#cgWarn');
+    if (!warn) return;
+    if (!ST.cg) {
+      warn.hidden = false;
+      warn.className = 'dim';
+      warn.textContent = '正在读取 CG 清单…';
+      return;
+    }
+    warn.hidden = true;
+    ensureCgList().refresh();
   }
 
   function updateCgInfo() {
-    const chars = (ST.cg && ST.cg.chars) || [];
     let n = 0;
-    ST.cgSel.forEach(id => {
-      const c = chars.find(x => x.id === id);
+    // 选中集合里存的是 char_<id>（和另外几个列表同一套 key），导出时再转回数字
+    ST.cgSel.forEach(function (k) {
+      const c = cgOf(k);
       if (c) n += c.total;
     });
-    $('#cgInfo').textContent = `已选 ${ST.cgSel.size} 个角色 · ${n} 张 CG`;
+    const el = $('#cgInfo');
+    if (el) el.textContent = '已选 ' + ST.cgSel.size + ' 个角色 · ' + n + ' 张 CG';
   }
 
-  $('#cgSearch').oninput = () => renderCgList();
-  $('#cgAll').onclick = () => {
-    ((ST.cg && ST.cg.chars) || []).forEach(c => ST.cgSel.add(c.id));
-    renderCgList();
-  };
-  $('#cgNone').onclick = () => { ST.cgSel.clear(); renderCgList(); };
+  $('#cgAll').onclick = () => ensureCgList().selectAll();
+  $('#cgNone').onclick = () => ensureCgList().clear();
   $('#btnCgExport').onclick = async () => {
     if (!ST.cgSel.size) { toastMsg('先选角色', true); return; }
     try {
       await api('export/cg', {
-        method: 'POST', body: JSON.stringify({ chars: [...ST.cgSel] }),
+        method: 'POST',
+        body: JSON.stringify({ chars: [...ST.cgSel].map(k => +String(k).slice(5)) }),
       });
       toastMsg('开始打包 CG'); connectJobs(true);
     } catch (e) { toastMsg(e.message, true); }
@@ -1302,9 +1603,9 @@
   function renderTrans() {
     const t = (ST.state && ST.state.trans) || {};
     $('#transStats').innerHTML = [
-      ['已译剧情', `${t.units || 0}<small>部</small>`, ''],
+      ['已有中文的剧情', `${t.units || 0}<small>部</small>`, ''],
       ['已译句数', `${(t.messages || 0).toLocaleString()}<small>句</small>`, ''],
-      ['译文目录', 'assets/i18n/zh-Hans', 'key 用日文原文'],
+      ['怎么用', '播放器里看', '这些剧情会自动显示中文'],
     ].map(([k, v, s]) => `<div class="stat"><div class="k">${esc(k)}</div>
       <div class="v">${v}</div><div class="k">${esc(s)}</div></div>`).join('');
   }
@@ -1315,7 +1616,7 @@
   $('#btnTrImport').onclick = async () => {
     const unit = ($('#trUnit').value || '').trim();
     const f = $('#trFile').files[0];
-    if (!unit) { toastMsg('填一下剧情标识，如 char_1', true); return; }
+    if (!unit) { toastMsg('先填剧情标识 —— 可以用下方列表每行的「填入」', true); return; }
     if (!f) { toastMsg('选一个 txt 文件', true); return; }
     const text = await f.text();
     try {
@@ -1331,8 +1632,8 @@
     }
   };
 
-  /* 译文批量导出：复用「导出视频/CG」那套剧情选择（角色剧情 / 主线·活动），
-     不再只给"全部或只有译文"两个粗放的选项。 */
+  /* 译文批量导出：剧情选择用 storylist.js（角色 / 主线 / 活动 / 其他 四个分类），
+     只有装好的剧情能勾 —— 没装就没有剧本可导。 */
   ST.trSel = ST.trSel || new Set();
 
   function updateTrInfo() {
@@ -1342,69 +1643,63 @@
       ? '已选 ' + ST.trSel.size + ' 部剧情' : '未选择剧情';
   }
 
+  /** 译文状态徽标：有译文 / 未翻译 / 未安装 */
+  function transBadge(k) {
+    if (stateOf(k) === 'missing') return { cls: 'no', text: '未安装' };
+    const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
+    return have.indexOf(k) >= 0
+      ? { cls: 'have-tr', text: '有译文' } : { cls: 'must', text: '未翻译' };
+  }
+
+  function ensureTrList() {
+    if (trListEl) return trListEl;
+    trListEl = SL.create({
+      bar: '#trBar', list: '#trList', sel: ST.trSel, src: 'char',
+      units: packUnits,
+      status: stateOf,
+      banners: bannersReady,
+      disabled: k => stateOf(k) === 'missing',
+      badge: transBadge,
+      // 上面「批量导入」要填剧情标识，从列表点一下比手打可靠
+      actions: () => [{ act: 'fill', label: '填入', title: '把这个剧情标识填到上面的导入框' }],
+      onAction: (k, act) => {
+        if (act !== 'fill') return;
+        const inp = $('#trUnit');
+        if (inp) inp.value = k;
+        toastMsg('已填入：' + unitName(k));
+      },
+      onChange: () => updateTrInfo(),
+      empty: () => '还没有已安装的剧情 —— 先到「剧情安装」装一部',
+    });
+    return trListEl;
+  }
+
   function renderTrList() {
     const box = $('#trList');
     if (!box) return;
-    const kind = ($('#trKind') || {}).value || 'char';
-    const q = (($('#trSearch') || {}).value || '').trim().toLowerCase();
-    let list = (kind === 'char' ? ST.units.char : ST.units.adv)
-      .filter(k => (ST.units.state[k] || 'missing') !== 'missing');
-    if (q) {
-      list = list.filter(k => k.toLowerCase().indexOf(q) >= 0
-        || unitName(k).toLowerCase().indexOf(q) >= 0);
-    }
-    list = ESC.sortItems(list, 'date-desc',
-      k => ({ id: k, name: unitName(k), date: ESC.dateOf(k) }));
     if (!ST.units.loaded) {
-      box.innerHTML = '<div class="dim" style="padding:14px">正在读取剧情列表…</div>';
-      loadUnits().then(renderTrList).catch(() => { });
+      box.innerHTML = '<div class="sl-empty">正在读取剧情列表…</div>';
+      loadUnits().then(() => { renderTrList(); renderPacks(); }).catch(() => { });
       return;
     }
-    const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
-    if (!list.length) {
-      box.innerHTML = '<div class="dim" style="padding:14px">'
-        + '还没有已安装的剧情 —— 先到「剧情安装」装一部</div>';
-    } else {
-      box.innerHTML = list.map(function (k) {
-        return '<label class="charrow" data-id="' + esc(k) + '">'
-          + '<input type="checkbox" data-id="' + esc(k) + '"'
-          + (ST.trSel.has(k) ? ' checked' : '') + '>'
-          + '<span class="nm">' + esc(unitName(k))
-          + ' <span class="n">' + esc(k) + '</span></span>'
-          + '<span class="n">'
-          + (have.indexOf(k) >= 0 ? '有译文' : '未翻译') + '</span></label>';
-      }).join('');
-      box.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
-        cb.onchange = function () {
-          if (cb.checked) ST.trSel.add(cb.dataset.id);
-          else ST.trSel.delete(cb.dataset.id);
-          updateTrInfo();
-        };
-      });
-    }
+    ensureTrList().refresh();
     updateTrInfo();
   }
 
-  if ($('#trKind')) {
-    $('#trKind').onchange = () => renderTrList();
-    $('#trSearch').oninput = () => renderTrList();
-    $('#trAll').onclick = () => {
-      const kind = $('#trKind').value;
-      (kind === 'char' ? ST.units.char : ST.units.adv).forEach(function (k) {
-        if ((ST.units.state[k] || 'missing') !== 'missing') ST.trSel.add(k);
-      });
-      renderTrList();
+  if ($('#trAll')) {
+    $('#trAll').onclick = () => { ensureTrList().selectAll(); updateTrInfo(); };
+    $('#trNone').onclick = () => {
+      ST.trSel.clear();
+      ensureTrList().refresh();
+      updateTrInfo();
     };
-    $('#trNone').onclick = () => { ST.trSel.clear(); renderTrList(); };
     $('#trAllTrans').onclick = () => {
-      const kind = $('#trKind').value;
       const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
       have.forEach(function (k) {
-        const isChar = k.indexOf('char_') === 0;
-        if ((kind === 'char') !== isChar) return;
-        if ((ST.units.state[k] || 'missing') !== 'missing') ST.trSel.add(k);
+        if (stateOf(k) !== 'missing') ST.trSel.add(k);
       });
-      renderTrList();
+      ensureTrList().refresh();
+      updateTrInfo();
     };
   }
 
@@ -1433,21 +1728,21 @@
   // ① 刷新官方清单 ② 更新角色信息。第二步失败不影响第一步。
   $('#btnRefreshManifest').onclick = () => {
     const box = $('#manResult');
-    if (box) box.textContent = '已开始：① 刷新清单 → ② 更新角色信息（进度见底部）';
+    if (box) box.textContent = '已开始，进度见底部';
     const w = $('#wikiResult');
     if (w) w.textContent = '';
     const tip = $('#wikiProxyTip');
     if (tip) tip.style.display = 'none';
-    startJob('manifest/refresh', {}, '刷新清单与角色信息');
+    startJob('manifest/refresh', {}, '更新剧情目录');
   };
-  /** 只补角色信息：GitHub 全线路不通（第二步失败）时的重试入口。
+  /** 只补角色资料：线路全不通（第二步失败）时的重试入口。
    *  数据仍优先走 GitHub（多线路，与「检查程序更新」共用线路表）。 */
   function wikiSync() {
     const res = $('#wikiResult');
-    if (res) res.textContent = '正在获取（GitHub 多线路，无需代理）…';
+    if (res) res.textContent = '正在获取角色资料…';
     const tip = $('#wikiProxyTip');
     if (tip) tip.style.display = 'none';
-    startJob('wiki/sync', {}, '更新角色信息');
+    startJob('wiki/sync', {}, '更新角色资料');
   }
   const btnWikiRetry = $('#btnWikiRetry');
   if (btnWikiRetry) btnWikiRetry.onclick = () => wikiSync();
@@ -1466,8 +1761,7 @@
         $('#updResult').innerHTML =
           `发现新版本 <b>${esc(d.latest)}</b>（当前 ${esc(d.current)}）`;
       } else {
-        $('#updResult').innerHTML =
-          `已是最新（当前 ${esc(d.current)}${d.latest ? '，远端 ' + esc(d.latest) : ''}）`;
+        $('#updResult').innerHTML = `已是最新版（当前 v${esc(d.current)}）`;
       }
       const applyBtn = $('#btnApplyUpdate');
       applyBtn.textContent = ready ? '重启并应用' : '下载并应用';
@@ -1477,8 +1771,8 @@
     }
   };
   $('#btnApplyUpdate').onclick = async () => {
-    if (!confirm('将下载新版本 → 退出当前程序 → 覆盖程序文件 → 自动重启。\n\n' +
-      '你的资源、译文、设置都不会丢。继续？')) return;
+    if (!confirm('会先下载新版本，然后程序自动重启一次。\n\n' +
+      '你的素材、译文、设置都不会丢。继续？')) return;
     try {
       await api('update/apply', {
         method: 'POST', body: JSON.stringify({ url: ST.updUrl }),
@@ -1487,6 +1781,24 @@
       connectJobs(true);
     } catch (e) { toastMsg(e.message, true); }
   };
+  // 「每次启动程序后检查更新」：存到 userdata/config.json（autoCheckUpdate）
+  const setAutoCheck = $('#setAutoCheck');
+  if (setAutoCheck) {
+    setAutoCheck.onchange = async () => {
+      setAutoCheck.dataset.touched = '1';    // 用户的选择不要再被设置值覆盖
+      const on = setAutoCheck.checked;
+      try {
+        await api('config', {
+          method: 'POST', body: JSON.stringify({ autoCheckUpdate: on }),
+        });
+        if (ST.state) {
+          ST.state.config = Object.assign({}, ST.state.config || {},
+            { autoCheckUpdate: on });
+        }
+        toastMsg(on ? '已开启：每次启动会检查一次更新' : '已关闭：启动时不再检查更新');
+      } catch (e) { toastMsg(e.message, true); }
+    };
+  }
 
   // ---------------------------------------------------------------- 设置
   function renderSettings() {
@@ -1494,22 +1806,41 @@
     // 默认地址以密文形式内置（web/data/packs.links.js），这里填的是"用户覆盖值"
     $('#setBase').value = L.custom ? (L.cdn || L.base || '') : '';
     $('#setBase').placeholder = L.effective
-      ? '默认（内置加密）：' + L.effective
-      : 'https://你的镜像/AssetBundles';
+      ? '默认地址：' + L.effective
+      : 'https://你的镜像地址';
     $('#srcNow').innerHTML = L.effective
-      ? `当前生效：<code>${esc(L.effective)}</code>`
-        + (L.custom ? '（来自你的自定义配置）' : '（内置加密配置，源码里看不到明文）')
-      : '⚠ 没有可用的资源源，安装会失败。请填写或检查 <code>web/data/packs.links.js</code>。';
+      ? `当前用的地址：<code>${esc(L.effective)}</code>`
+        + (L.custom ? '（你自己填的）' : '（程序自带）')
+      : '⚠ 没有可用的下载地址，安装会失败。请填一个，或点「刷新」重试。';
     const cfg = (ST.state && ST.state.config) || {};
     // 「保留压缩包」复选框已随 zip 模式一起移除，别再读它（会报 null.checked）
     if ($('#setThreads2')) $('#setThreads2').value = cfg.threads || 32;
+    // 每次启动检查更新：默认勾选（后端 DEFAULTS.autoCheckUpdate 也是 True）
+    const ac = $('#setAutoCheck');
+    if (ac && !ac.dataset.touched) ac.checked = cfg.autoCheckUpdate !== false;
+    renderUpdateCheck();
+  }
+
+  /** 把"启动时那一次自动检查"的结果回显到更新页（只显示一次，别覆盖用户手点的结果） */
+  function renderUpdateCheck() {
+    const box = $('#updResult');
+    if (!box || ST.updShown) return;
+    const uc = (ST.state && ST.state.updateCheck) || {};
+    if (!uc.done || uc.staged) return;      // 已下好的走顶部"重启即生效"的提示条
+    ST.updShown = true;
+    if (uc.hasUpdate && uc.latest) {
+      box.innerHTML = `启动时检查过：有新版本 <b>v${esc(uc.latest)}</b>`
+        + `（当前 v${esc(uc.current)}），点左边的按钮就能下载`;
+    } else if (!uc.error) {
+      box.innerHTML = `启动时检查过：已是最新版（v${esc(uc.current)}）`;
+    }
   }
 
   $('#btnSaveBase').onclick = async () => {
     const cdn = ($('#setBase').value || '').trim();
     try {
       await api('links', { method: 'POST', body: JSON.stringify({ cdn }) });
-      toastMsg(cdn ? '资源源已保存（仅本机生效）' : '已清除自定义源，回到内置加密配置');
+      toastMsg(cdn ? '下载地址已保存（只影响这台电脑）' : '已恢复默认下载地址');
       ST.links = await api('links');
       renderSettings(); renderPacks();
     } catch (e) { toastMsg(e.message, true); }
@@ -1551,8 +1882,11 @@
     $$('main section').forEach(s => s.classList.toggle('on', s.id === 'sec-' + sec));
     if (sec === 'export') loadCg().then(renderCgList).catch(() => { });
     if (sec === 'export') loadExports();
-    if (sec === 'quality') loadStats();
+    // 磁盘占用搬到「设置 / 清理空间」了（2026-11），这里跟着改
+    if (sec === 'settings') loadStats();
     if (sec === 'trans') renderTrList();
+    // 画质页的剧情列表要等 /api/cdn/units 回来才有人名，切过去时补一次
+    if (sec === 'quality') renderQuality();
   }
   $$('#side button').forEach(b => { b.onclick = () => goto(b.dataset.sec); });
 
@@ -1564,10 +1898,17 @@
       loadExports();
       const q = new URLSearchParams(location.search);
       if (q.get('unit')) {
-        ST.sel.add(q.get('unit'));
+        const u = q.get('unit');
+        ST.sel.add(u);
+        // 定位到哪一类就切到哪一类（以前一律停在「角色」，从播放器跳过来
+        // 想装主线/活动剧情的人会看到"没勾上任何东西"）
+        ST.cat = SL.srcOf(u);
         goto('packs');
         renderPacks();
-        toastMsg('已定位到 ' + q.get('unit') + '，确认后点「开始安装」');
+        if (packList) packList.setSrc(ST.cat);
+        toastMsg(stateOf(u) === 'ready'
+          ? '「' + unitName(u) + '」已经装好了'
+          : '已定位到「' + unitName(u) + '」，确认后点「开始安装」');
       } else if (location.hash) {
         const sec = location.hash.replace('#', '');
         if (document.querySelector('#sec-' + sec)) goto(sec);
@@ -1591,7 +1932,7 @@
 
   const SETUP_STEPS = [
     { el: '#basePack', title: '① 先下基础数据',
-      text: '这是所有剧情的前提。<b>资源清单</b>告诉程序「现在有哪些剧情可装」，'
+      text: '这是所有剧情的前提。<b>剧情目录</b>告诉程序「现在有哪些剧情能装」，'
         + '<b>公共素材</b>是所有剧情共用的背景和音乐。'
         + '两个都下完，后面才不会缺图、没声音。' },
     { el: '#packList', title: '② 挑想看的剧情',
@@ -1604,10 +1945,11 @@
       text: '装好的剧情右边有「卸载」，只删它自己的剧本、语音和立绘。'
         + '<b>共用素材不会动</b>，别的剧情照常能看。' },
     { el: '#side', title: '⑤ 左边还有别的功能',
-      text: '<b>画质</b>：把图片放大变清晰（很吃 CPU，可以先看预估再决定）；'
+      text: '<b>提高CG画质</b>：把图片放大变清晰（比较吃电脑，可以先看预估再决定）；'
         + '<b>导出</b>：把剧情存成视频或导出 CG；'
-        + '<b>译文</b>：导入你自己翻译的中文；'
-        + '<b>更新</b>：官方上新后点一下刷新清单。' },
+        + '<b>翻译</b>：导入你自己翻译的中文；'
+        + '<b>更新</b>：官方出新剧情后点一下更新目录；'
+        + '<b>设置 / 清理空间</b>：看空间都被什么占了、一键清掉能删的缓存。' },
   ];
 
   function helpTour() {
@@ -1622,7 +1964,7 @@
       key: 'escah_tour_setup',
       steps: SETUP_STEPS,
       title: '资源管理 · 第一次来？',
-      intro: '这里负责从官方 CDN 安装剧情、超分、导出视频/CG、导入译文和更新程序。花 30 秒认一下界面会省很多事。',
+      intro: '这里可以下载剧情、把画面变高清、导出视频 / CG、导入中文翻译，以及更新程序。花 30 秒认一下界面会省很多事。',
     });
   }
   // 免责声明优先：先让用户看到边界，再弹引导（否则两层遮罩会打架）

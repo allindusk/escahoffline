@@ -97,11 +97,13 @@ jobs:
           Copy-Item "$src/server", "$src/tools", "$src/docs" -Destination $dst -Recurse
           # 超分引擎连同模型约 80 MB，不进「纯代码更新包」（3–5 MB 那个）
           Remove-Item "$dst/tools/realcugan" -Recurse -Force -ErrorAction SilentlyContinue
-          # **不带启动脚本**：便携版的 启动.bat 是下面那步专门生成的（直接调 python\python.exe），
-          # 而仓库里这份是"找系统 Python"的源码版。一旦被更新包覆盖，
-          # 便携版用户下次启动就会报"没有找到 Python"。
+          # 启动脚本**要**带上：pack_app 拷进来的就是仓库根那一份（纯 ASCII、
+          # 优先 python\python.exe、带完整性自检），便携版和源码版通用。
+          # 以前这里故意不带，是因为当时便携版的 bat 由 CI 另外生成、和仓库这份
+          # 行为不一致（那份不带任何自检）；生成步骤已经删掉，现在只有一份。
+          # 更新器白名单也放行了「启动.bat」，老用户走"检查更新"就能拿到新版本。
           Copy-Item "$src/VERSION", "$src/README.md", "$src/NOTICE.md", "$src/LICENSE",
-                    "$src/start.sh" -Destination $dst
+                    "$src/start.sh", "$src/启动.bat" -Destination $dst
           # 注意：**不能**写 `Copy-Item "$src/web" -Filter *.html -Destination ...`
           # —— -Filter 只作用于 -Path 的子项，而 -Path 是目录本身，PowerShell 会
           # 把整个 web 目录拷进 $dst/web（生成 web/web/），html 一个都进不来。
@@ -185,16 +187,37 @@ jobs:
           python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
             --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
 
-          # 便携版的启动脚本：直接用内置解释器
-          @'
-          @echo off
-          chcp 65001 >nul
-          cd /d "%~dp0"
-          rem PYTHONPATH 指向本目录：确保能找到 server 包
-          set "PYTHONPATH=%~dp0"
-          "%~dp0python\python.exe" -m server --open
-          if errorlevel 1 pause
-          '@ | Set-Content "$dst/启动.bat" -Encoding oem
+          # 便携版的启动脚本 = **仓库根目录那一份**（pack_app 已经把 *.bat 拷进来了）。
+          #
+          # 以前这里用 here-string 又生成了一份「只调内置解释器」的版本，
+          # 结果两份脚本行为不一致：生成的那份**没有任何自检** —— 用户把 bat
+          # 单独拷到桌面、或直接在压缩包里双击时，只会看到一句
+          #   D:\python\python.exe: No module named server
+          # 完全不知道该怎么办（实测反馈）。
+          #
+          # 仓库那份已经改成：先断言 server\ 与 web\ 完整 → 再挑解释器
+          # （优先 python\python.exe）→ 失败时给出可照做的提示，
+          # 便携版与源码版共用同一份，不再有漂移。
+          if (-not (Test-Path "$dst/启动.bat")) {
+            throw "便携包缺少 启动.bat（pack_app 没拷进来？）"
+          }
+          $batLen = (Get-Item "$dst/启动.bat").Length
+          if ($batLen -lt 1500) {
+            throw "启动.bat 体积异常（$batLen 字节），可能拷到了旧版本"
+          }
+          # 内容断言：必须优先用内置解释器。少了这一句，用户双击就会掉到系统
+          # Python，报出 "D:\python\python.exe: No module named server" 这种看不懂的错。
+          $bat = Get-Content "$dst/启动.bat" -Raw
+          if ($bat -notmatch '%~dp0python') {
+            throw "启动.bat 没有优先使用内置 Python（找不到 %~dp0python）"
+          }
+          # 提示文案必须一起进包，否则 bat 里的 type 打不出来（只剩英文兜底）
+          foreach ($m in 'no_server', 'no_python') {
+            if (-not (Test-Path "$dst/tools/msg/$m.txt")) {
+              throw "便携包缺少提示文案 tools/msg/$m.txt"
+            }
+          }
+          "启动.bat 已就位：$batLen 字节（优先内置 Python，提示文案齐全）"
 
           # 验证内置解释器 + 全部依赖都能跑（这是便携版唯一的验收点）
           & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy, playwright; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"

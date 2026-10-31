@@ -14,7 +14,7 @@
       el.id = 'cgToast';
       el.style.cssText =
         'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:9800;' +
-        'padding:9px 18px;border-radius:10px;font-size:13px;transition:opacity .3s;' +
+        'padding:9px 18px;border-radius:10px;font-size:14.6px;transition:opacity .3s;' +
         'box-shadow:0 10px 30px rgba(0,0,0,.5);background:#16283c;border:1px solid #2f5478;color:#dff0ff';
       document.body.appendChild(el);
     }

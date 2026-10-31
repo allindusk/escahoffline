@@ -34,18 +34,39 @@ meta_by_name = json.load(io.open(META_PATH, encoding="utf-8"))
 raw = io.open(os.path.join(WEB_DATA, "names.js"), encoding="utf-8").read()
 NAMES = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
 
+def _nk(s):
+    """名字归一：NFKC（全角数字/字母转半角）、去掉空白与中点。
+    不这么做 '妹の１０２４' 查不到 '妹の1024' 这条。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    return re.sub(r"[\s・·（）()]", "", s)
+
+
+_norm_index = {}
+for k in meta_by_name:
+    _norm_index.setdefault(_nk(k), k)
+
 out = {}
 miss_meta = 0
+miss_list = []
 for cid, nm in NAMES.items():
     base = re.sub(r"\s*\(\d+\)$", "", nm)          # 去掉重名后缀
-    m = meta_by_name.get(base)
+    key = base if base in meta_by_name else _norm_index.get(_nk(base))
+    m = meta_by_name.get(key) if key else None
+    if not m:
+        # 最后兜底：唯一包含匹配（名字被加上/去掉了前缀时还能对上）
+        cand = [k for k in meta_by_name if _nk(base) and
+                (_nk(base) in _nk(k) or _nk(k) in _nk(base))]
+        if len(cand) == 1:
+            m = meta_by_name[cand[0]]
     if not m:
         miss_meta += 1
+        miss_list.append((cid, base))
         continue
-    # 只放行合法稀有度。「サポーター」是职业不是稀有度，旧表里可能残留这种值
-    # （曾在 charmeta 里出现 39 个 r="サポーター"），不能让它随包分发出去。
+    # 只放行合法稀有度。游戏里角色只有 SSR / SR / R 三档：
+    # 「サポーター」是职业、NPC 不是稀有度，都不能随包分发出去。
     _r = m.get("r", "")
-    if _r not in ("SSR", "SR", "R", "NPC"):
+    if _r not in ("SSR", "SR", "R"):
         _r = ""
     out[cid] = {"r": _r, "d": m.get("d", ""), "t": m.get("t", "")}
 

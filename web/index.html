@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1030a">
-<link rel="stylesheet" href="assets/css/extras.css?v=1030a">
+<link rel="stylesheet" href="assets/css/player.css?v=1101a">
+<link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 </head>
 <body>
 <!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
@@ -29,7 +29,7 @@
   <label data-i18n="set.standX">立绘水平偏移 <span id="valStandX">0px</span>
     <input type="range" id="setStandX" min="-40" max="40" step="1" value="0">
   </label>
-  <div style="font-size:10.5px;color:var(--fg3);margin:-8px 0 12px">
+  <div style="font-size:14px;color:var(--fg3);margin:-8px 0 12px">
     <span data-i18n="set.fitNote">正值向上，负值向下（负太多会切掉头部）</span>
   </div>
   <div class="row" style="margin-top:8px"><span title="约 10.7% 的特殊立绘在游戏里本身就是分层图，缺少脸部部件" data-i18n-title="set.partialNote" data-i18n="set.partial">显示不完整立绘</span>
@@ -167,7 +167,6 @@
         <button data-r="SSR">SSR</button>
         <button data-r="SR">SR</button>
         <button data-r="R">R</button>
-        <button data-r="other" data-i18n="sort.other">其他</button>
       </div>
     </div>
     <div id="hit"></div>
@@ -219,7 +218,7 @@
       <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
       <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
       <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
-      <button id="btnTrans" title="导出本剧情译文给 AI 翻译，或把译好的 txt 导回">译文</button>
+      <button id="btnTrans" title="导出本剧情原文给 AI 翻译，或把译好的 txt 导回">翻译</button>
       <div id="progress"><i></i></div>
       <div id="pinfo"></div>
     </div>
@@ -232,6 +231,8 @@
 <script src="data/charmeta.js"></script>
 <script src="data/index.js"></script>
 <script src="data/advindex.js"></script>
+<!-- 「其他」按入口分组的话清单（tools/build_other_episodes.py 生成） -->
+<script src="data/othereps.js?v=1118a"></script>
 <!-- 数据映射表。必须带版本号：imgmap.js 由 gen_imgmap.py 在装完剧情后重新生成，
      不带版本号会被浏览器一直用旧缓存（表现为头像/立绘明明有了却找不到） -->
 <script src="data/imgmap.js?v=1029a"></script>
@@ -243,15 +244,15 @@
   <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
-<script src="assets/js/common.js?v=1030a"></script>
-<script src="assets/js/header.js?v=1030a"></script>
+<script src="assets/js/common.js?v=1122a"></script>
+<script src="assets/js/header.js?v=1101a"></script>
 <script src="assets/js/i18n.js?v=1030a"></script>
 <script src="assets/js/packstate.js?v=1030a"></script>
-<script src="assets/js/player.js?v=1030a"></script>
-<script src="assets/js/transui.js?v=1030a"></script>
-<script src="assets/js/tour.js?v=1030a"></script>
-<script src="assets/js/disclaimer.js?v=1030a"></script>
-<script src="assets/js/health.js?v=1030a"></script>
+<script src="assets/js/player.js?v=1122a"></script>
+<script src="assets/js/transui.js?v=1120a"></script>
+<script src="assets/js/tour.js?v=1101c"></script>
+<script src="assets/js/disclaimer.js?v=1101a"></script>
+<script src="assets/js/health.js?v=1101a"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
 const TOUR_STEPS = [
@@ -267,12 +268,12 @@ const TOUR_STEPS = [
   { el: '#charList', title: '④ 点角色开始',
     text: '点一下就开始播。<b>用鼠标点画面</b>可以暂停或继续，不用去找播放键。' },
   { el: '#tabs', title: '⑤ 段落切换',
-    text: '每部角色剧情分 6 段，点这里换段。标题右边会显示<b>译文覆盖率</b>（已译 X/Y 句）。' },
+    text: '每部角色剧情分 6 段，点这里换段。标题右边会显示<b>翻译覆盖率</b>（已译 X/Y 句）。' },
   { el: '#stage', title: '⑥ 画面区',
     text: '背景、立绘、对话框都显示在这里。快捷键：<b>空格</b>暂停、<b>回车</b>下一句、按住 <b>K</b> 快进。' },
   { el: '#controls', title: '⑦ 播放控制',
     text: '重播、暂停、下一段、倍速、自动播放、进度条都在这一条上。最右边的 ⚙ 打开显示设置。' },
-  { el: '#btnTrans', title: '⑧ 译文导入 / 导出',
+  { el: '#btnTrans', title: '⑧ 翻译导入 / 导出',
     text: '导出块式 txt（一句一个 <b>###</b> 块，带编号/说话人/原文行数），交给任意 AI 翻译，再导回即可。<b>这是本项目的核心玩法之一</b>——翻译最需要 AI 帮忙。' },
   { el: '#btnSet', title: '⑨ 显示设置',
     text: '字号、行距、描边、对话框样式、立绘大小与偏移、音量、打字速度都在这里，改完立即生效并自动记住。' },

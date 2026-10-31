@@ -7,9 +7,10 @@
 名前 / 所属(类型) / 区分(势力) / レアリティ(稀有度)，且是纯日文。
 
 数据全在**角色一览页**：名前 / 所属 / 区分 / 属性 / 数值，而且页面已按稀有度
-**分节**（``content_1_0``=SSR、``_1``=SR、``_2``=R、``_3``=NPC），稀有度直接读
-分节标题即可 —— **不需要逐页抓 439 个子页面**。
-（サポーター 不在这一页，在独立的 ``?サポーター`` 页，另抓一次。）
+**分节**（``content_1_0``=SSR、``_1``=SR、``_2``=R；其后的 NPC / コメント 分节跳过），
+稀有度直接读分节标题即可 —— **不需要逐页抓 439 个子页面**。
+``?サポーター`` 页**不再抓**：サポーター 是职业不是稀有度，且没有独立剧情
+（用户 2026-11-01 定：游戏里只有 SSR / SR / R）。
 
 注意：这个 Wiki 在日本，国内访问通常要开代理。所有抓取都走
 ``resolve_proxy()``（环境变量 / config.WIKI_PROXY），连不上时抛
@@ -27,6 +28,8 @@ import urllib.request
 from . import config
 
 LIST_URL = "https://escalationheroines.wikiru.jp/?%E3%82%AD%E3%83%A3%E3%83%A9%E3%82%AF%E3%82%BF%E3%83%BC%E4%B8%80%E8%A6%A7"
+#: 历史上抓过 ``?サポーター``（SUPPORTER_URL），2026-11-01 起不再请求 —— 那一页
+#: 只有职业/类型信息，没有稀有度，也没有独立剧情；留着常量只为兼容旧引用。
 SUPPORTER_URL = ("https://escalationheroines.wikiru.jp/"
                  "?%E3%82%B5%E3%83%9D%E3%83%BC%E3%82%BF%E3%83%BC")
 BASE = "https://escalationheroines.wikiru.jp/"
@@ -51,6 +54,8 @@ _COLMAP = {
     "名前": "name",
     "所属": "t",
     "区分": "cat",
+    "実装日": "d",          # ← 表里有这一列，以前没映射，所以 d 永远刷不到
+    "レアリティ": "r",
     "特殊属性": "special_attr",
     "通常攻撃属性": "attack_attr",
     "攻撃範囲": "range",
@@ -64,10 +69,16 @@ _COLMAP = {
 }
 _STAT_COLS = ("stamina", "atk", "def", "mag", "mres", "acc")
 
+#: 游戏里只有这三种角色（SSR / SR / R）。「サポーター」是职业不是稀有度、
+#: 「NPC」是没有个人剧情的路人组 —— 两者都不抓（用户 2026-11-01 明确）。
+VALID_RARITIES = ("SSR", "SR", "R")
+
 # 角色一览页按稀有度分节，标题形如 <h2 id="content_1_0"><a href="./?SSR"
-# title="SSR">SSRキャラ</a>...</h2>。サポーター 是独立页，用 forced_rarity 标。
+# title="SSR">SSRキャラ</a>...</h2>。
 _SECTION_RE = re.compile(r'<h2 id="content_1_\d+"[^>]*>(.*?)</h2>', re.S)
-_RARITY_KEYS = ("SSR", "SR", "R", "NPC", "サポーター")
+#: **只认这三档**（用户 2026-11-01 明确）：游戏里只有 SSR / SR / R 三种角色，
+#: 「サポーター」「NPC」既不是稀有度、也没有独立剧情，抓了也用不上 → 直接不认。
+_RARITY_KEYS = VALID_RARITIES
 
 
 class WikiError(Exception):
@@ -198,6 +209,11 @@ def _parse_table_rows(tbl_html: str) -> list[dict]:
     rows = []
     for tr in trs[1:]:
         tds = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)
+        # 三张表的列数并不相同（SSR 25 列含「限定」、SR/R 24 列、NPC 只有 4 列），
+        # 而且数据行常比表头多一个空单元格 —— 以**表头**为准裁剪，多余单元格丢掉，
+        # 否则按表头下标取值会整体错位一格。
+        if len(tds) > len(ths):
+            tds = tds[:len(ths)]
         if len(tds) <= col["name"]:
             continue
         name_cell = tds[col["name"]]
@@ -228,12 +244,16 @@ def _parse_table_rows(tbl_html: str) -> list[dict]:
     return rows
 
 
-def parse_charlist(html: str, forced_rarity: str | None = None) -> list[dict]:
+def parse_charlist(html: str, forced_rarity: str | None = None,
+                   allow_blank: bool = False) -> list[dict]:
     """解析角色一览页（或 ?サポーター 页），返回角色列表（含 ``r`` 稀有度）。
 
     稀有度取自页面分节标题（``content_1_0``=SSR / ``_1``=SR / ``_2``=R /
-    ``_3``=NPC），**无需再逐页抓子页面**。``forced_rarity`` 用于没有稀有度
-    分节标题的页面（?サポーター）。
+    ``_3``=NPC），**无需再逐页抓子页面**。
+
+    ``forced_rarity`` / ``allow_blank`` 用于**没有稀有度分节标题**的页面
+    （``?サポーター``）：以前传 ``forced_rarity=""`` 会因为空串是假值被整页跳过，
+    等于那一页白抓；现在用 ``allow_blank=True`` 表示"这一页的行照收，但稀有度留空"。
     """
     records: list[dict] = []
     seen = set()
@@ -242,75 +262,73 @@ def parse_charlist(html: str, forced_rarity: str | None = None) -> list[dict]:
         m = _SECTION_RE.search(sec)
         rar = _section_rarity(m.group(1)) if m else None
         rar = rar or forced_rarity
-        if not rar:
+        if not rar and not allow_blank:
             continue                                 # 跳过「コメントフォーム」等分节
+        # 只收 SSR / SR / R：NPC 分节（4 列的表）是路人，没有个人剧情，不要
+        if rar and rar not in VALID_RARITIES:
+            continue
         for tbl in re.finditer(r"<table[^>]*>(.*?)</table>", sec, re.S):
             for row in _parse_table_rows(tbl.group(1)):
                 if row["page"] in seen:
                     continue
                 seen.add(row["page"])
-                row["r"] = rar
+                row["r"] = rar or ""
                 records.append(row)
     return records
 
 
 def scrape(proxy: str | None = None) -> dict:
-    """抓全量角色元信息，返回 ``{日文名: {r,t,cat,special_attr,attack_attr,img}}``。
+    """抓全量角色元信息，返回 ``{日文名: {r,t,cat,special_attr,attack_attr,img,d}}``。
 
-    只抓两个页面：角色一览（按分节拿稀有度）+ ``?サポーター``。
-    **不再逐页抓 439 个子页面** —— 稀有度就在分节标题里。
+    **只请求 1 个页面**：角色一览。页面自己按 SSR / SR / R 分节（NPC 分节跳过），
+    稀有度直接读分节标题，不逐页抓子页面。
+    ``?サポーター`` 页**不再抓**（2026-11-01 用户明确：サポーター/NPC 没有独立剧情，
+    抓来没用；以前抓了还会用空稀有度覆盖主表的值）。
     """
     rows = parse_charlist(fetch_html(LIST_URL, proxy))
-    try:
-        # サポーター 页**不设稀有度**：这个游戏里「サポーター」是职业/类型
-        # （所属列），不是 SSR/SR/R/NPC 那样的稀有度。以前硬塞进 r，
-        # 结果 charmeta 里出现 39 个 r="サポーター" 的脏值。
-        rows += parse_charlist(fetch_html(SUPPORTER_URL, proxy),
-                               forced_rarity="")
-    except WikiError:
-        pass                                         # サポーター 页失败不影响主表
+    # 同一角色可能同时出现在主表和 ?サポーター 页。**主表在前、只补空字段**，
+    # 不能像以前那样"后写入的整条覆盖" —— サポーター 页没有稀有度，一旦它排在后面
+    # 就会把主表抓到的 SSR 覆盖成空（cid 148 八爪妖蠱ハツネ 之前就是这么丢的）。
     meta: dict = {}
+    keys = ("t", "cat", "special_attr", "attack_attr", "img", "r", "d")
     for r in rows:
-        meta[r["name"]] = {
-            "t": r.get("t", ""),
-            "cat": r.get("cat", ""),
-            "special_attr": r.get("special_attr", ""),
-            "attack_attr": r.get("attack_attr", ""),
-            "img": r.get("img", ""),
-            "r": r.get("r", ""),
-        }
+        cur = meta.setdefault(r["name"], {k: "" for k in keys})
+        for k in keys:
+            if (r.get(k) or "") and not cur.get(k):
+                cur[k] = r[k]
     return meta
 
 
 def merge_meta(existing: dict, scraped: dict) -> dict:
     """把抓取结果合并进现有 char_meta（保留 zh/d 等本地字段）。
 
-    注意：旧 escah 数据曾把「サポーター」等误当成稀有度写入 ``r``；这里把不在
-    合法集合里的旧 ``r`` 清空（wiki 给了就覆盖，没给则置空），避免脏数据残留。
+    **只保留有 SSR / SR / R 稀有度的条目**（用户 2026-11-01 明确）：
+    サポーター / NPC 这类既不是稀有度、也没有独立剧情，留在表里只会误导
+    （历史上就有 6 个角色的稀有度被贴成 NPC）。所以：
+      · wiki 给了合法稀有度 → 用 wiki 的；
+      · wiki 没给（本次没收录）→ 沿用旧值，但旧值也必须是三档之一；
+      · 谁的稀有度最终不在三档里 → **整条丢弃**。
     """
-    valid_r = {"SSR", "SR", "R", "NPC"}
+    valid_r = set(VALID_RARITIES)
     out = {}
     for name, m in scraped.items():
         merged = dict(existing.get(name) or {})
-        for k in ("r", "t", "d", "cat", "special_attr", "attack_attr", "img"):
+        for k in ("t", "d", "cat", "special_attr", "attack_attr", "img"):
             if m.get(k):
                 merged[k] = m[k]
-        # 只接受合法稀有度：wiki 的「サポーター」分节是**类型**不是稀有度，
-        # 旧本地数据里也可能残留这种脏值 —— 统一清空，别让它漏进 charmeta。
-        _wr = m.get("r") or ""
-        merged["r"] = _wr if _wr in valid_r else ""
+        _wr = (m.get("r") or "").strip()
+        merged["r"] = _wr if _wr in valid_r else (
+            merged.get("r") if merged.get("r") in valid_r else "")
         if m.get("d"):
             # wiki 给出真日期 → 之前用资源包时间填的推定值作废
             merged.pop("dEst", None)
-        out[name] = merged
+        if merged["r"] in valid_r:
+            out[name] = merged
     for name, m in existing.items():
-        if name not in out:
+        if name in out:
+            continue
+        if (m or {}).get("r") in valid_r:            # 旧值合法的才保留
             out[name] = m
-    # 兜底清洗：wiki 这次没收录的角色会原样保留旧值，旧值里可能有
-    # 「サポーター」这类非法稀有度 —— 统一清空，别让脏值继续传下去。
-    for m in out.values():
-        if m.get("r") not in valid_r:
-            m["r"] = ""
     return out
 
 

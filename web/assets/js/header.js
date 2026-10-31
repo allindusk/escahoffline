@@ -53,20 +53,20 @@ header[data-shared]{box-sizing:border-box;display:flex;align-items:center;
   position:relative;flex-shrink:0;background:#141822;
   border-bottom:1px solid #2a3040;
   font-family:"Microsoft YaHei","Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
-header[data-shared] h1{font-size:15px;font-weight:600;color:#e0b566;
+header[data-shared] h1{font-size:16.8px;font-weight:600;color:#e0b566;
   letter-spacing:.5px;margin:0;white-space:nowrap;line-height:1.2}
-header[data-shared] h1 small{font-size:11px;color:#6b7488;font-weight:400;
+header[data-shared] h1 small{font-size:14px;color:#6b7488;font-weight:400;
   margin-left:8px;letter-spacing:0}
 header[data-shared] nav{position:absolute;left:50%;transform:translateX(-50%);
   display:flex;gap:4px}
-header[data-shared] nav a{padding:5px 12px;border-radius:8px;font-size:12.5px;
+header[data-shared] nav a{padding:5px 12px;border-radius:8px;font-size:14px;
   text-decoration:none;color:#9aa4b8;background:#1c2230;border:1px solid transparent;
   line-height:1.4;transition:color .15s,background .15s}
 header[data-shared] nav a:hover{color:#e6e9f0;background:#243040}
 header[data-shared] nav a.on{color:#0d1016;background:#e0b566;font-weight:600}
 /* 右侧第一个控件负责把后续内容推到右边（由 JS 打标） */
 header[data-shared] .hdr-first{margin-left:auto}
-header[data-shared] #hdrStat{font-size:11.5px;color:#6b7488}
+header[data-shared] #hdrStat{font-size:14px;color:#6b7488}
 /* GitHub 图标：和「？」按钮同尺寸的方形按钮 */
 header[data-shared] #ghLink{flex:none;width:28px;height:26px;display:flex;
   align-items:center;justify-content:center;border-radius:8px;
@@ -75,12 +75,12 @@ header[data-shared] #ghLink{flex:none;width:28px;height:26px;display:flex;
 header[data-shared] #ghLink:hover{color:#e6e9f0;background:#243040;
   border-color:#3a4a60}
 header[data-shared] button{flex:none;padding:3px 10px;border-radius:8px;
-  font-size:12px;line-height:1.4;cursor:pointer;color:#9aa4b8;background:#1c2230;
+  font-size:14px;line-height:1.4;cursor:pointer;color:#9aa4b8;background:#1c2230;
   border:1px solid #2a3040;font-family:inherit}
 header[data-shared] button:hover{color:#e6e9f0;border-color:#3a4a60}
 header[data-shared] #btnHelp,header[data-shared] #btnHelp2{width:28px;height:26px;
   padding:0;display:flex;align-items:center;justify-content:center;
-  font-size:14px;font-weight:700;line-height:1}
+  font-size:15.7px;font-weight:700;line-height:1}
 /* 右侧控件靠 .hdr-first 统一左推，这里不再用 :first-of-type 兜底 */
 `;
 

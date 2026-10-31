@@ -1,0 +1,3 @@
+[!] 还缺运行依赖（UnityPy / lz4 / Pillow / numpy），
+    没有它们无法从官方 CDN 解包资源。现在自动安装：
+

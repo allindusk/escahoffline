@@ -1070,6 +1070,8 @@ async function playPart(partIdx) {
   resumeAudio();
   await wait(0);
   ST.part = partIdx;
+  // 段变了要更新侧栏选中态：合集包里同一个 key 有多条"话"，靠 data-part 区分
+  if (typeof refreshSelection === 'function') refreshSelection();
   ST.methods = S.data.parts[partIdx].methods;
   ST.idx = 0;
   ST.running = true;
@@ -1356,6 +1358,10 @@ function loadSettings() {
     SET.voiceVol = 0.5;
   }
   if (SET.standY === -16) SET.standY = 0;   // 旧版默认值（写反了）重置
+  // 稀有度只有 SSR/SR/R 三档：「其他」按钮已删（384 个角色现在都有稀有度），
+  // 但 localStorage 里可能还留着 'other'，会筛出空列表 → 读盘时清掉。
+  SET.rarSel = (SET.rarSel || '').split(',')
+    .filter(x => x === 'SSR' || x === 'SR' || x === 'R').join(',');
   syncSettingControls();
   applySettings();
 }
@@ -1406,6 +1412,47 @@ if ($('#setClose')) {
   window.addEventListener('resize', function () { if (!st.hidden) place(); });
   sync();
 })();
+/* 设置面板的滑块：自己接管拖动。
+   有些内嵌浏览器（Electron / webview）里原生 range 只响应"点击跳到该点"，
+   按住拖动时 thumb 不跟随 —— 这里按 pointer 坐标直接换算数值再派发 input，
+   原生实现正常时两者结果一致，不会互相打架。 */
+function bindRangeDrag(inp) {
+  if (!inp || inp.dataset.dragBound) return;
+  inp.dataset.dragBound = '1';
+  inp.style.touchAction = 'none';
+  const apply = clientX => {
+    const r = inp.getBoundingClientRect();
+    if (!r.width) return;
+    const min = +inp.min || 0;
+    const max = +inp.max || 100;
+    const step = +inp.step || 1;
+    let ratio = (clientX - r.left) / r.width;
+    ratio = Math.min(1, Math.max(0, ratio));
+    let v = min + ratio * (max - min);
+    v = min + Math.round((v - min) / step) * step;
+    v = Math.min(max, Math.max(min, v));
+    if (+inp.value === v) return;
+    inp.value = v;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  inp.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();                 // 别让 label 抢焦点，也别触发文本选择
+    try { inp.setPointerCapture(e.pointerId); } catch (_) { /* 忽略 */ }
+    apply(e.clientX);
+    const move = ev => apply(ev.clientX);
+    const up = () => {
+      inp.removeEventListener('pointermove', move);
+      inp.removeEventListener('pointerup', up);
+      inp.removeEventListener('pointercancel', up);
+    };
+    inp.addEventListener('pointermove', move);
+    inp.addEventListener('pointerup', up);
+    inp.addEventListener('pointercancel', up);
+  });
+}
+document.querySelectorAll('#settings input[type=range]').forEach(bindRangeDrag);
+
 $('#btnReset').onclick = resetSettings;
 $('#setA').oninput = e => { SET.alpha = +e.target.value; applySettings(); };
 $('#setFS').oninput = e => { SET.fs = +e.target.value; applySettings(); };
@@ -1463,19 +1510,20 @@ $('#setPav').oninput = e => { SET.pauseAfterVoice = +e.target.value; applySettin
 let SRC = 'char';
 const S = { key: null, kind: 'char', char: null, data: null, voiceRes: 0 };
 
-/** 剧情标题（用于列表与复制定位信息） */
+/** 按 key 取 advindex 条目：**优先整包条目**（没有 part 的），
+    因为序章会以「同一 key + part」的形式额外挂几条别名。 */
+function advByKey(key) {
+  return ADV.find(a => a.key === key && !Number.isInteger(a.part))
+    || ADV.find(a => a.key === key);
+}
+
+/** 剧情标题（用于列表与复制定位信息）。
+    侧栏每一行左边已经有「主/活/其」标签，所以标题里**不再重复**分类名：
+    序章 → 「第2部 序章」；主线章节 → 「第2部 第1章」；活动/其他 → 「第47话」。
+    实现搬到 common.js 的 ESC.storyTitle —— 控制台 ②③⑤ 的列表、导出列表
+    都用同一份，否则同一部剧情会在两处显示成两个名字。 */
 function storyTitle(key) {
-  if (isCharKey(key)) {
-    const id = +String(key).slice(5);
-    return NAMES[id] || ('角色 ' + id);
-  }
-  const adv = ADV.find(a => a.key === key);
-  const m = /^adv_(\w+?)(?:_(\d+))?$/.exec(key || '');
-  if (!m) return String(key || '');
-  // tutorial / op 是单个整包，没有「第X话」
-  const title = m[2] ? `${ADV_LABEL[m[1]] || m[1]} 第${m[2]}话`
-    : (ADV_LABEL[m[1]] || m[1]);
-  return title + (adv ? '' : '（未接入）');
+  return ESC.storyTitle(key);
 }
 
 function toast(msg) {
@@ -1545,9 +1593,24 @@ async function loadCloudChars() {
   } catch (e) { /* 纯静态打开时没有服务端，忽略 */ }
 }
 
+/** 只更新"当前选中"高亮，**不重建列表**。
+    点列表项播放时调用它：重建会导致 scrollTop 归零（用户看到的就是"点一下就滚回顶部"）。 */
+function refreshSelection() {
+  const box = $('#charList');
+  if (!box) return;
+  box.querySelectorAll('.char-btn').forEach(el => {
+    const pt = el.dataset.part;
+    const okPart = (pt === undefined) || (+pt === ST.part);
+    el.classList.toggle('on', el.dataset.key === S.key && okPart);
+  });
+}
+
 function renderSidebar(filter = '') {
   const box = $('#charList');
   if (!box) return;
+  // 同一批内容（过滤条件没变）重渲染时保留滚动位置，避免"一闪回到顶部"
+  const keepTop = (renderSidebar._f === filter) ? box.scrollTop : 0;
+  renderSidebar._f = filter;
   box.innerHTML = '';
   const flt = $('#filters');
   if (flt) flt.style.display = SRC === 'char' ? '' : 'none';   // 排序/稀有度只对角色有意义
@@ -1617,18 +1680,34 @@ function renderSidebar(filter = '') {
     // 头像没下载时才退回色块（避免 384×N 个 404 刷屏）。
     const haveImg = (st === 'ready' || st === 'soft-missing' || st === 'partial')
       || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
+    // 侧栏一项 = 横幅（占一行）+ 标题/信息（占一行）
+    d.className += ' bnr';
+    // 横幅（episode_character → media/img/story/char_<id>.webp）是**随程序分发**的，
+    // 跟"剧情资源装没装"无关，所以总是渲染；加载失败才退回首字色块。
     d.innerHTML =
-      (haveImg
-        ? `<img alt="" loading="lazy">`
-        : `<span class="ava-ph">${esc((nm || '?').trim().slice(0, 1))}</span>`) +
+      `<span class="bnr"><img alt="" loading="lazy"></span>` +
       `<span class="info"><span class="nm">${esc(nm)}</span>` +
       `<span class="sub"><span class="rar" data-r="${rar}">${m.r || '—'}</span>` +
       `<span>${c.lines ? c.lines + ' 句' : '未安装'}</span>` +
       (st === 'missing' ? '<span class="badge nodl">未下载</span>' :
         st === 'soft-missing' ? '<span class="badge soft">缺素材</span>' : '') +
-      `</span></span>` +
-      `<span class="cpy" title="复制角色名">⧉</span>`;
-    if (haveImg) applyChain(d.querySelector('img'), avatarCands(c.id));
+      `</span>` +
+      `<span class="cpy" title="复制角色名">⧉</span></span>`;
+    // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）
+    applyChain(d.querySelector('img'),
+      [imgSrc(bannerOfChar(c.id))].concat(avatarCands(c.id)));
+    bindTip(d, () => {
+      const parts = c.parts || 0;
+      const tr = (typeof transStatsOf === 'function') ? '' : '';
+      return `<img src="${esc(imgSrc(bannerOfChar(c.id)))}" alt="" `
+        + `onerror="this.style.display='none'">`
+        + `<div style="font-weight:600;margin-bottom:4px">${esc(nm)}</div>`
+        + `<dl><dt>ID</dt><dd>${c.id}</dd>`
+        + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}${m.d ? ' · 实装 ' + esc(m.d) : ''}</dd>`
+        + `<dt>剧情</dt><dd>${parts} 段 · ${c.lines || 0} 句</dd>`
+        + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+        + `</dl>${tr}`;
+    });
     d.onclick = () => openChar(c.id);
     d.querySelector('.cpy').onclick = ev => {
       ev.stopPropagation();
@@ -1636,6 +1715,47 @@ function renderSidebar(filter = '') {
     };
     box.appendChild(d);
   });
+  box.scrollTop = keepTop;
+}
+
+/** 侧栏用的「封面横幅」路径。
+    角色剧情：media/img/story/char_<cid>.webp（游戏「角色剧情」入口那张图）
+    主线/活动：advindex 里的 cover（章节标题横幅）
+    其他：没有横幅 → 返回空串，列表退回纯文字行 */
+function bannerOfChar(id) {
+  return `media/img/story/char_${id}.webp`;
+}
+function bannerOfAdv(a) {
+  return (a && a.cover) || '';
+}
+
+/** 悬停浮窗：整个侧栏共用一个，鼠标移开就隐藏（不抢点击，pointer-events:none） */
+let tipEl = null;
+function tipShow(el, html) {
+  if (!tipEl) {
+    tipEl = document.createElement('div');
+    tipEl.id = 'bnrTip';
+    document.body.appendChild(tipEl);
+  }
+  tipEl.innerHTML = html;
+  tipEl.classList.add('show');
+  const r = el.getBoundingClientRect();
+  const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  let x = r.right + 12, y = r.top;
+  if (x + w > innerWidth - 10) x = Math.max(10, r.left - w - 12);
+  if (y + h > innerHeight - 10) y = Math.max(10, innerHeight - h - 10);
+  tipEl.style.left = x + 'px';
+  tipEl.style.top = y + 'px';
+}
+function tipHide() {
+  if (tipEl) tipEl.classList.remove('show');
+}
+function bindTip(el, htmlFn) {
+  el.addEventListener('mouseenter', () => {
+    const h = htmlFn();
+    if (h) tipShow(el, h);
+  });
+  el.addEventListener('mouseleave', tipHide);
 }
 
 /** 头像候选链（imgmap 没有 avatar 段，直接按命名拼） */
@@ -1664,13 +1784,104 @@ function avatarCands(id) {
 const ADV_BATCH = 45;
 let advAll = [], advCursor = 0;
 
+/** 侧栏「其他」：16 个入口分组 → 展开成话。
+    数据来自 window.__OTHER_EPS：[{no,name,eps:[{k,i,t,n,c}]}]，
+    一条话 = 包 key + 第 i 段（不拆文件，播放时跳段）。 */
+const OTHER_OPEN = new Set();      // 展开的入口号（内存态，刷新后默认全收起）
+
+function renderOtherGroups(box, filter = '') {
+  const f = (filter || '').trim().toLowerCase();
+  const groups = window.__OTHER_EPS || [];
+  box.innerHTML = '';
+  box.scrollTop = 0;
+
+  groups.forEach(g => {
+    const eps = f
+      ? g.eps.filter(e => (e.t || '').toLowerCase().includes(f) ||
+          (e.c || '').toLowerCase().includes(f) || g.name.toLowerCase().includes(f))
+      : g.eps;
+    if (!eps.length) return;
+    const open = OTHER_OPEN.has(g.no) || !!f;      // 搜索时全展开
+
+    const head = document.createElement('div');
+    head.className = 'og-head' + (open ? ' open' : '');
+    head.dataset.key = 'etc_' + (g.no ?? '?');
+    // 横幅里已经写着 RAID BOSS / 拡域戦，标题里就不重复了，省出宽度给后半段
+    const shortName = g.name.replace(/^RAID BOSS\s*/, '').replace(/^拡域戦\s*/, '拡域 ');
+    head.innerHTML =
+      (g.no ? `<img alt="" loading="lazy" src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
+        + ` onerror="this.style.display='none'">` : '')
+      + `<span class="nm">${esc(shortName)}</span>`
+      + `<span class="cnt">${eps.length}</span>`
+      + `<span class="arw">${open ? '▾' : '▸'}</span>`;
+    if (g.no) bindTip(head, () => `<img src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
+      + ` alt="" onerror="this.style.display='none'">`
+      + `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
+      + `<dl><dt>入口</dt><dd>etc_${g.no}</dd>`
+      + `<dt>话数</dt><dd>${g.eps.length}</dd></dl>`);
+    head.onclick = () => {
+      if (OTHER_OPEN.has(g.no)) OTHER_OPEN.delete(g.no); else OTHER_OPEN.add(g.no);
+      renderOtherGroups(box, filter);
+    };
+    box.appendChild(head);
+
+    if (!open) return;
+    eps.forEach(e => {
+      const d = document.createElement('div');
+      const on = (S.key === e.k) && (ST.part === e.i);
+      d.className = 'char-btn ep' + (on ? ' on' : '');
+      d.dataset.key = e.k;
+      d.dataset.part = e.i;
+      d.innerHTML = `<span class="info"><span class="nm">${esc(e.t)}</span>`
+        + `<span class="sub">${e.m ? `<span>#${e.i + 1}</span>` : ''}`
+        + `<span>${e.n} 句</span></span>`
+        + `<span class="cpy" title="复制">⧉</span></span>`;
+      d.onclick = () => openStory(e.k, { part: e.i });
+      d.querySelector('.cpy').onclick = ev => {
+        ev.stopPropagation();
+        copyText(`${g.name} #${e.i + 1}`, '已复制');
+      };
+      bindTip(d, () => `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
+        + `<dl><dt>段</dt><dd>#${e.i + 1}</dd><dt>句数</dt><dd>${e.n}</dd>`
+        + `<dt>首句</dt><dd>${esc(e.t)}</dd>`
+        + `<dt>主要人物</dt><dd>${esc(e.c || '—')}</dd></dl>`);
+      box.appendChild(d);
+    });
+  });
+
+  // 教程 / 开场这类没有入口分组的，直接平铺在最后（以前靠 renderAdvList 平铺，
+  // 改成分组视图后如果不补，它们就从列表里消失了）
+  const extra = ADV.filter(a => a.kind === 'tutorial' || a.kind === 'op')
+    .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f));
+  if (extra.length) {
+    const head = document.createElement('div');
+    head.className = 'og-head open';
+    head.innerHTML = `<span class="nm">教程 / 开场</span>`
+      + `<span class="cnt">${extra.length}</span><span class="arw">▾</span>`;
+    box.appendChild(head);
+    extra.forEach(a => box.appendChild(advItem(a)));
+  }
+
+  const total = groups.reduce((a, g) => a + g.eps.length, 0) + extra.length;
+  const hit = $('#hit');
+  if (hit) {
+    hit.textContent = f ? `命中 ${total} 话` : '';
+    hit.className = f ? 'on' : '';
+  }
+}
+
 function renderAdvList(filter = '') {
   const box = $('#charList');
   if (!box) return;
+  // 「其他」走入口分组视图（16 个入口 → 展开成话）
+  if (SRC === 'other' && window.__OTHER_EPS && window.__OTHER_EPS.length) {
+    renderOtherGroups(box, filter);
+    return;
+  }
   const f = filter.trim().toLowerCase();
   const kinds = ADV_MENU[SRC] || [SRC];
   advAll = ADV.filter(a => kinds.includes(a.kind))
-    .filter(a => !f || storyTitle(a.key).toLowerCase().includes(f)
+    .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f)
       || String(a.first || '').toLowerCase().includes(f) || a.key.includes(f));
   /* 未下载资源的排到后面，和角色列表同口径 */
   const stOf2 = key => (window.PACKSTATE ? PACKSTATE.status(key) : 'unknown');
@@ -1685,8 +1896,10 @@ function renderAdvList(filter = '') {
     hit.className = f ? (advAll.length ? 'on' : 'none') : '';
   }
 
+  // 过滤条件没变时保留滚动位置（否则切语言/刷新下载状态都会跳回顶部）
+  const keepTop = (renderAdvList._f === filter) ? box.scrollTop : 0;
+  renderAdvList._f = filter;
   box.innerHTML = '';
-  box.scrollTop = 0;
   advCursor = 0;
   if (!advAll.length) {
     const d = document.createElement('div');
@@ -1698,6 +1911,7 @@ function renderAdvList(filter = '') {
     return;
   }
   appendAdvChunk();
+  box.scrollTop = keepTop;
 }
 
 /** 追加下一批（滚动到底部时由 #charList 的 scroll 事件调用） */
@@ -1713,26 +1927,47 @@ function appendAdvChunk() {
 function advItem(a) {
   const vnote = a.voiceRes ? `${a.voiceRes} 语音` : '无语音';
   const st = window.PACKSTATE ? PACKSTATE.status(a.key) : 'unknown';
+  // 同一部剧情的多个条目（如 adv_op 里的三部序章）共用 key，靠 part 区分：
+  // 标题优先用条目自带的 title，起始段用 a.part。
+  const title = a.title || storyTitle(a.key);
+  const startPart = Number.isInteger(a.part) ? a.part : null;
   const d = document.createElement('div');
-  d.className = 'char-btn adv' + (a.key === S.key ? ' on' : '')
+  d.className = 'char-btn adv bnr' + (a.key === S.key ? ' on' : '')
     + (st === 'missing' ? ' nodl' : '');
-  d.title = `${storyTitle(a.key)}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
+  d.dataset.key = a.key;                 // refreshSelection() 靠它判断选中
+  d.dataset.id = a.key;
+  if (startPart !== null) d.dataset.part = startPart;
+  const cover = bannerOfAdv(a);
+  d.title = `${title}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
     + (a.first ? `\n${a.first}` : '')
     + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '');
+  // 两行一项：横幅（没横幅就只留标题，别塞一张假图）
   d.innerHTML =
-    `<span class="srcTag" data-k="${a.kind}">${ADV_TAG[a.kind] || '剧'}</span>` +
-    `<span class="info"><span class="nm">${esc(storyTitle(a.key))}</span>` +
+    (cover
+      ? `<span class="bnr"><img alt="" loading="lazy" src="${esc(imgSrc(cover))}"`
+        + ` onerror="this.parentNode.style.display='none'"></span>`
+      : '') +
+    `<span class="info"><span class="nm">`
+    // 主线/活动的分类已经写在标题里（第N部 第X章 / 活动标题），不再放「主 / 活」角标
+    + (a.kind === 'main' || a.kind === 'event' ? ''
+      : `<span class="srcTag" data-k="${a.kind}">${ADV_TAG[a.kind] || '剧'}</span>`)
+    + `${esc(title)}</span>` +
     `<span class="sub"><span>${a.parts} 段</span><span>${a.lines} 句</span>` +
     `<span>${vnote}</span>` +
     (st === 'missing' ? '<span class="badge nodl">未下载</span>' : '') +
     `</span>` +
-    (a.first ? `<span class="sub first">${esc(a.first)}</span>` : '') +
-    `</span>` +
-    `<span class="cpy" title="复制剧情名">⧉</span>`;
-  d.onclick = () => openStory(a.key);
+    `<span class="cpy" title="复制剧情名">⧉</span></span>`;
+  bindTip(d, () => (cover ? `<img src="${esc(imgSrc(cover))}" alt="" `
+    + `onerror="this.style.display='none'">` : '')
+    + `<div style="font-weight:600;margin-bottom:4px">${esc(title)}</div>`
+    + `<dl><dt>剧情</dt><dd>${a.parts} 段 · ${a.lines} 句</dd>`
+    + `<dt>语音</dt><dd>${vnote}</dd>`
+    + (a.first ? `<dt>首句</dt><dd>${esc(a.first)}</dd>` : '')
+    + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd></dl>`);
+  d.onclick = () => openStory(a.key, startPart === null ? undefined : { part: startPart });
   d.querySelector('.cpy').onclick = ev => {
     ev.stopPropagation();
-    copyText(storyTitle(a.key), `已复制：${storyTitle(a.key)}`);
+    copyText(title, `已复制：${title}`);
   };
   return d;
 }
@@ -1844,11 +2079,12 @@ async function openStory(key, opt) {
   S.char = isCharKey(key) ? +String(key).slice(5) : null;
   S.kind = isCharKey(key) ? 'char' : String(key).split('_')[1];
   S.voiceRes = isCharKey(key) ? 1
-    : ((ADV.find(a => a.key === key) || {}).voiceRes || 0);
+    : ((advByKey(key) || {}).voiceRes || 0);
   ST.char = S.char;
   ST.key = key;
   sessionStorage.setItem('story', key);
-  renderSidebar($('#search').value);
+  // 只切换高亮，不重建列表（重建会把 scrollTop 归零 → 点一下滚回顶部）
+  refreshSelection();
   try { S.data = await loadStoryData(key); }
   catch (e) { alert(e.message); return; }
   // 先把这部剧情的译文拉下来（失败也只是没译文），再开工，避免第一句先闪日文
@@ -1857,8 +2093,10 @@ async function openStory(key, opt) {
   // ?part=1 表示第 1 段（界面口径），内部索引再减 1
   // opt.noPlay：只加载数据不开始播（脚本化加载时用，避免先白播一段）
   if (opt && opt.noPlay) return;
-  const qp = +(new URLSearchParams(location.search).get('part') || 1);
-  playPart(Math.min(Math.max(qp - 1, 0), S.data.parts.length - 1));
+  // opt.part：从侧栏点"某一话"时指定段（0 基）；否则看 URL 的 ?part=（1 基）
+  const want = (opt && Number.isInteger(opt.part)) ? opt.part + 1
+    : +(new URLSearchParams(location.search).get('part') || 1);
+  playPart(Math.min(Math.max(want - 1, 0), S.data.parts.length - 1));
 }
 
 function openChar(id) { return openStory('char_' + id); }
@@ -1903,27 +2141,43 @@ function renderTabs() {
   updateBanner();
 }
 
-/** 剧情章节的标题横幅（游戏里章节标题本身就是图，只能这样拿到）
-    只显示当前这一张，切换剧情时才换 src，不会给列表增加图片请求。 */
+/** 当前剧情的横幅图路径。
+    主线/活动/其他的章节标题在游戏里本身就是图（topic_*，导出成 main_N/event_N），
+    角色剧情没有文字横幅，用游戏「角色剧情」入口那张角色图（episode_character_<cid>，
+    由 cdn/stages.export_char_banners() 落到 img/story/char_<cid>.webp）。 */
+function bannerOf(key) {
+  if (isCharKey(key)) return 'media/img/story/char_' + String(key).slice(5) + '.webp';
+  const adv = advByKey(key);
+  return (adv && adv.cover) || '';
+}
+
+/** 标题区：横幅 + 剧名。只显示当前这一张，切换剧情时才换 src。 */
 function updateBanner() {
+  // 横幅不再放播放器标题区（用户 2026-11-01 明确）：标题横幅交给左侧列表，
+  // 这里只保留一行纯文字标题，空间还给画面。
+  const head = $('#storyHead');
+  if (head) head.remove();
+  return;
+  /* eslint-disable no-unreachable */
   const t = $('#tabs');
-  if (!t) return;
-  const adv = ADV.find(a => a.key === S.key);
-  let b = $('#storyBanner');
-  if (!adv || !adv.cover) {
-    if (b) b.hidden = true;
+  const src = bannerOf(S.key);
+  if (!src) {
+    if (head) head.hidden = true;
     return;
   }
-  if (!b) {
-    b = document.createElement('img');
-    b.id = 'storyBanner';
-    b.loading = 'lazy';
-    b.alt = '';
-    t.appendChild(b);
+  if (!head) {
+    head = document.createElement('div');
+    head.id = 'storyHead';
+    head.innerHTML = '<img id="storyBanner" alt="" loading="lazy">' +
+      '<span id="storyName"></span>';
+    t.insertBefore(head, t.firstChild);      // 摆在左侧：横幅就是标题
+    $('#storyBanner').onerror = () => { head.hidden = true; };
   }
-  b.hidden = false;
-  if (b.getAttribute('src') !== adv.cover) b.src = adv.cover;
+  head.hidden = false;
+  const b = $('#storyBanner');
+  if (b.getAttribute('src') !== src) b.src = src;
   b.title = storyTitle(S.key);
+  $('#storyName').textContent = storyTitle(S.key);
 }
 
 /** 顶部标题旁的总量：随侧栏来源切换 */

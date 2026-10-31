@@ -1,26 +1,21 @@
-"""下载线路：内置多条镜像，**先测速再选最快的那条**。
+"""下载线路：内置多条镜像。
 
-为什么需要这个
---------------
-两件事会受"线路"影响，而它们的官方源在国内都可能很慢：
+两类来源，两套策略（2026-11-01 用户定版）
+----------------------------------------
+1. **pip 装依赖**：**测速选最快**。PyPI 官方直连经常只有几十 KB/s，而清华/阿里/
+   腾讯的镜像能到几 MB/s，写死一条就等于赌用户的网络环境。测速结果缓存 30 分钟
+   （`userdata/mirrors.json`）。
+2. **GitHub（release / API / raw）**：**不测速，按固定顺序用**。
+   依次尝试 gh-proxy 的四个节点，**只要这条线路有正常响应就用它，不管快慢**；
+   四条反代全都没反应时，才落到表尾的 GitHub 官方直连。
 
-1. **装依赖**（pip）：PyPI 官方直连经常只有几十 KB/s，而清华/阿里/腾讯的镜像
-   能到几 MB/s。写死一条就等于赌用户的网络环境。
-2. **程序更新**（GitHub Release）：github.com 与 objects.githubusercontent.com
-   在国内常常不可达。项目本身就在用 ghproxy 这类反代（见 tools 里的旧脚本）。
+   为什么 GitHub 不测速：反代背后是共享 CDN，速度一天抖好几次，测速本身要
+   先花几 MB 流量和十几秒，选出来的"最快"十分钟后就不准了；而"能不能连上"
+   才是真正的分水岭（官方直连在国内经常直接握手失败）。用户明确要求：
+   有响应就用，不比较速度。
 
-所以策略是：**每个来源内置若干路线 → 实测 → 按实测结果排序 → 用最快的那条**。
-测速结果缓存 30 分钟（`userdata/mirrors.json`），避免每次操作都先等一轮探测。
-
-指标怎么算
-----------
-- pip 镜像：取一个小的索引页，测 **TTFB + 单位时间字节数**，综合打分
-  （TTFB 决定"能不能连"，吞吐决定"下得动"，两者都要）。
-- GitHub 反代：主要判断**可达性**（很多反代能连但很慢/被限流），所以看 TTFB，
-  并给可达的直连更高权重（同等速度下优先直连，少一层中间人）。
-
-注意：这些都是**公开的公共服务**，随时可能限流或改规则。某条路线测不通就自动跳过，
-全部不通时退回官方源 —— 用户至少还能下，只是可能慢。
+注意：这些都是**公开的公共服务**，随时可能限流或改规则。某条线路没响应就自动
+跳过，继续下一条；全部不通时退回官方直连 —— 用户至少还能下，只是可能慢。
 """
 
 from __future__ import annotations
@@ -60,36 +55,31 @@ PIP_ROUTES = [
 
 #: GitHub 下载反代。``{url}`` 会被替换成原始 GitHub URL。
 #:
-#: **2026-10-30 用本项目自己的 release 资产实测**（update 0.75 MB /
-#: portable 114.6 MB，4 线程交错 4 轮取中位，单连接 8 MB）：
+#: **顺序即优先级，不测速**（2026-11-01 用户定版）：
 #:
-#:   线路                     4 线程中位   单连接中位   结论
-#:   gh-proxy.com             22.6 MB/s    20.1 MB/s   ← 主力
-#:   git.yylx.win             18.7 MB/s    18.0 MB/s   ← 备一
-#:   edgeone.gh-proxy.org     16.6 MB/s    18.3 MB/s   ← 备二（旧主力）
-#:   ghfast.top                6.1 MB/s     4.8 MB/s   兜底
-#:   github.boki.moe           4.5 MB/s     4.4 MB/s   兜底
-#:   GitHub 直连               0.7 MB/s     断断续续   本机几乎不可用
+#:   1. gh-proxy 主站（Cloudflare v4，全球高速分发）
+#:   2. gh-proxy 优选 v4（仅 IPv4 智能解析）
+#:   3. gh-proxy 优选 v4/v6（IPv6/IPv4 智能解析）
+#:   4. gh-proxy Fastly（v4，Fastly CDN 节点）
+#:   5. GitHub 官方直连 —— **只在上面四条全都没反应时**才用
 #:
-#: 三条主力下载出来的 zip **sha256 完全一致**，没有篡改风险。
-#: 直连实测经常被掐（有时握手失败、有时 4 线程只有 0.2–0.6 MB/s），
-#: 所以排最后 —— 但留着：国外网络或代理全挂时它仍可能是唯一能连的。
+#: 判定标准是"**有没有正常响应**"，不是"快不快"：反代背后是共享 CDN，
+#: 速度一天抖好几次，测速要白花几 MB 流量和十几秒，选出来十分钟后就不准了。
+#: 因此**不要再往这里加测速/打分逻辑**，也别按速度重排这张表。
 #:
-#: 注意：**GitHub 官方没有中国大陆镜像**。release 资产实际落在
-#: objects.githubusercontent.com（Fastly/Cloudflare），国内经常被限速，
-#: 所以除了直连，只能靠社区反代，而这些节点生命周期很短 —— 本名单需要定期重测
-#: （重测脚本：``python tools/_gh_route_bench.py``）。
+#: 用法：整条 URL 粘在反代域名后面（模板里 ``{url}`` 就是原始 GitHub URL），
+#: 例如 ``https://gh-proxy.org/https://github.com/<repo>/releases/download/...``。
 GH_ROUTES = [
-    {"id": "ghproxy_com", "name": "gh-proxy.com",
-     "tpl": "https://gh-proxy.com/{url}"},
-    {"id": "yylx", "name": "git.yylx.win", "tpl": "https://git.yylx.win/{url}"},
-    {"id": "edgeone", "name": "gh-proxy.org（EdgeOne）",
-     "tpl": "https://edgeone.gh-proxy.org/{url}"},
-    {"id": "ghfast", "name": "ghfast.top（慢速兜底）",
-     "tpl": "https://ghfast.top/{url}"},
-    {"id": "boki", "name": "github.boki.moe（慢速兜底）",
-     "tpl": "https://github.boki.moe/{url}"},
-    {"id": "direct", "name": "GitHub 直连", "tpl": "{url}"},
+    {"id": "ghproxy", "name": "gh-proxy 主站（Cloudflare v4）",
+     "tpl": "https://gh-proxy.org/{url}"},
+    {"id": "ghproxy_v4", "name": "gh-proxy 优选 v4",
+     "tpl": "https://v4.gh-proxy.org/{url}"},
+    {"id": "ghproxy_v6", "name": "gh-proxy 优选 v4/v6",
+     "tpl": "https://v6.gh-proxy.org/{url}"},
+    {"id": "ghproxy_cdn", "name": "gh-proxy Fastly（v4）",
+     "tpl": "https://cdn.gh-proxy.org/{url}"},
+    {"id": "direct", "name": "GitHub 官方直连（反代全无响应时兜底）",
+     "tpl": "{url}"},
 ]
 
 #: 探测用：一个真实的 release 小资产（1.7 KB），能同时验证"可代理 release"
@@ -97,13 +87,6 @@ GH_ROUTES = [
 #: 反代对 raw 和 release 的支持经常不一样，测 raw 会选错线路。
 GH_PROBE = ("https://github.com/cli/cli/releases/download/v2.40.0/"
             "gh_2.40.0_checksums.txt")
-#: 吞吐探测用的大一点的 release 资产（约 12 MB，只读前 2 MB）
-GH_PROBE_BIG = ("https://github.com/cli/cli/releases/download/v2.40.0/"
-                "gh_2.40.0_windows_amd64.zip")
-
-#: 低于这个吞吐视为"慢线路"：仍可用，但只在快线路全挂时才选
-MIN_GOOD_MBPS = 1.0
-
 _ROUTES = {"pip": PIP_ROUTES, "github": GH_ROUTES}
 
 
@@ -130,93 +113,59 @@ def _probe_url(url: str, kind: str, timeout: float = 5.0,
 
 
 def _score(kind: str, res: dict) -> float:
-    """分数越高越好。TTFB 与吞吐都参与，避免"能连但极慢"被选中。"""
+    """pip 镜像打分：越高越好。吞吐权重更高（要下几十 MB），
+    TTFB 用来排除"握手慢到离谱"的。
+
+    GitHub 不用它 —— 那边的规则是"按顺序、有响应就用"（见 ``GH_ROUTES``）。
+    """
     if not res.get("ok"):
         return -1.0
     ttfb = max(res["ttfb"], 1)
     kbps = max(res["kbps"], 1)
-    if kind == "github":
-        # 反代主要看可达性：TTFB 越小越好，吞吐当加分项
-        return 1000.0 / ttfb + min(kbps, 2000) / 400.0
-    # pip：吞吐权重更高（要下几十 MB），TTFB 用来排除"握手慢到离谱"的
     return min(kbps, 20000) / 100.0 + 300.0 / ttfb
 
 
-def _probe_mbps(url: str, timeout: float = 20.0, limit: int = 2 << 20) -> float:
-    """读满 ``limit`` 字节测真实吞吐（MB/s）。失败返回 0。"""
-    t0 = time.time()
-    got = 0
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            ttfb = time.time() - t0
-            while got < limit:
-                chunk = r.read(65536)
-                if not chunk:
-                    break
-                got += len(chunk)
-        dt = max(time.time() - t0 - ttfb, 1e-3)
-        return round(got / 1048576.0 / dt, 2)
-    except Exception:                                          # noqa: BLE001
-        return 0.0
-
-
 def _test_github(routes: list[dict], timeout: float, workers: int,
-                 target: str | None = None) -> list[dict]:
-    """两阶段：先小文件筛可达（快），再对前几名测真实吞吐（准）。
+                 target: str | None = None, lite: bool = False) -> list[dict]:
+    """**顺序探活，不测速、不排序**（2026-11-01 用户定版）。
 
-    只测握手会选错：实测 ghfast.top 握手 0.87s 但吞吐只有 0.06 MB/s，
-    而 edgeone 握手 0.82s、吞吐 13.85 MB/s —— 差 200 倍。
+    判定标准只有一条：这条线路对目标 URL **有没有正常响应**。有响应就是可用，
+    快慢一律不管；所以结果**保持表内顺序**，第一条 ``ok=True`` 的就是会被
+    选用的那条（四条反代都不可用时才轮到表尾的官方直连）。
 
-    ``target`` 给了就**直接拿真正要下的那个资产测**（更准：不同资产落在
-    objects.githubusercontent.com 的不同边缘节点，速度可能差很多）。
+    ``target`` 给了就拿真正要下的那个资产探（同一条线路对 release 与 raw
+    的支持不一样，拿真地址探最准）；``workers/lite`` 仅为兼容旧调用保留 ——
+    这里的探测是顺序的，故意不并发：优先级表本身就是答案，没必要并发打一遍。
     """
-    small = target or GH_PROBE
-    big = target or GH_PROBE_BIG
-
-    def one(route):
-        r = _probe_url(apply_github(route, small), "github", timeout)
+    url = target or GH_PROBE
+    res = []
+    for route in routes:
+        r = _probe_url(apply_github(route, url), "github", timeout)
         out = dict(route)
         out.update(r)
         out["mbps"] = 0.0
-        return out
-
-    with cf.ThreadPoolExecutor(max_workers=min(workers, len(routes))) as ex:
-        res = list(ex.map(one, routes))
-
-    # 只对握手最快的 3 条测吞吐（实测同一线路早晚抖动能到 2 倍，
-    # 只测 2 条容易把最快的那条漏掉；再多就得让用户干等了）
-    reachable = sorted([r for r in res if r.get("ok")], key=lambda x: x["ttfb"])[:3]
-    for r in reachable:
-        # 512 KB 太小：TCP 还没加速完就结束了，实测会低估好几倍
-        # （512 KB → 2.9 MB/s，同一条线路下 8 MB 是 20 MB/s）
-        r["mbps"] = _probe_mbps(apply_github(r, big),
-                                timeout=max(timeout * 2, 10), limit=2 << 20)
-        # 吞吐定生死，握手只做同速时的次要依据
-        r["score"] = round(r["mbps"] * 100 + 200.0 / max(r["ttfb"], 1), 2)
-        r["slow"] = r["mbps"] < MIN_GOOD_MBPS
-    for r in res:
-        if r not in reachable:
-            r["score"] = (round(200.0 / max(r["ttfb"], 1), 2)
-                          if r.get("ok") else -1.0)
-            r["slow"] = True                     # 没测到吞吐的一律按慢处理
-    res.sort(key=lambda x: -x["score"])
+        out["slow"] = False
+        out["lite"] = True
+        out["score"] = (round(200.0 / max(r["ttfb"], 1), 2)
+                        if r.get("ok") else -1.0)
+        res.append(out)
     return res
 
 
 def test(kind: str = "pip", timeout: float = 5.0,
          workers: int = 8, rounds: int = 1,
-         target: str | None = None) -> list[dict]:
-    """并发测所有路线，返回按分数降序排列的结果（含不可用的，标 ok=False）。
+         target: str | None = None, lite: bool = False) -> list[dict]:
+    """探测所有路线（含不可用的，标 ok=False）。
 
-    ``rounds=2`` 会重复测取最好成绩（网络抖动时更准，但慢一倍）。
-    ``target`` 只对 ``kind="github"`` 有效：拿真正要下的资产 URL 来测。
+    * ``kind="pip"``：并发测速，结果按分数降序（真的会比速度，PyPI 镜像差几十倍）。
+    * ``kind="github"``：**只顺序探活、不测速**，结果保持表内优先级顺序
+      （见 :data:`GH_ROUTES`）。``target`` 可指定真正要取的 URL。
     """
     routes = _ROUTES.get(kind)
     if not routes:
         raise ValueError(f"未知线路类型：{kind}")
     if kind == "github":
-        return _test_github(routes, timeout, workers, target)
+        return _test_github(routes, timeout, workers, target, lite)
 
     def one(route):
         best = None
@@ -237,20 +186,37 @@ def test(kind: str = "pip", timeout: float = 5.0,
     return results
 
 
+def ordered(kind: str = "github") -> list[dict]:
+    """按**固定优先级**返回线路（GitHub：照表顺序，不测速）。"""
+    out = []
+    for r in _ROUTES.get(kind, []):
+        d = dict(r)
+        d.update({"ok": True, "ttfb": 0, "kbps": 0, "mbps": 0.0,
+                  "slow": False, "score": 0.0, "ordered": True})
+        out.append(d)
+    return out
+
+
 def ranked(kind: str = "github", refresh: bool = False,
-           job=None, target: str | None = None) -> list[dict]:
-    """按速度排好序的**可用**线路列表（给"下载失败自动换下一条"用）。
+           job=None, target: str | None = None, lite: bool = False) -> list[dict]:
+    """按**使用顺序**排好的线路列表（给"失败就换下一条"用）。
 
-    快线路（≥ MIN_GOOD_MBPS）排在前面；慢线路留在后面兜底 ——
-    如果只保留快线路，两条都挂了用户就彻底下不了。
-
-    ``target``：拿真正要下的 URL 测（比通用探测准）。
+    * ``github``：**固定顺序、不测速**（2026-11-01 用户定版）——
+      gh-proxy 四个节点依次用，最后才是官方直连。``refresh/target/lite``
+      仍然接受但不再影响顺序（保留是为了不破坏既有调用方）。
+    * ``pip``：仍旧测速排序，并缓存 30 分钟。
     """
+    if kind == "github":
+        res = ordered("github")
+        if job is not None:
+            job.log("GitHub 线路按固定顺序使用（不测速）："
+                    + " → ".join(r["name"] for r in res))
+        return res
     res = None if refresh else cached(kind)
     if not res:
         if job is not None:
             job.log(f"正在测速 {len(_ROUTES.get(kind, []))} 条{_label(kind)}线路…")
-        res = test(kind, target=target)
+        res = test(kind, target=target, lite=lite)
         save_cache(kind, res)
         if job is not None:
             for r in res:
@@ -293,9 +259,18 @@ def best(kind: str = "pip", refresh: bool = False, job=None,
          target: str | None = None) -> dict:
     """→ 选中的路线（含 ``id/name/index|tpl/score``）。
 
-    有新鲜缓存就用缓存；否则测速并把结果写进缓存。
-    ``job`` 给了就把每条路的成绩写进进度消息。
+    * ``github``：按表顺序探活，**第一条有响应的就是选中的**；全无响应返回
+      表尾的官方直连（标 ``ok=False``，让调用方自己决定报错）。
+    * ``pip``：有新鲜缓存就用缓存；否则测速并把结果写进缓存。
     """
+    if kind == "github":
+        for r in test("github", target=target):
+            if r.get("ok"):
+                if job is not None:
+                    job.log(f"选用：{r['name']}（线路顺序优先，不测速）")
+                return r
+        return dict(_ROUTES["github"][-1], ok=False, score=0,
+                    error="所有线路都没有响应（含官方直连）")
     if not refresh:
         c = cached(kind)
         if c and c[0].get("ok"):
@@ -348,14 +323,17 @@ def fetch(url: str, *, kind: str = "github", want: str = "text",
 
     ``want``：``text`` / ``json`` / ``bytes``
     ``timeout``：单条线路超时；``budget``：全部线路的总预算（秒）
-    ``refresh``：True 时重新测速排序；默认用已有缓存，没有就按表里顺序 ——
-    取一个几十 KB 的小文件没必要先测速。
+    ``refresh``：只对 pip 有意义（重新测速）；**GitHub 永远按表顺序走**
+    （gh-proxy 四节点 → 官方直连），不测速也不用速度缓存排序。
     ``extra``：额外的兜底线路（``{"name":..,"tpl":"完整URL"}``）。用于那些
     **不能靠前缀代理**的线路（如 jsDelivr 要 ``gh/{repo}@{br}/{path}`` 形式），
     调用方自己把 URL 拼好传进来，排在所有内置线路之后。
     """
     deadline = time.monotonic() + max(3.0, float(budget))
-    base = (None if refresh else cached(kind)) or routes(kind)
+    if kind == "github":
+        base = routes(kind)                  # 固定顺序：顺序即优先级
+    else:
+        base = (None if refresh else cached(kind)) or routes(kind)
     ok = [r for r in base if r.get("ok")] or base
     if extra:
         ok = list(ok) + list(extra)
@@ -403,13 +381,20 @@ def quick_check(route: dict, url: str, timeout: float = 6.0) -> bool:
 
 
 def summary(kind: str = "pip") -> dict:
-    """给前端展示的线路概况（不触发测速）。"""
+    """给前端展示的线路概况（不触发任何网络请求）。
+
+    ``ordered=True`` 表示这类线路**不测速**、按表内顺序使用（GitHub）。
+    """
     c = _load_cache().get(kind) or {}
+    rs = _ROUTES.get(kind, [])
     return {
         "kind": kind,
-        "routes": [{"id": r["id"], "name": r["name"]} for r in _ROUTES.get(kind, [])],
+        "ordered": kind == "github",
+        "routes": [{"id": r["id"], "name": r["name"]} for r in rs],
         "tested": bool(c),
         "testedAt": c.get("at", 0),
         "results": c.get("results") or [],
-        "best": (c.get("results") or [{}])[0].get("id", "") if c.get("results") else "",
+        # GitHub 的"首选"永远是表头那条；pip 才是测速结果里的第一名
+        "best": "" if kind == "github" else (
+            (c.get("results") or [{}])[0].get("id", "") if c.get("results") else ""),
     }

@@ -22,8 +22,8 @@ $ErrorActionPreference = "Stop"
 # imgmap.base.js（WebP 覆盖层）、sfxmap.js/json、stand_slot.json、*.orig。
 $INDEX_FILES = @(
     'advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
-    'imgmap.js', 'index.js', 'names.js', 'packs.links.js',
-    'stand_layers.json'
+    'imgmap.js', 'index.js', 'names.js', 'othereps.js',
+    'packs.links.js', 'stand_layers.json'
 )
 
 New-Item -ItemType Directory -Force -Path $Dst | Out-Null

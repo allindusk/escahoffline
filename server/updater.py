@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 
@@ -41,9 +42,11 @@ WHITELIST = (
     "web/index.html", "web/cg.html", "web/setup.html", "web/serve.py",
     "VERSION", "README.md", "requirements.txt",
     "start.bat", "start.sh", "停止.bat",
-    # 注意：**不要**把「启动.bat」加进来。
-    # 便携版的启动脚本是打包时专门生成的（直接调 python\python.exe），
-    # 而仓库里是"找系统 Python"的源码版；一旦被更新覆盖，便携版下次启动就崩。
+    # 「启动.bat」**可以**放行：仓库里那份优先用 python\python.exe（内置），
+    # 找不到才退回系统 Python，便携版与源码版通用。
+    # 以前不放行，是因为便携版的 bat 由 CI 另外生成、和仓库这份行为不一致
+    # （生成的那份没有自检）；那个生成步骤已经删了，现在只有一份。
+    "启动.bat",
 )
 #: 明确禁止（双保险，即便 zip 里有也不动）
 #:
@@ -85,17 +88,20 @@ def check(budget: float = 25.0) -> dict:
     """→ {current, latest, hasUpdate, url, notes, via, error}
 
     ``budget`` 是**整次检查的总预算（秒）**。为什么要有它：下面按线路顺序逐个试，
-    每条单独 8–10 秒超时，线路多的时候国内实测能串到 2 分钟 —— 用户点「检查更新」
-    看到的就是转圈两分钟，还以为是卡死。
+    线路多的时候国内实测能串到 2 分钟 —— 用户点「检查更新」看到的就是转圈两分钟，
+    还以为是卡死。
+
+    线路规则（2026-11-01 用户定版）：**不测速**，直接按
+    ``mirrors.GH_ROUTES`` 的顺序（gh-proxy 主站 → 优选 v4 → 优选 v4/v6 →
+    Fastly → 官方直连）逐条试，**有响应就用**。
 
     两条获得 release 信息的路：
 
     1. **GitHub API**（信息最全），但 ``api.github.com`` 国内经常连不上
-       —— 2026-10-30 实测本机 **DNS 直接解析失败**，而 gh-proxy.com /
-       edgeone / git.yylx.win 三家反代都能正常代理 API。所以这里
-       **按 mirrors 的线路顺序逐个试 API**，而不是只试官方。
-    2. **releases.atom**（不需要 API）：API 全挂时用它拿到最新 tag 与说明，
-       再按命名规则拼出资产 URL 并 HEAD 验证存在性。
+       —— 2026-10-30 实测本机 **DNS 直接解析失败**。所以这里
+       **按线路顺序逐个试 API**，而不是只试官方。
+    2. **releases.atom**（不需要 API，反代几乎都支持）：API 全挂时用它拿到
+       最新 tag 与说明，再按命名规则拼出资产 URL 并 HEAD 验证存在性。
 
     资产挑选顺序也改了：**先 update 包（0.75 MB）**再 portable 包（114 MB）——
     以前是先挑 portable，自动更新会白下 100 多 MB。
@@ -145,13 +151,15 @@ def _fetch_latest(repo: str, routes: list[dict],
     """→ (release dict, 走通了哪条线路, 错误信息)。两条路都失败才算失败。
 
     ``deadline`` 是 ``time.monotonic()`` 的绝对时刻，用尽就立即返回，
-    不再一条条干等。
+    不再一条条干等。API 阶段额外**预留 8 秒给 atom 兜底**: 反代对
+    ``api.github.com`` 的支持很不一致（不少只代理 github.com），不能把
+    预算全烧在 API 上，否则 atom 这条路连试都试不到。
     """
     api = f"https://api.github.com/repos/{repo}/releases/latest"
     err = ""
     tried = ""
     for route in routes:
-        left = _left(deadline)
+        left = _left_api(deadline)
         if left <= 1.0:
             err = err or "线路全部超时（总预算用尽）"
             break
@@ -160,7 +168,7 @@ def _fetch_latest(repo: str, routes: list[dict],
             continue
         tried += real + "|"
         try:
-            d = net.fetch_json(real, timeout=min(8.0, left))
+            d = net.fetch_json(real, timeout=min(6.0, left))
             if isinstance(d, dict) and d.get("tag_name"):
                 return d, route.get("name", "?"), ""
         except Exception as e:                                   # noqa: BLE001
@@ -181,6 +189,13 @@ def _left(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
+def _left_api(deadline: float) -> float:
+    """API 阶段可用时间 = 总预算 - 预留给 atom 的 8 秒。"""
+    if not deadline:
+        return 3600.0
+    return max(0.0, deadline - time.monotonic() - 8.0)
+
+
 def _release_from_atom(repo: str, routes: list[dict],
                        deadline: float = 0.0) -> tuple[dict, str]:
     """从 ``releases.atom`` 解析最新 release（tag / 说明 / 时间）。"""
@@ -193,7 +208,7 @@ def _release_from_atom(repo: str, routes: list[dict],
             break
         try:
             text = net.fetch_text(mirrors.apply_github(route, feed),
-                                  timeout=min(10.0, left))
+                                  timeout=min(8.0, left))
         except Exception as e:                                   # noqa: BLE001
             last = str(e)[:60]
             continue
@@ -226,6 +241,10 @@ def _guess_assets(repo: str, tag: str, routes: list[dict],
     只在 GitHub API 完全不可用时走这条路 —— 用户的包名是固定的
     ``ESCAH-Offline-<版本>-<类型>.zip``，而 tag 可能带或不带 ``v``，
     所以两组 tag × 三种后缀都试一遍。
+
+    线路同样**按顺序**试：某条线路对 6 个 HEAD 全都没有响应（连 404 都没
+    返回）说明它连不上，换下一条；只要有响应就认定"包名对不上"，不再浪费
+    时间问其它线路（同一个 release 的资产列表是全局一致的）。
     """
     tags = [tag]
     if tag[:1] in ("v", "V"):
@@ -234,7 +253,8 @@ def _guess_assets(repo: str, tag: str, routes: list[dict],
         tags.append("v" + tag)
     kinds = ("update.zip", "win64-portable.zip", "portable.zip")
     base = f"https://github.com/{repo}/releases/download/{tag}/"
-    for route in routes[:1] or [{"tpl": "{url}"}]:
+    for route in routes or [{"tpl": "{url}"}]:
+        responded = False
         for t in tags:
             for k in kinds:
                 if _left(deadline) <= 1.0:      # 预算用尽：别把 6 个 HEAD 也拖到底
@@ -243,11 +263,14 @@ def _guess_assets(repo: str, tag: str, routes: list[dict],
                 cand = base + name
                 try:
                     size, _ = net.probe(mirrors.apply_github(route, cand))
+                    responded = True
                 except Exception:                                # noqa: BLE001
                     continue
                 if size > 0:
                     # 只返回"确实存在"的那些，UI/下载逻辑照 API 格式消费
                     return [{"name": name, "browser_download_url": cand}]
+        if responded:
+            return []          # 线路通了但包名不存在 → 问别的线路也是同样答案
     return []
 
 
@@ -268,10 +291,65 @@ def _pick_assets(assets: list[dict]) -> tuple[str, str]:
     return (update or portable or anyzip), (portable or update or anyzip)
 
 
+# ---------------------------------------------------------------- 启动检查
+#: 启动自查的结果（只读给前端挂提示条；**不含任何下载动作**）
+_STARTUP: dict = {"enabled": False, "done": False, "at": 0.0, "current": "",
+                  "latest": "", "hasUpdate": False, "staged": "", "via": "",
+                  "error": ""}
+_STARTUP_LOCK = threading.Lock()
+
+
+def startup_state() -> dict:
+    """启动检查的当前状态（``/api/state`` 读它，页面据此挂提示条）。"""
+    with _STARTUP_LOCK:
+        return dict(_STARTUP)
+
+
+def auto_check(delay: float = 3.0) -> bool:
+    """按设置决定是否**在启动后查一次更新**，返回是否真起了线程。
+
+    设置项：``userdata/config.json`` 的 ``autoCheckUpdate``（**默认开**，
+    控制台「更新」页有勾选框；用户取消勾选后启动时零网络请求）。
+
+    这条自动检查的边界（用户 2026-11-01 明确要求加的，别扩大范围）：
+      * 只查一次 —— 不轮询、不"每 N 小时再来一次"；
+      * 只读 release 信息，**绝不下载、绝不重启**；
+      * 结果只用来在页面上挂一条"发现新版本"的提示，装不装由用户点。
+    也就是说：开关打开时唯一被"自动发起"的请求就是这一次查询，
+    其它任何对外请求仍然只发生在用户点按钮之后。
+    """
+    cfg = paths.load_config()
+    if not cfg.get("autoCheckUpdate", True):
+        return False
+    with _STARTUP_LOCK:
+        _STARTUP.update({"enabled": True, "done": False, "error": ""})
+    threading.Thread(target=_auto_check_worker, args=(max(0.0, float(delay)),),
+                     name="auto-check-update", daemon=True).start()
+    return True
+
+
+def _auto_check_worker(delay: float) -> None:
+    time.sleep(delay)
+    try:
+        info = check(budget=20.0)
+    except Exception as e:                                       # noqa: BLE001
+        info = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    with _STARTUP_LOCK:
+        _STARTUP.update({
+            "done": True, "at": time.time(),
+            "current": info.get("current") or current_version(),
+            "latest": info.get("latest") or "",
+            "hasUpdate": bool(info.get("hasUpdate")),
+            "staged": info.get("staged") or "",
+            "via": info.get("via") or "",
+            "error": info.get("error") or "",
+        })
+
+
 # ---------------------------------------------------------------- 暂存区
-# 注意：**没有任何定时任务**（启动检查 / 每 N 小时轮询都没有）。这是个本地离线
-# 工具，不该在用户不知情的情况下自己去联网。所有对外的请求只发生在用户点过
-# 按钮之后：点「检查程序更新」→ 一次 release 查询；点「下载并应用」→ 下载。
+# 注意：**没有定时/轮询任务**。启动时那一次检查由 ``auto_check()`` 按设置
+# （默认开，可关）决定，且只查不装；其余对外请求仍只发生在用户点过按钮之后：
+# 点「检查程序更新」→ 一次 release 查询；点「下载并应用」→ 下载。
 def staging_dir() -> str:
     return os.path.join(paths.USERDATA, "update", "staging")
 
@@ -336,8 +414,9 @@ def _release_page(url: str) -> str:
 def stage(url: str, job) -> str:
     """下载并解压到 userdata/update/staging。返回 staging 目录。
 
-    GitHub 的下载域名在国内常常不可达，所以这里先**测速选一条能用的线路**
-    （直连 / ghfast / ghproxy / gh-proxy），再套模板下载。
+    线路规则（2026-11-01 用户定版）：**不测速**，按 ``mirrors.GH_ROUTES`` 的
+    顺序逐条试 —— gh-proxy 主站 → 优选 v4 → 优选 v4/v6 → Fastly → 官方直连。
+    每条先花最多 6 秒探活，**有响应就下**（不管快慢）；下载失败再换下一条。
     """
     if not url:
         raise RuntimeError("没有可用的下载地址")
@@ -350,51 +429,30 @@ def stage(url: str, job) -> str:
     from . import mirrors
     # 只有 github.com 的地址才需要反代。自建镜像 / 局域网地址直接下 ——
     # 否则会把 http://192.168.1.5/upd.zip 套成
-    # https://edgeone.gh-proxy.org/http://192.168.1.5/upd.zip，必然失败。
+    # https://gh-proxy.org/http://192.168.1.5/upd.zip，必然失败。
     if "github.com" in url or "githubusercontent.com" in url:
-        # target=真正要下的包：不同 release 资产落在 CDN 的不同边缘节点，
-        # 用通用探测文件选出来的线路不一定是这个包最快的那条
-        routes = mirrors.ranked("github", job=job, target=url)
+        routes = mirrors.ranked("github", job=job)
         if not routes:
-            raise ManualDownload(url, "所有内置线路测速都不可用")
+            raise ManualDownload(url, "没有可用的下载线路")
     else:
         job.log("下载地址不是 GitHub，直接下载（不套反代）")
         routes = [{"id": "direct", "name": "直连", "tpl": "{url}"}]
 
     job.set_total(1)
 
-    # ① 探活：每条最多 6 秒。不通就立刻跳过，**绝不在这里等下载超时**
-    #    （一个 70 MB 的包，线路不通会卡好几分钟，用户只会觉得"死了"）
-    picked = None
-    for route in routes[:2]:               # 只探前两条，别让用户干等
+    last = None
+    for i, route in enumerate(routes, 1):
         if job.cancelled:
             raise RuntimeError("已取消")
-        job.log(f"探测 {route.get('name', '?')}（最多 6 秒）…")
-        if mirrors.quick_check(route, url, timeout=6):
-            picked = route
-            break
-        job.log("  6 秒内没响应，跳过")
-    if picked is None:
-        raise ManualDownload(url, "所有内置线路在 6 秒内都没有响应")
-
-    if picked.get("slow"):
-        # 能通但慢（<1 MB/s）：更新包 3–5 MB 还能忍，全量包会很煎熬。
-        # 把链接摆在眼前，让用户自己决定要不要改成手动。
-        job.log("⚠ 当前可用线路较慢（{} MB/s）。更新包 3–5 MB 还能接受；"
-                "如果下的是全量包可能会很久，随时可以取消并去 "
-                "{} 手动下载。".format(picked.get("mbps") or "?", _release_page(url)))
-
-    # ② 下载：先用选中的，失败再换其余（每条仍受 net 自己的超时保护）
-    order = [picked] + [r for r in routes[:3]
-                        if r.get("id") != picked.get("id")][:2]
-    last = None
-    tried = 0
-    for route in order:
-        tried += 1
+        name = route.get("name", "?")
         real = mirrors.apply_github(route, url)
-        job.log("下载线路 {}/{}：{}{}".format(
-            tried, len(order), route.get("name", "?"),
-            "（较慢，兜底）" if route.get("slow") else ""))
+        # 先探活（最多 6 秒）：线路不通时 net.download 会一直等到超时，
+        # 一个 70 MB 的包能卡好几分钟，用户只会觉得"死了"。
+        job.log(f"线路 {i}/{len(routes)}：{name}（探活最多 6 秒）…")
+        if not mirrors.quick_check(route, url, timeout=6):
+            job.log("  没有正常响应，换下一条")
+            last = last or RuntimeError(f"{name} 无响应")
+            continue
         if real != url:
             job.log(f"  经反代：{real[:110]}")
         try:
@@ -403,9 +461,9 @@ def stage(url: str, job) -> str:
             break
         except Exception as e:                                 # noqa: BLE001
             last = e
-            job.log(f"  这条线路失败（{type(e).__name__}: {str(e)[:80]}），换下一条…")
+            job.log(f"  这条线路下载失败（{type(e).__name__}: {str(e)[:80]}），换下一条…")
     if last is not None:
-        raise ManualDownload(url, f"已尝试 {tried} 条线路，最后一条报错：{last}")
+        raise ManualDownload(url, f"已尝试 {len(routes)} 条线路，最后一条报错：{last}")
     job.log("正在解压…")
     with zipfile.ZipFile(zp) as z:
         for info in z.infolist():

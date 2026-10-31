@@ -51,20 +51,25 @@
 | **git clone 源码** | 想改代码 / 非 Windows | 需要 Python 3.8+，`pip install -r requirements.txt`（只装 Pillow） |
 
 > **国内下载慢？** GitHub Release 落到 `objects.githubusercontent.com`，实测本机直连
-> 只有 **0.7 MB/s**（而且还时不时握手失败），套一层反代能快一个数量级 ——
-> 2026-10-30 用本项目自己的包实测（4 线程，取 4 轮中位）：
+> 只有 **0.7 MB/s**（而且还时不时握手失败），套一层反代能快一个数量级。
+> 把原链接**整个粘在反代域名后面**就行，例如：
+> `https://gh-proxy.org/https://github.com/allindusk/escahoffline/releases/download/v1.0.2/ESCAH-Offline-v1.0.2-win64-portable.zip`
 >
-> | 线路 | portable 包 114 MB |
+> 程序自己取 GitHub 的东西（更新包、更新检查、角色信息）时，固定按这个顺序用线路，
+> **哪条有响应就用哪条、不测速**：
+>
+> | 顺序 | 线路 |
 > |---|---|
-> | `https://gh-proxy.com/` + 原链接 | **22.6 MB/s** |
-> | `https://git.yylx.win/` + 原链接 | 18.7 MB/s |
-> | `https://edgeone.gh-proxy.org/` + 原链接 | 16.6 MB/s |
+> | 1 | `https://gh-proxy.org/` + 原链接（主站，Cloudflare v4） |
+> | 2 | `https://v4.gh-proxy.org/` + 原链接（优选，仅 IPv4） |
+> | 3 | `https://v6.gh-proxy.org/` + 原链接（优选，IPv4/IPv6） |
+> | 4 | `https://cdn.gh-proxy.org/` + 原链接（Fastly v4） |
+> | 5 | GitHub 官方直连 —— **只在上面四条全都没响应时**才用 |
 >
-> 把原链接**整个粘在斜杠后面**就行，例如：
-> `https://gh-proxy.com/https://github.com/allindusk/escahoffline/releases/download/v1.0.2/ESCAH-Offline-v1.0.2-win64-portable.zip`
->
-> 三条快线下出来的 zip **sha256 与官方一致**。程序不会自己偷偷联网检查更新 ——
-> 想更新就在控制台点「检查程序更新」，看到有新版本再点「下载并应用」，装完会自动重启并提示刷新页面。
+> 更新这件事：控制台「更新」页有个 **「每次启动程序后检查更新」** 勾选框（默认勾选），
+> 打开时启动后**只查一次**有没有新版本，发现新版只在页面顶部挂一条提示，
+> **不会自动下载、也不会自动重启**；不想让它联网就取消勾选。
+> 任何时候也可以手动点「检查程序更新」→「下载并应用」。
 > 便携包的下载地址记在 [`docs/资源包与发布.md`](docs/资源包与发布.md)。
 
 ```bash
@@ -217,8 +222,8 @@ escahoffline/
 
 <details><summary>点角色提示「资源还没有下载」</summary>
 
-该角色的资源包没装。去「资源管理 → 资源包下载 → 按角色智能勾选」，输入角色 ID，
-它会自动带上核心包和公共素材。
+该角色的资源包没装。去「资源管理 → ② 剧情安装」，在「角色」分类里搜到它勾上
+（也可以按「只看未安装」筛出来），点「开始安装」即可，依赖的公共素材会自动带上。
 </details>
 
 <details><summary>有画面但没声音</summary>

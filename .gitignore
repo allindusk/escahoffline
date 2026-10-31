@@ -73,6 +73,10 @@
 !/web/data/imgmap.js
 !/web/data/index.js
 !/web/data/names.js
+# othereps.js：index.html 会直接 <script> 它（「其他」的 16 入口/分话清单），
+# 少了网页里就退化成"一个包一行"。它只由 tools/build_other_episodes.py 生成，
+# 不含本机状态，必须随程序一起发。
+!/web/data/othereps.js
 !/web/data/packs.links.js
 !/web/data/stand_layers.json
 

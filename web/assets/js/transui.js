@@ -36,7 +36,7 @@
     p.id = 'transPanel';
     p.innerHTML = `
       <div class="tp-head">
-        <b>译文 · <span id="tpUnit">未选择剧情</span></b>
+        <b>翻译 · <span id="tpUnit">未选择剧情</span></b>
         <button id="tpClose" title="关闭 Esc">✕</button>
       </div>
       <div class="tp-body">
@@ -98,7 +98,7 @@
       const r = await fetch('api/state', { cache: 'no-store' });
       const d = await r.json();
       const t = (d.trans || {});
-      el.textContent = `译文库 ${t.units || 0} 部 / ${t.messages || 0} 句 · ` +
+      el.textContent = `翻译库 ${t.units || 0} 部 / ${t.messages || 0} 句 · ` +
                        `发言人译名 ${t.speakers || 0} 个`;
     } catch (e) { el.textContent = '（本地服务未运行，导入不可用）'; }
   }

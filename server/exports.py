@@ -96,15 +96,29 @@ def unit_data(unit: str) -> dict | None:
         return None
 
 
+#: 非角色剧情的分类中文名（与 web/assets/js/common.js 的 ADV_LABEL 一致）。
+#: 以前这里直接吐内部 kind（"main 第 1 话"），译稿开头的「剧情名称」读起来像乱码。
+ADV_LABEL = {"main": "主线", "event": "活动", "other": "其他",
+             "tutorial": "新手教程", "op": "开场动画"}
+
+
 def unit_title(unit: str) -> str:
+    """译文文件头里那句「剧情名称」。
+
+    **不再拼「角色 415」**：角色一共 384 个、ID 却到 415，序号化写法会让
+    打开译稿的人以为"角色缺了 31 个"；名字取不到才退回「ID 415」。
+    """
     try:
         if unit.startswith("char_"):
+            cid = unit[5:]
             names = _load_js(os.path.join(paths.DATA, "names.js"))
-            return f"角色 {unit[5:]} · {names.get(unit[5:], '')}"
+            return names.get(cid) or f"ID {cid}"
         advs = _load_js(os.path.join(paths.DATA, "advindex.js"))
         for a in advs:
-            if a.get("key") == unit:
-                return f"{a.get('kind')} 第 {a.get('no')} 话"
+            if a.get("key") == unit and not isinstance(a.get("part"), int):
+                label = ADV_LABEL.get(a.get("kind"), "剧情")
+                no = a.get("no")
+                return f"{label} 第 {no} 话" if no else label
     except Exception:                                            # noqa: BLE001
         pass
     return unit

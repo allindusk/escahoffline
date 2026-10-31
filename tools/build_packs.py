@@ -63,7 +63,7 @@ SOFT_DEPOTS = ["shared_back", "shared_art", "shared_sfx"]
 
 #: 索引类数据：很小、所有页面都要 → core
 INDEX_FILES = [
-    "data/names.js", "data/index.js", "data/advindex.js",
+    "data/names.js", "data/index.js", "data/advindex.js", "data/othereps.js",
     "data/imgmap.js", "data/imgmap.x2.js", "data/imgmap.base.js", "data/sfxmap.js",
     "data/charmeta.js", "data/cgmap.js",
     "data/stand_layers.json", "data/stand_slot.json",

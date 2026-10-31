@@ -48,7 +48,9 @@ ADV_LABEL = {"main": "主线剧情", "event": "活动剧情", "other": "其他�
 # 游戏 UI 的菜单归类：tutorial / op 不单独占菜单，归在「其他」里
 ADV_MENU = {"other": ("other", "tutorial", "op")}
 PAT_ADV = re.compile(r"bundle_scenarioscript_(main|event|other|tutorial|op)(?:_(\d+))?$")
-PAT_ADV_FILE = re.compile(r"adv_(main|event|other|tutorial|op)(?:_(\d+))?\.js")
+# 编号允许带字母后缀：主线序章拆出来后是 adv_main_0 / adv_main_0b / adv_main_0c
+# （对应 topic_chapter_000 / 000b / 000c 三张「第N部プロローグ」横幅）。
+PAT_ADV_FILE = re.compile(r"adv_(main|event|other|tutorial|op)(?:_(\d+[a-z]?))?\.js")
 PAT_VOICE = re.compile(r"bundle_voice_adv_char_(\d+)_(\d+)")
 PAT_CPANEL = re.compile(r"bundle_chara_c-panel_(\d+)")
 PAT_STATUS = re.compile(r"bundle_statusbase_status_character_(\d+)")

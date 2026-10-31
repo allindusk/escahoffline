@@ -1,4 +1,4 @@
-/* 运行状态提示条：① 程序更新后强制刷新 ② 路径含中文的警告
+/* 运行状态提示条：① 程序更新后强制刷新 ② 启动检查发现新版本 ③ 路径含中文的警告
  *
  * 为什么需要"强制刷新"
  * -------------------
@@ -18,6 +18,8 @@ window.HEALTH = (() => {
   let busy = false;
   // 已后台下载好、等用户点头的版本号；updateReady 变了才提示，避免每 60 秒弹一次
   let knownReady = '';
+  // 启动自动检查到的版本号（同上：变了才提示）
+  let knownCheck = '';
   let updating = false;
 
   const esc = (s) => String(s).replace(/[&<>"]/g,
@@ -75,12 +77,12 @@ window.HEALTH = (() => {
 
   const CSS = `
 #hcBar{position:fixed;left:0;right:0;top:0;z-index:9600;display:flex;gap:12px;
-  align-items:center;padding:9px 16px;font-size:13px;line-height:1.6;
+  align-items:center;padding:9px 16px;font-size:14.6px;line-height:1.6;
   background:#3a2a0c;color:#ffe2b0;border-bottom:1px solid #6b4f14;
   box-shadow:0 4px 18px rgba(0,0,0,.45)}
 #hcBar.warn{background:#3a1418;color:#ffc9cf;border-bottom-color:#6d2830}
 #hcBar .sp{flex:1}
-#hcBar button{border-radius:8px;padding:5px 14px;font-size:12.5px;cursor:pointer;
+#hcBar button{border-radius:8px;padding:5px 14px;font-size:14px;cursor:pointer;
   border:1px solid #8a6a20;background:#5a4210;color:#ffe2b0}
 #hcBar.warn button{border-color:#8d3a44;background:#5a1c22;color:#ffc9cf}
 #hcBar .x{cursor:pointer;opacity:.6;padding:0 4px}
@@ -146,6 +148,16 @@ body.hc-on{padding-top:44px}
         show('发现新版本 <b>v' + esc(ready) + '</b>，已经下好了。重启并完成更新即可生效'
           + '（<b>素材 / 译文 / 设置都不会动</b>）', '重启并完成更新',
           () => applyUpdate(ready));
+      }
+      // 启动时那一次自动检查的结果（设置里可关）：只提示，不自动下载/重启。
+      // 已经有"下好了等重启"的提示时不再插一条，避免两条横条打架。
+      const uc = d.updateCheck || {};
+      if (uc.done && uc.hasUpdate && uc.latest && !uc.staged && !updating
+        && uc.latest !== knownCheck) {
+        knownCheck = uc.latest;
+        show('启动检查：发现新版本 <b>v' + esc(uc.latest) + '</b>（当前 v'
+          + esc(uc.current) + '）。去控制台点一下就能更新', '去更新',
+          () => { location.href = 'setup.html#update'; });
       }
       if (d.warn && !warnedPath) {
         warnedPath = true;

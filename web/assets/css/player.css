@@ -7,17 +7,17 @@
 body{background:var(--bg);color:var(--fg);height:100vh;display:flex;
   flex-direction:column;overflow:hidden;
   font-family:"Microsoft YaHei","Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
-h1{font-size:15px;font-weight:600;color:var(--gold);letter-spacing:.5px}
+h1{font-size:16.8px;font-weight:600;color:var(--gold);letter-spacing:.5px}
 /* 导航绝对居中：三页标题字数不同（超昂大战 / 资源管理），
    跟着标题走会导致切页时导航左右跳。 */
 nav{display:flex;gap:4px;position:absolute;left:50%;transform:translateX(-50%)}
-nav a{padding:5px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
+nav a{padding:5px 12px;border-radius:8px;font-size:14px;text-decoration:none;
   color:var(--fg2);background:var(--bg3);border:1px solid transparent}
 nav a:hover{color:var(--fg)}
 nav a.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
-h1 small{color:var(--fg3);font-weight:400;margin-left:8px;font-size:11.5px}
+h1 small{color:var(--fg3);font-weight:400;margin-left:8px;font-size:14px}
 /* 语言切换按钮：与 <nav> 胶囊同套视觉，选中态用青色区分 */
-#btnLang{margin-left:auto;padding:4px 12px;border-radius:13px;font-size:12px;cursor:pointer;
+#btnLang{margin-left:auto;padding:4px 12px;border-radius:13px;font-size:14px;cursor:pointer;
   color:var(--fg2);background:var(--bg3);border:1px solid transparent;
   min-width:66px}
 #btnLang:hover{color:var(--fg)}
@@ -25,84 +25,92 @@ h1 small{color:var(--fg3);font-weight:400;margin-left:8px;font-size:11.5px}
 .spacer{margin-left:auto}
 select,input,button{font-family:inherit}
 #search{width:100%;box-sizing:border-box;margin-bottom:10px;padding:6px 10px;border-radius:6px;
-  border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:12.5px;display:block}
+  border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:14px;display:block}
 #search:focus{outline:none;border-color:var(--purple)}
 .layout{display:flex;flex:1;min-height:0}
-#sidebar{width:252px;flex-shrink:0;background:var(--bg2);
+#sidebar{width:300px;flex-shrink:0;background:var(--bg2);
   border-right:1px solid var(--line);display:flex;flex-direction:column}
 /* 搜索命中计数：列表是可滚动的，命中结果可能多到超出可视区，
    没有这个计数用户会以为"搜不到"（char_415 接入时就踩过） */
-#hit{flex-shrink:0;padding:0 10px 6px;font-size:11px;color:var(--fg3);
-  min-height:15px;line-height:15px}
+#hit{flex-shrink:0;padding:0 10px 6px;font-size:14px;color:var(--fg3);
+  min-height:20px;line-height:20px}
 #hit.on{color:var(--gold)}
 #hit.none{color:#e06c75}
 /* 剧情来源切换：角色 / 主线 / 活动 / 其他 */
 #srcRow{display:flex;gap:4px;padding:6px 8px 0;flex-shrink:0}
 #srcRow button{flex:1;border:1px solid var(--line);background:var(--bg3);
-  color:var(--fg3);border-radius:5px;padding:3px 0;font-size:11px;cursor:pointer}
+  color:var(--fg3);border-radius:5px;padding:3px 0;font-size:14px;cursor:pointer}
 #srcRow button:hover{color:var(--fg)}
 #srcRow button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 /* 非角色剧情没有头像，用一个带类别的色块顶替 .char-btn img 的位置 */
 .char-btn .srcTag{width:42px;height:42px;border-radius:8px;flex-shrink:0;
-  display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;font-size:16.8px;font-weight:700;
   background:#1a2030;border:1px solid #2d3446;color:#7fc4f0}
 .char-btn .srcTag[data-k="main"]{color:#f0c05a;border-color:#4a3f78}
 .char-btn .srcTag[data-k="event"]{color:#f08ab0}
 .char-btn .srcTag[data-k="other"]{color:#8de0b0}
 .char-btn.on .srcTag{border-color:rgba(224,181,102,.7)}
-.advEmpty{padding:14px 10px;font-size:11.5px;color:var(--fg3);line-height:1.7}
+.advEmpty{padding:14px 10px;font-size:14px;color:var(--fg3);line-height:1.7}
 #filters{padding:7px 8px;border-bottom:1px solid var(--line);flex-shrink:0}
-#filters select{width:100%;padding:4px 6px;border-radius:5px;font-size:11.5px;
+#filters select{width:100%;padding:4px 6px;border-radius:5px;font-size:14px;
   border:1px solid var(--line);background:var(--bg3);color:var(--fg)}
 #filters select:focus{outline:none;border-color:var(--purple)}
 .rar-row{display:flex;gap:4px;margin-top:5px}
 .rar-row button{flex:1;border:1px solid var(--line);background:var(--bg3);
-  color:var(--fg3);border-radius:5px;padding:2px 0;font-size:10.5px;cursor:pointer}
+  color:var(--fg3);border-radius:5px;padding:2px 0;font-size:14px;cursor:pointer}
 .rar-row button:hover{color:var(--fg)}
 .rar-row button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 #charList{flex:1;overflow-y:auto;padding:4px}
 #charList::-webkit-scrollbar{width:7px}
 #charList::-webkit-scrollbar-thumb{background:#333a4d;border-radius:4px}
 .char-btn{display:flex;align-items:center;gap:8px;
-  padding:4px 7px;border-radius:7px;cursor:pointer;font-size:12.5px;
+  padding:4px 7px;border-radius:7px;cursor:pointer;font-size:14px;
   color:var(--fg2);margin-bottom:2px}
 .char-btn:hover{background:var(--bg3);color:var(--fg)}
 .char-btn.on{background:linear-gradient(90deg,#3a2d5c,#2a2340);color:var(--gold);font-weight:600}
 .char-btn img{width:42px;height:42px;border-radius:8px;object-fit:cover;
   flex-shrink:0;background:#1a2030;border:1px solid #2d3446}
+/* 横幅图已在 .bnr 里定尺寸，别被上面这条 42×42 规则套上 */
+#charList .char-btn.bnr .bnr img{width:auto;height:81px;object-fit:fill;background:none}
 .char-btn.on img{border-color:rgba(224,181,102,.7)}
 .char-btn .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .char-btn .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.char-btn .sub{font-size:10px;color:var(--fg3);display:flex;gap:6px;align-items:center}
+.char-btn .sub{font-size:14px;color:var(--fg3);display:flex;gap:6px;align-items:center}
 /* 剧情列表的第三行：首句摘要，帮用户区分只有编号的章节 */
 .char-btn .sub.first{display:block;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;max-width:100%;opacity:.8}
-/* 当前剧情章节的标题横幅（主线/活动的章节标题在游戏里是图） */
-#storyBanner{height:28px;border-radius:4px;margin-left:8px;flex-shrink:0;
+/* 当前剧情的标题横幅（游戏里章节标题本身就是图）：
+   它现在承担"标题"的角色，所以做得比原来 28px 的缩略图大一些，
+   与剧名一起排在标签行最左侧 */
+#storyHead{display:flex;align-items:center;gap:9px;min-width:0;max-width:46%;
+  flex-shrink:0;margin-right:6px}
+#storyBanner{height:44px;border-radius:4px;flex-shrink:0;
   background:#1a2030;border:1px solid #2d3446;object-fit:contain}
+#storyName{font-size:14.6px;font-weight:600;color:var(--fg);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
 .char-btn.on .sub{color:var(--gold);opacity:.8}
 .char-btn .rar{font-weight:700}
 .char-btn .rar[data-r="SSR"]{color:#f0c05a}
 .char-btn .rar[data-r="SR"]{color:#7fc4f0}
 .char-btn .rar[data-r="R"]{color:#9aa4b8}
 .char-btn.on .rar{color:inherit}
-.char-btn .cpy{opacity:0;color:var(--fg3);font-size:13px;padding:0 3px;
+.char-btn .cpy{opacity:0;color:var(--fg3);font-size:14.6px;padding:0 3px;
   flex-shrink:0;transition:opacity .12s;cursor:pointer}
 .char-btn:hover .cpy{opacity:1}
 .char-btn .cpy:hover{color:var(--cyan)}
 #toast{position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:200;
   background:rgba(45,42,74,.97);color:var(--gold);border:1px solid #4a3f78;
-  padding:6px 18px;border-radius:20px;font-size:12.5px;opacity:0;
+  padding:6px 18px;border-radius:20px;font-size:14px;opacity:0;
   transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
 #tabs{display:flex;gap:5px;padding:6px 14px;background:var(--bg2);
   border-bottom:1px solid var(--line);flex-shrink:0;align-items:center;flex-wrap:wrap}
-.tab{padding:3px 11px;border-radius:13px;font-size:11.5px;cursor:pointer;
+.tab{padding:3px 11px;border-radius:13px;font-size:14px;cursor:pointer;
   background:var(--bg3);color:var(--fg2);border:1px solid transparent}
 .tab:hover{color:var(--fg)}
 .tab.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
-#meta{margin-left:auto;font-size:11px;color:var(--fg3)}
+#meta{margin-left:auto;font-size:14px;color:var(--fg3)}
 
 /* ---------- 舞台 ---------- */
 #stageWrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
@@ -110,7 +118,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 全屏模式：铺满大屏，鼠标静止后隐藏 */
 #stageWrap.fs.hidecur{cursor:none}
 #btnWin.off{opacity:.45;filter:grayscale(.7)}
-#dbgFit{position:absolute;right:8px;top:6px;font-size:11px;color:#6b7488;
+#dbgFit{position:absolute;right:8px;top:6px;font-size:14px;color:#6b7488;
   background:rgba(0,0,0,.5);padding:1px 7px;border-radius:8px;pointer-events:none;
   z-index:61}
 #stage{width:1280px;height:720px;position:relative;transform-origin:center center;
@@ -182,13 +190,13 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #flashLayer{pointer-events:none;opacity:0}
 #placeLayer{display:flex;align-items:center;justify-content:center;
   opacity:0;transition:opacity .5s}
-#placeLayer span{font-size:40px;letter-spacing:6px;color:#fff;
+#placeLayer span{font-size:44.8px;letter-spacing:6px;color:#fff;
   text-shadow:0 0 22px rgba(0,0,0,.95),0 3px 10px #000;
   border-top:1px solid rgba(255,255,255,.5);border-bottom:1px solid rgba(255,255,255,.5);
   padding:14px 46px;background:rgba(0,0,0,.3)}
 
 /* 表情符号 / 画面特效 */
-.seffect{position:absolute;font-size:46px;font-weight:700;color:#fff;
+.seffect{position:absolute;font-size:51.5px;font-weight:700;color:#fff;
   text-shadow:0 0 14px #000,0 4px 10px #000;pointer-events:none;
   animation:popin .28s ease-out}
 @keyframes popin{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
@@ -207,7 +215,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   padding:20px 26px 18px;opacity:0;transition:opacity .22s ease;
   box-shadow:0 8px 36px rgba(0,0,0,.75)}
 #msgWindow.on{opacity:1}
-#msgName{position:absolute;top:calc(-15px + var(--nameY,0px));padding:2px 16px;font-size:15px;
+#msgName{position:absolute;top:calc(-15px + var(--nameY,0px));padding:2px 16px;font-size:16.8px;
   font-weight:700;color:#1a1206;letter-spacing:1px;border-radius:5px;
   background:linear-gradient(180deg,#f0d090,#c99b45);box-shadow:0 2px 10px rgba(0,0,0,.6);
   display:none}
@@ -237,14 +245,14 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   display:grid;grid-template-columns:1fr 1fr;gap:0 22px;align-content:start;
   background:rgba(18,22,32,.97);border:1px solid var(--line);border-radius:10px;
   /* 关闭按钮已经移到面板外（浮窗），这里不用再给左侧留 44px 空白 */
-  padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:12.5px;
+  padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:14px;
   max-height:calc(100vh - 62px);overflow-y:auto}
 /* 分节标题 / 复选框行 / 说明文字 / 底部按钮：占满整行，不然两列会被拦腰截断 */
 #settings>h4,#settings>.row,#settings>.reset-row,#settings>div:not([class]){
   grid-column:1/-1}
 /* 同一行里两个控件高度不齐时，别让下面的项跟着错位 */
 #settings>label{align-self:start}
-#settings h4{font-size:11px;color:var(--gold);letter-spacing:1px;margin:9px 0 5px;
+#settings h4{font-size:14px;color:var(--gold);letter-spacing:1px;margin:9px 0 5px;
   padding-bottom:5px;border-bottom:1px solid var(--line);font-weight:600}
 #settings h4:first-child{margin-top:0}
 #settings[hidden]{display:none}
@@ -254,7 +262,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #setClose{position:fixed;z-index:121;top:50%;right:286px;transform:translateY(-50%);
   width:30px;height:30px;padding:0;border-radius:50%;cursor:pointer;
   border:1px solid var(--line2);background:rgba(18,22,32,.97);color:var(--fg2);
-  font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;
+  font-size:14.6px;line-height:1;display:flex;align-items:center;justify-content:center;
   box-shadow:0 6px 18px rgba(0,0,0,.65)}
 #setClose[hidden]{display:none}
 #setClose:hover{color:#fff;border-color:var(--acc);background:#1b2740}
@@ -263,22 +271,22 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 .char-btn .ava-ph{width:44px;height:44px;flex:none;border-radius:9px;
   display:flex;align-items:center;justify-content:center;
   background:linear-gradient(160deg,#1b2a3c,#131f2d);
-  border:1px solid var(--line);color:#7f97b0;font-size:17px;font-weight:600;
+  border:1px solid var(--line);color:#7f97b0;font-size:19px;font-weight:600;
   letter-spacing:0;user-select:none}
 .char-btn.nodl .ava-ph{color:#5d6f84;border-color:#1a2836}
 #settings label{display:block;margin-bottom:5px;color:var(--fg2)}
 #settings label span{float:right;color:var(--gold);font-family:monospace}
 #settings input[type=range]{width:100%;margin-top:4px;accent-color:var(--purple)}
 #settings select{width:100%;margin-top:4px;padding:3px 6px;border-radius:5px;
-  border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:12px}
+  border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:14px}
 #settings .row{display:flex;justify-content:space-between;align-items:center;
   color:var(--fg2)}
 #btnSet{background:var(--bg3);border:1px solid var(--line);color:var(--fg);
-  border-radius:6px;padding:4px 9px;cursor:pointer;font-size:14px}
+  border-radius:6px;padding:4px 9px;cursor:pointer;font-size:15.7px}
 #btnSet:hover{color:var(--gold)}
 #settings .reset-row{margin-top:10px;text-align:right}
 #settings .reset-row button{background:var(--bg3);border:1px solid var(--line);
-  color:var(--fg);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12.5px}
+  color:var(--fg);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
 #settings .reset-row button:hover{color:var(--gold);background:#2a3448}
 /* 窄屏放不下两列：降回单列 + 允许滚动（此时关闭按钮会贴到面板左边框内） */
 @media (max-width:860px){
@@ -287,33 +295,33 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #msgText.narr{font-style:normal}
 #msgText .cursor{display:inline-block;width:9px;color:var(--gold);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:0}}
-#vhint{position:absolute;right:14px;bottom:8px;font-size:12px;color:var(--fg3);
+#vhint{position:absolute;right:14px;bottom:8px;font-size:14px;color:var(--fg3);
   background:rgba(0,0,0,.5);padding:2px 9px;border-radius:9px;pointer-events:none}
 
 /* 底部控制条 */
 #controls{display:flex;align-items:center;gap:10px;padding:7px 16px;
   background:var(--bg2);border-top:1px solid var(--line);flex-shrink:0}
 #controls button{border:none;background:var(--bg3);color:var(--fg);border-radius:6px;
-  padding:6px 13px;cursor:pointer;font-size:12.5px;box-sizing:border-box;
+  padding:6px 13px;cursor:pointer;font-size:14px;box-sizing:border-box;
   height:30px;display:inline-flex;align-items:center;justify-content:center}
 #controls button:hover{background:#2a3448}
 #controls button:disabled{opacity:.28;cursor:default}
 #controls button.primary{background:#2d2a4a;color:var(--gold);min-width:88px}
 #controls select{padding:5px 8px;border-radius:6px;border:1px solid var(--line);
-  background:var(--bg3);color:var(--fg);font-size:12.5px}
-#controls label.ctl{font-size:12px;color:var(--fg3);display:inline-flex;
+  background:var(--bg3);color:var(--fg);font-size:14px}
+#controls label.ctl{font-size:14px;color:var(--fg3);display:inline-flex;
   align-items:center;gap:5px;white-space:nowrap}
 #controls label.ctl input[type=checkbox]{accent-color:var(--purple)}
-#controls .kbd{font-size:11px;color:var(--fg3);white-space:nowrap;
+#controls .kbd{font-size:14px;color:var(--fg3);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;min-width:0}
 #controls .vsep{width:1px;height:18px;background:var(--line);margin:0 4px}
-#controls #btnSet{font-size:14px;padding:3px 10px;line-height:1.3}
-#pinfo{font-size:11.5px;color:var(--fg3);flex:1;overflow:hidden;
+#controls #btnSet{font-size:15.7px;padding:3px 10px;line-height:1.3}
+#pinfo{font-size:14px;color:var(--fg3);flex:1;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
 #progress{width:120px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
 #progress>i{display:block;height:100%;width:0;background:var(--cyan)}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  color:var(--fg3);font-size:13px;line-height:2;text-align:center;background:#05060a}
+  color:var(--fg3);font-size:14.6px;line-height:2;text-align:center;background:#05060a}
 /* 主区域：舞台与文本列表并列，互不遮挡 */
 #mainBody{flex:1;min-height:0;display:flex}
 /* 文本列表 */
@@ -321,36 +329,36 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   border-left:1px solid var(--line);display:flex;flex-direction:column}
 #history.hide{display:none}
 #hHead{display:flex;align-items:center;justify-content:space-between;
-  padding:7px 10px;font-size:12px;color:var(--gold);border-bottom:1px solid var(--line);
+  padding:7px 10px;font-size:14px;color:var(--gold);border-bottom:1px solid var(--line);
   flex-shrink:0}
 #hHead button{border:none;background:var(--bg3);color:var(--fg2);border-radius:5px;
-  padding:3px 8px;cursor:pointer;font-size:11px}
+  padding:3px 8px;cursor:pointer;font-size:14px}
 #hHead button:hover{color:var(--gold)}
 #hList{flex:1;overflow-y:auto;padding:6px 8px}
 #hList::-webkit-scrollbar{width:6px}
 #hList::-webkit-scrollbar-thumb{background:#333a4d;border-radius:3px}
 #hPager{display:flex;align-items:center;justify-content:center;gap:10px;
-  padding:6px;border-top:1px solid var(--line);flex-shrink:0;font-size:11.5px;
+  padding:6px;border-top:1px solid var(--line);flex-shrink:0;font-size:14px;
   color:var(--fg3)}
 #hPager button{border:none;background:var(--bg3);color:var(--fg2);border-radius:5px;
-  padding:2px 9px;cursor:pointer;font-size:11px}
+  padding:2px 9px;cursor:pointer;font-size:14px}
 #hPager button:hover:not(:disabled){color:var(--gold)}
 #hPager button:disabled{opacity:.25;cursor:default}
-#hCount{font-size:11px;color:var(--fg3);font-weight:400;margin-left:6px}
+#hCount{font-size:14px;color:var(--fg3);font-weight:400;margin-left:6px}
 .hItem{padding:5px 42px 5px 8px;border-radius:6px;cursor:pointer;margin-bottom:3px;
-  border-left:2px solid transparent;font-size:12px;line-height:1.5;
+  border-left:2px solid transparent;font-size:14px;line-height:1.5;
   color:var(--fg2);transition:background .12s;position:relative}
 .hItem .hcpy2{position:absolute;right:21px;top:5px;opacity:0;cursor:pointer;
-  color:var(--fg3);font-size:12px;padding:0 2px;transition:opacity .12s}
+  color:var(--fg3);font-size:14px;padding:0 2px;transition:opacity .12s}
 .hItem:hover .hcpy2{opacity:1}
 .hItem .hcpy2:hover{color:var(--cyan)}
 .hItem .hcpy{position:absolute;right:5px;top:5px;opacity:0;cursor:pointer;
-  color:var(--fg3);font-size:12px;padding:0 2px;transition:opacity .12s}
+  color:var(--fg3);font-size:14px;padding:0 2px;transition:opacity .12s}
 .hItem:hover .hcpy{opacity:1}
 .hItem .hcpy:hover{color:var(--cyan)}
 .hItem:hover{background:var(--bg3);color:var(--fg)}
 .hItem.on{background:#252b3d;border-left-color:var(--gold);color:#fff}
-.hItem .hw{color:var(--gold);font-size:11px;font-weight:600;display:block;
+.hItem .hw{color:var(--gold);font-size:14px;font-weight:600;display:block;
   margin-bottom:1px}
 .hItem .ht{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
   overflow:hidden;white-space:pre-wrap}
@@ -358,10 +366,67 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #hTab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:71;
   background:rgba(18,22,32,.95);border:1px solid var(--line);border-right:none;
   border-radius:8px 0 0 8px;padding:12px 5px;cursor:pointer;color:var(--gold);
-  font-size:12px;writing-mode:vertical-rl;letter-spacing:2px;display:none}
+  font-size:14px;writing-mode:vertical-rl;letter-spacing:2px;display:none}
 #hTab.show{display:block}
-#dbg{position:fixed;left:0;bottom:0;z-index:98;font:11px/1.4 monospace;
+#dbg{position:fixed;left:0;bottom:0;z-index:98;font:14px1.4 monospace;
   color:#7fe08a;background:rgba(0,0,0,.8);padding:2px 6px;pointer-events:none;
   max-width:100%;white-space:pre}
 kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
-  padding:1px 5px;font-size:11px}
+  padding:1px 5px;font-size:14px}
+
+
+/* 侧栏列表：横幅两行一项（2026-11-01 用户要求）
+   第一行是剧情横幅（角色剧情用入口图 / 主线活动用章节横幅），第二行是标题与信息。
+   原来是一个小圆头像 + 单行标题，横幅太窄看不清，也分不出是哪一部。 */
+#charList .char-btn.bnr{display:flex;flex-direction:column;align-items:stretch;
+  gap:4px;padding:6px 7px}
+/* 横幅统一用 280×81 的透明底当"画框"，原图按 81 高左对齐叠在上面：
+   宽图右侧被裁掉、窄图右侧自然透出透明 —— 不用改图就能对齐。 */
+#charList .char-btn.bnr .bnr{position:relative;display:block;width:280px;height:81px;
+  border-radius:6px;overflow:hidden;background:transparent;line-height:0;
+  border:1px solid #2d3446}
+/* 图自己去边框/圆角：边框画在固定的透明画框上，宽窄不一的原图才不会各自框一个 */
+#charList .char-btn.bnr .bnr img{position:absolute;left:0;top:0;height:81px;width:auto;
+  max-width:none;display:block;border:0;border-radius:0}
+#charList .char-btn.bnr.on .bnr{border-color:rgba(224,181,102,.7)}
+/* 角色剧情横幅本来就是 81 高（宽 125~298），按高对齐即可；
+   主线/活动是 827×146 的宽横幅，按 81 高缩放会把右侧标题文字裁掉 ——
+   那类改成按宽 280 缩放、在 81 高的画框里垂直居中。 */
+#charList .char-btn.adv .bnr img{height:auto;width:280px;top:50%;
+  transform:translateY(-50%)}
+#charList .char-btn.bnr .bnr .ava-ph{display:flex;height:40px;align-items:center;
+  justify-content:center;font-size:16.8px;color:var(--fg3)}
+#charList .char-btn.bnr{width:296px}
+#charList .char-btn.bnr .info{display:flex;flex-direction:row;align-items:center;
+  gap:7px;min-width:0}
+#charList .char-btn.bnr .info .sub{flex:0 0 auto;display:flex;gap:7px;align-items:center;
+  white-space:nowrap}
+#charList .char-btn.bnr .info .cpy{flex:0 0 auto}
+#charList .char-btn.bnr .info .nm{display:flex;align-items:center;gap:5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#charList .char-btn.bnr .info .nm .srcTag{flex:0 0 auto}
+
+/* 悬停横幅 → 信息浮窗（与剧情页、CG 页同一套观感） */
+#bnrTip{position:fixed;z-index:300;width:300px;background:#12161e;
+  border:1px solid #3a4a5e;border-radius:9px;padding:9px 11px;font-size:14px;
+  color:#dde4ec;box-shadow:0 14px 36px rgba(0,0,0,.6);display:none;pointer-events:none}
+#bnrTip.show{display:block}
+#bnrTip img{width:100%;border-radius:5px;margin-bottom:6px;display:block}
+#bnrTip dl{display:grid;grid-template-columns:auto 1fr;gap:2px 9px;margin:0}
+#bnrTip dt{color:#8b95a3}
+#bnrTip dd{margin:0;word-break:break-all}
+
+
+/* 「其他」入口分组（横幅 + 名字 + 话数 + 箭头） */
+#charList .og-head{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-top:6px;
+  border-radius:6px;background:#161c26;border:1px solid #232b36;cursor:pointer;
+  font-size:14px;color:var(--fg2)}
+#charList .og-head:hover{background:#1b2330;color:var(--fg)}
+#charList .og-head.open{color:var(--gold);border-color:#3a3350}
+#charList .og-head img{height:26px;border-radius:4px;flex:0 0 auto}
+#charList .og-head .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#charList .og-head .cnt{color:var(--fg3);font-size:14px;flex:0 0 auto}
+#charList .og-head .arw{color:var(--fg3);flex:0 0 auto}
+/* 话：比角色行更窄、无横幅 */
+#charList .char-btn.ep{padding:4px 8px 4px 16px;gap:6px}
+#charList .char-btn.ep .info .nm{font-size:14px}

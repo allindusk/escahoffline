@@ -7,6 +7,21 @@ const META   = window.__CHARMETA || {};
 
 const $ = s => document.querySelector(s);
 const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
+
+/* 分类桶：非角色剧情（主线/活动/其他）的 CG 组在 cgmap.js 里用**负数 id** 表示，
+   由 tools/build_cgmap.py 生成。这样不用另立一套数据结构，侧栏里它们天然排在
+   角色前面，点一下就是"只看主线 CG"。 */
+const CATS = { '-1': '主线剧情 CG', '-2': '活动剧情 CG', '-3': '其他剧情 CG' };
+const ADV  = window.__ADV || [];
+const ADV_TITLE = (() => {
+  const m = {};
+  const label = { main: '主线', event: '活动', other: '其他', tutorial: '教程', op: '开场' };
+  for (const a of ADV) {
+    m[a.key] = (label[a.kind] || a.kind) + (a.no ? ' 第' + a.no + '话' : '');
+  }
+  return m;
+})();
+const isCat = id => id < 0;
 /* 图片候选链：本地超分 → 本地转码 → 出厂映射 → 直接拼路径。
    改造前这里硬编码 media/img_x2/，只下原图的新用户会满屏裂图。 */
 const IMGX2 = window.__IMGX2 || {};
@@ -29,6 +44,11 @@ function cgCands(f) {
   return out;
 }
 
+/* 头像文件重做过但文件名没变，浏览器会一直吃旧缓存（典型现象：魔女グリム 显示成
+   エスカ・サファイア）。所以这里所有头像 URL 都带一个版本参数；x2 映射里已经带了
+   自己的时间戳，这里只兜住"硬拼路径"那几条。 */
+const AVC = '1101';
+
 function avatarCands(id) {
   const out = [];
   const push = p => { if (p && out.indexOf(p) < 0) out.push(p); };
@@ -38,11 +58,11 @@ function avatarCands(id) {
   // 头像导出的是 **.png**（原图格式），不是 .webp。
   // 只写 .webp 的话，全新环境里所有头像 404、侧栏一片空白。
   // 导出的是 **.png**，先试 png 再试 webp（顺序反了会先吃一个 404 才回退）
-  push('media/img/avatar/' + id + '.png');
-  push('media/img/avatar/' + id + '.webp');
-  push('media/img/avatar/' + id + '.jpg');
-  push('media/img_x2/avatar/' + id + '.webp');
-  push('media/img_x2/avatar/' + id + '.png');
+  push('media/img/avatar/' + id + '.png?v=' + AVC);
+  push('media/img/avatar/' + id + '.webp?v=' + AVC);
+  push('media/img/avatar/' + id + '.jpg?v=' + AVC);
+  push('media/img_x2/avatar/' + id + '.webp?v=' + AVC);
+  push('media/img_x2/avatar/' + id + '.png?v=' + AVC);
   return out;
 }
 
@@ -83,7 +103,8 @@ for (const c of Object.keys(NAMES).concat(Object.keys(META))) {
 GROUPS.forEach((g, gi) => {
   let ch = chars.get(g.c);
   if (!ch) {
-    ch = { id: g.c, name: 'ID ' + g.c, zh: '', r: '', d: '', groups: [], total: 0 };
+    ch = { id: g.c, name: CATS[g.c] || ('ID ' + g.c), zh: '', r: '', d: '',
+           groups: [], total: 0, cat: isCat(g.c) };
     chars.set(g.c, ch);
   }
   ch.groups.push(gi);
@@ -108,15 +129,23 @@ let keyword = '';
 let sortBy = 'id';
 /* 每部剧情的本地状态（char_N -> ready/soft-missing/missing），用来做"只看已下载" */
 let dlState = {};
+/* 是否已经问过服务端。首屏是在状态表还空着的时候画出来的，那时每一张卡都会被
+   判成"未下载"；所以 false 期间不写"未下载"三个字，等状态回来再整墙重画。 */
+let dlReady = false;
 
 async function loadDlState() {
   try {
     const r = await fetch('api/cdn/units', { cache: 'no-store' });
-    if (!r.ok) return;
-    const d = await r.json();
-    dlState = d.state || {};
-    renderChars();
+    if (r.ok) {
+      const d = await r.json();
+      dlState = d.state || {};
+    }
   } catch (e) { /* 纯静态打开时没有服务端，忽略 */ }
+  // 无论拿到还是没拿到都要收尾重画：以前这里只 renderChars()，
+  // 卡片墙一直是首屏那份"全未下载"，要点一下侧栏（onclick 里才重画 grid）才恢复。
+  dlReady = true;
+  renderChars();
+  repaintGrid();
 }
 
 function dlHave(cid) {
@@ -192,11 +221,22 @@ function renderChars() {
 }
 
 /* ---------- 卡片墙 ---------- */
+/* 某一组算不算"已下载"：主线/活动/其他 CG（负数 id）不在剧情包清单里，
+   一律当有图，否则它们会被误判成未下载。占位判断和筛选共用这一份口径。 */
+function groupHave(g) {
+  return isCat(g.c) ? true : dlHave(g.c);
+}
+
 function renderGrid() {
   visible = [];
+  const dlf = ($('#dlFilter') || {}).value || '';
   for (let gi = 0; gi < GROUPS.length; gi++) {
     const g = GROUPS[gi];
     if (curChar !== null && g.c !== curChar) continue;
+    // 已下载 / 未下载筛选：侧栏一直按它筛，卡片墙以前根本不看这个下拉，
+    // 于是"只看未下载"时左侧空了、墙上还是满的，同一个控件两套答案
+    if (dlf === 'have' && !groupHave(g)) continue;
+    if (dlf === 'miss' && groupHave(g)) continue;
     if (keyword) {
       const k = keyword.toLowerCase();
       const ch = chars.get(g.c);
@@ -241,29 +281,44 @@ function renderGrid() {
   appendCards();
 }
 
+/* 状态表回来之后重画卡片墙：保留已展开的张数和滚动位置，
+   否则状态一到就跳回顶部，用户正在看的那一屏直接没了。 */
+function repaintGrid() {
+  const grid = $('#grid');
+  const keep = shownCount;
+  const top = grid.scrollTop;
+  renderGrid();
+  while (shownCount < keep && appendCards()) { /* 补回原来的张数 */ }
+  grid.scrollTop = top;
+}
+
 function appendCards() {
   const grid = $('#grid');
   const next = visible.slice(shownCount, shownCount + PAGE);
-  if (!next.length) return;
+  if (!next.length) return false;
 
   const frag = document.createDocumentFragment();
   for (const gi of next) {
     const g = GROUPS[gi];
-    const ch = chars.get(g.c) || { name: 'ID ' + g.c, zh: '' };
+    const ch = chars.get(g.c) || { name: CATS[g.c] || ('ID ' + g.c), zh: '' };
+    const unit = g.u ? (ADV_TITLE[g.u] || g.u) : '';
     const card = el('div', 'card');
     // 该角色没下载 → 缩略图必然 404，直接给占位底色（点开会有提示）
-    const have = dlHave(g.c);
+    const have = groupHave(g);
+    // 状态还没拿到时先写"读取中"，别一口断言"未下载"（首屏会闪一整墙未下载）
+    const tip = dlReady || isCat(g.c) ? '未下载' : '读取中';
     card.innerHTML =
       `<div class="thumb${have ? '' : ' noimg'}">` +
         (have
           ? `<img alt="" loading="lazy" decoding="async">`
-          : `<span class="noimg-tip">未下载</span>`) +
+          : `<span class="noimg-tip">${tip}</span>`) +
         `<span class="badge">${g.f.length}</span>` +
       `</div>` +
       `<div class="cap">` +
-        `<span class="cn">${ch.name}</span>` +
+        `<span class="cn">${g.u ? unit : ch.name}</span>` +
         (ch.zh ? `<span class="cz">${ch.zh}</span>` : '') +
-        `<span class="ck"><span>${g.k}</span><span>ID ${g.c}</span></span>` +
+        `<span class="ck"><span>${g.k}</span>` +
+        `<span>${g.u ? unit : 'ID ' + g.c}</span></span>` +
       `</div>`;
     card.onclick = () => openLB(gi, 0);
     if (have) setChain(card.querySelector('.thumb img'), cgCands(g.f[0]));
@@ -382,7 +437,19 @@ if ($('#dlFilter')) {
     renderChars();
     renderGrid();
   };
-  loadDlState();
+}
+loadDlState();
+
+/* 头像素材齐没齐是 PACKSTATE 异步问出来的（api/cdn/public）。回来之前侧栏
+   只能显示首字色块，和卡片墙是同一个坑：状态一到必须重画一次侧栏。 */
+if (window.PACKSTATE && PACKSTATE.on) {
+  let avReady = null;
+  PACKSTATE.on(() => {
+    const r = !!(PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
+    if (r === avReady) return;
+    avReady = r;
+    renderChars();
+  });
 }
 
 /* 滚动到底部附近时追加下一批卡片 */

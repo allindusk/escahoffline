@@ -21,16 +21,16 @@ window.DISCLAIMER = (() => {
   display:flex;align-items:center;justify-content:center;padding:20px}
 #dlMask .box{width:min(680px,96vw);max-height:88vh;overflow:auto;background:#0d1622;
   border:1px solid #2b4a6b;border-radius:16px;padding:26px 30px;color:#dbe8f6;
-  box-shadow:0 24px 80px #000;font-size:13.5px;line-height:1.85}
-#dlMask h3{margin:0 0 4px;font-size:19px;color:#ffd77a}
-#dlMask .sub{color:#7d92ab;font-size:12px;margin-bottom:16px}
+  box-shadow:0 24px 80px #000;font-size:15.1px;line-height:1.85}
+#dlMask h3{margin:0 0 4px;font-size:21.3px;color:#ffd77a}
+#dlMask .sub{color:#7d92ab;font-size:14px;margin-bottom:16px}
 #dlMask ol{margin:0 0 16px;padding-left:22px}
 #dlMask li{margin-bottom:9px;color:#c7d9ec}
 #dlMask b{color:#fff}
 #dlMask .key{border-left:3px solid #c9505a;background:#241417;padding:10px 14px;
   border-radius:8px;margin:0 0 16px;color:#ffc9cf}
 #dlMask .ft{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-#dlMask button{border-radius:9px;padding:9px 18px;font-size:13px;cursor:pointer;
+#dlMask button{border-radius:9px;padding:9px 18px;font-size:14.6px;cursor:pointer;
   border:1px solid #2f5478;background:#16283c;color:#dff0ff}
 #dlMask button.primary{background:#2b6ea8;border-color:#4b96d4;font-weight:600}
 #dlMask button:hover{filter:brightness(1.15)}
@@ -39,10 +39,10 @@ window.DISCLAIMER = (() => {
    避免用户误以为 "v1.0.0" 是声明的版本号 */
 #dlBar{position:fixed;right:12px;bottom:10px;z-index:10100;
   display:flex;align-items:center;gap:8px}
-#appVer{font-size:11px;color:#4d5f74;background:rgba(10,16,24,.7);
+#appVer{font-size:14px;color:#4d5f74;background:rgba(10,16,24,.7);
   border:1px solid #1a2836;border-radius:7px;padding:4px 9px;
   letter-spacing:.3px;user-select:text}
-#dlFoot{font-size:11.5px;display:flex;align-items:center;gap:6px;
+#dlFoot{font-size:14px;display:flex;align-items:center;gap:6px;
   color:#6b8199;background:rgba(10,16,24,.9);border:1px solid #1e3044;
   border-radius:8px;padding:5px 11px;cursor:pointer;
   box-shadow:0 4px 14px rgba(0,0,0,.45);transition:color .15s,border-color .15s}

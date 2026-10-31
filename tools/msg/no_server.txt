@@ -1,0 +1,18 @@
+[x] 当前目录里没有 server\ 包（或 web\ 不完整），程序不完整，无法启动。
+
+    常见原因：
+      1. 只把 启动.bat 拷了出来，没有连同整个文件夹一起拷；
+      2. 直接在压缩包里双击 启动.bat（没有先解压）；
+      3. 解压中断，只解出了一部分文件；
+      4. 解压时没选「解压到 ESCAH-Offline-v*-win64-portable」，
+         文件直接散落在盘根目录（比如 D:\ 下），
+         导致 启动.bat 旁边既没有 server\ 也没有 python\。
+
+    正确做法：把下载到的压缩包【完整解压】到一个文件夹，
+    然后在那个文件夹里双击 启动.bat。
+
+    如果你下载的是 GitHub 的「源码压缩包」（Code - Download ZIP），
+    那个包里没有内置 Python，请改用 Release 里的
+    ESCAH-Offline-v*-win64-portable.zip。
+
+    当前位置：

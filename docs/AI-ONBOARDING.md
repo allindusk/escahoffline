@@ -99,7 +99,7 @@ escalation_heroines/escahoffline/
 | 不修改 `data/imgmap.js` / `imgmap.x2.js` 的语义 | 它们由 `tools/build_imgmaps.py` 生成，覆盖层才是"用户态"改动点 |
 | 新增图片取图处一律用 `candsOf` + `applyChain` | 三层回退是资源可选安装的前提 |
 | 新增耗时操作一律走 `jobs.submit()` + 前端轮询 `/api/jobs` | 不要用 SSE 长连接：会让 headless 截图/某些代理环境永远"加载中" |
-| `/api/state` 保持轻量（<100 ms） | 播放器和控制台打开就会请求；磁盘遍历类统计放 `/api/stats` 且必须带缓存 |
+| `/api/state` 保持轻量（<100 ms） | 播放器和控制台打开就会请求；磁盘遍历类统计放 `/api/space`（整个目录按用途分桶，一次遍历）与 `/api/stats`，且必须带缓存 |
 | 更新只替换白名单文件（`server/` `web/assets/` 等） | `web/media`、`web/data`、`userdata` 是用户数据，覆盖即丢失 |
 | 前端改动必须无头截图肉眼确认 | 语法检查通过≠页面正常，见 §5 |
 | UI 文案用中文、注释解释"为什么" | 目标用户是中文小白 |
@@ -218,9 +218,15 @@ curl -s -o /dev/null -w "%{time_total}s\n" http://127.0.0.1:8123/api/stats   # �
     代价是"首次使用要先下载 5 MB"，因此 `unit_status_map()` 在无清单时
     **不能**调 `list_units()`（会触发下载）——它挂在 `/api/state` 上，一调就让
     控制台首屏卡十几秒，"请先下载清单"的引导还永远出不来。
-12. **下载线路要测速再选**：`server/mirrors.py` 内置 pip 镜像与 GitHub 反代两组路线，
-    `best(kind)` 实测后返回最快的。不要在代码里写死镜像地址 —— 实测同一时刻
-    PyPI 官方 288 KB/s、华为云 11.9 MB/s，差 40 倍，而且哪条最快因网络而异。
+12. **下载线路：pip 测速、GitHub 固定顺序**（2026-11-01 定版，别改回去）：
+    `server/mirrors.py` 里两组路线两套策略 ——
+    * pip 镜像：`best("pip")` / `ranked("pip")` **测速选最快**并缓存 30 分钟。
+      不要在代码里写死镜像地址：实测同一时刻 PyPI 官方 288 KB/s、华为云 11.9 MB/s，
+      差 40 倍，而且哪条最快因网络而异。
+    * GitHub（release / API / raw）：`ranked("github")` **不测速**，直接按
+      `GH_ROUTES` 顺序返回（gh-proxy 主站 → 优选 v4 → 优选 v4/v6 → Fastly →
+      官方直连兜底）。判定标准只有"有没有正常响应"，有响应就用、不管快慢；
+      四条反代全无响应才落到官方直连。**不要再加测速/打分/按速度重排**。
 
 ---
 

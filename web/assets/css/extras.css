@@ -9,7 +9,7 @@
 .char-btn.nodl:hover { opacity: .8; }
 .char-btn.nodl .nm { color: #8c9db1; }
 .badge {
-  display: inline-block; font-size: 9.5px; line-height: 14px;
+  display: inline-block; font-size: 14px; line-height: 18px;
   padding: 0 5px; border-radius: 4px; margin-left: 5px;
   vertical-align: 1px; white-space: nowrap;
 }
@@ -41,11 +41,11 @@
 #transPanel.on { transform: none; }
 #transPanel .tp-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid #1d2f43; font-size: 14px;
+  padding: 14px 18px; border-bottom: 1px solid #1d2f43; font-size: 15.7px;
 }
 #transPanel .tp-head b { color: #7adcff; }
 #transPanel .tp-head button {
-  background: none; border: none; color: #7d92ab; font-size: 17px; cursor: pointer;
+  background: none; border: none; color: #7d92ab; font-size: 19px; cursor: pointer;
 }
 #transPanel .tp-body { padding: 16px 18px; overflow: auto; flex: 1; }
 #transPanel /* 译文格式：左右并排对比（导出 vs 导回） */
@@ -53,21 +53,21 @@
 .tp-cmp-col { flex: 1 1 0; min-width: 0; background: #0d1622;
   border: 1px solid #23405c; border-radius: 9px; padding: 9px 11px; }
 .tp-cmp-col.good { border-color: #2c5a3c; background: #0c1a12; }
-.tp-cmp-h { font-size: 12px; color: #7fd3ff; margin-bottom: 7px; font-weight: 600; }
+.tp-cmp-h { font-size: 14px; color: #7fd3ff; margin-bottom: 7px; font-weight: 600; }
 .tp-cmp-col.good .tp-cmp-h { color: #8fe0a4; }
-.tp-cmp-code { font-family: Consolas, "Courier New", monospace; font-size: 12px;
+.tp-cmp-code { font-family: Consolas, "Courier New", monospace; font-size: 14px;
   line-height: 1.9; color: #b9cde0; word-break: break-all; }
 /* 块头独立成行：窄栏里 ### 那行较长，跟着后面的 ja: 折行会看不清结构 */
-.tp-cmp-code b { display: block; color: #ffb454; font-size: 11.5px; }
+.tp-cmp-code b { display: block; color: #ffb454; font-size: 14px; }
 .tp-demo2 { color: #8fa8c2; }               /* 原文第二行，示意多行 */
 .tp-empty { color: #5c718a; font-style: italic; }
 .tp-fill { color: #8fe0a4; }
-.tp-cmp-f { margin-top: 7px; font-size: 11.5px; color: #7d92ab; }
+.tp-cmp-f { margin-top: 7px; font-size: 14px; color: #7d92ab; }
 .tp-cmp-f b { color: #cfe0f2; }
 @media (max-width: 620px) { .tp-cmp { flex-direction: column; } }
 
 .tp-note {
-  font-size: 12.5px; line-height: 2; color: #a9c0d8;
+  font-size: 14px; line-height: 2; color: #a9c0d8;
   background: #0f1a27; border: 1px solid #1d2f43; border-radius: 10px;
   padding: 12px 14px; margin: 0 0 14px;
 }
@@ -77,26 +77,26 @@
 }
 #transPanel button.primary {
   background: #2b6ea8; color: #eaf6ff; border: 1px solid #4b96d4;
-  border-radius: 9px; padding: 8px 16px; cursor: pointer; font-size: 13px;
+  border-radius: 9px; padding: 8px 16px; cursor: pointer; font-size: 14.6px;
 }
 #transPanel button.primary:hover { filter: brightness(1.15); }
 #transPanel button.primary:disabled { opacity: .5; cursor: default; }
-#transPanel .tp-stat { font-size: 12px; color: #7d92ab; }
+#transPanel .tp-stat { font-size: 14px; color: #7d92ab; }
 #transPanel .tp-file {
   flex: 1; display: flex; align-items: center; gap: 8px;
   border: 1px dashed #2f4c6d; border-radius: 9px; padding: 9px 12px;
-  font-size: 12.5px; color: #9fb6cc; cursor: pointer;
+  font-size: 14px; color: #9fb6cc; cursor: pointer;
 }
 #transPanel .tp-file:hover { border-color: #4b96d4; color: #cfe6ff; }
 #transPanel .tp-file input { display: none; }
-#transPanel .tp-mode { font-size: 12.5px; color: #a9c0d8; display: flex; align-items: center; gap: 4px; }
+#transPanel .tp-mode { font-size: 14px; color: #a9c0d8; display: flex; align-items: center; gap: 4px; }
 #transPanel textarea {
   width: 100%; height: 190px; resize: vertical; background: #0f1a27;
   color: #dbe9f8; border: 1px solid #1d2f43; border-radius: 10px;
-  padding: 10px 12px; font-size: 12.5px; line-height: 1.8;
+  padding: 10px 12px; font-size: 14px; line-height: 1.8;
   font-family: Consolas, 'Courier New', monospace; margin-bottom: 12px;
 }
-#transPanel .tp-result { font-size: 12.5px; line-height: 1.9; color: #a9e8bf; }
+#transPanel .tp-result { font-size: 14px; line-height: 1.9; color: #a9e8bf; }
 #transPanel .tp-result .tp-tip { color: #7d92ab; }
 #transPanel .tp-result .tp-err { color: #ff9aa5; }
 

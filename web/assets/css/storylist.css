@@ -1,0 +1,134 @@
+/* 剧情列表（控制台 ②剧情安装 / ③提高CG画质 / ⑤翻译 共用）
+ *
+ * 观感与播放器侧栏（index.html 的 #sidebar）对齐：同一套分类按钮、同一种
+ * 「横幅 + 名字 + 信息」两行项、同样的稀有度配色。差别只有两点：
+ *   · 控制台是宽屏，列表横向更宽，所以横幅画框固定在 280×81、右侧留信息区；
+ *   · 控制台的列表项带勾选框（要批量勾选剧情）。
+ * 配色沿用 setup.css 的变量（--bg/--bg2/--fg3…），不另起一套色。
+ */
+
+/* ---------------- 控件条：分类 / 搜索 / 排序 / 状态 / 稀有度 ---------------- */
+.sl-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 12px; background: var(--bg2); border-bottom: 1px solid var(--line);
+}
+.sl-src { display: flex; gap: 4px; }
+.sl-src button {
+  padding: 4px 12px; font-size: 14px; cursor: pointer; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg3); color: var(--fg3);
+}
+.sl-src button:hover { color: var(--fg); }
+.sl-src button.on {
+  background: #1d3b56; border-color: #2f6f9e; color: var(--acc2); font-weight: 600;
+}
+.sl-src button small { color: var(--fg3); font-size: 14px; font-weight: 400; margin-left: 2px; }
+.sl-src button.on small { color: #9fd6f0; }
+
+.sl-search {
+  flex: 1 1 200px; min-width: 150px; padding: 5px 9px; font-size: 14px;
+  border-radius: 7px; border: 1px solid var(--line);
+  background: var(--bg3); color: var(--fg); font-family: inherit;
+}
+.sl-search:focus { outline: none; border-color: var(--acc); }
+
+.sl-filters { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.sl-filters select {
+  padding: 5px 8px; font-size: 14px; font-family: inherit; cursor: pointer;
+  border-radius: 7px; border: 1px solid var(--line);
+  background: var(--bg3); color: var(--fg);
+}
+.sl-filters select:focus { outline: none; border-color: var(--acc); }
+.sl-rar { display: flex; gap: 4px; }
+.sl-rar button {
+  padding: 4px 10px; font-size: 14px; cursor: pointer; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg3); color: var(--fg3);
+  font-weight: 600; letter-spacing: .3px;
+}
+.sl-rar button:hover { color: var(--fg); }
+.sl-rar button.on { background: #2a2318; border-color: #6b5327; color: #f0c05a; }
+
+.sl-hit { font-size: 14px; color: var(--fg3); }
+.sl-hit.on { color: var(--acc2); }
+.sl-hit.none { color: #e06c75; }
+
+/* ---------------- 列表 ---------------- */
+.sl-list {
+  max-height: 54vh; overflow: auto; background: var(--bg);
+  border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
+}
+.sl-list::-webkit-scrollbar { width: 8px; }
+.sl-list::-webkit-scrollbar-thumb { background: #26374b; border-radius: 4px; }
+
+.sl-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  border-bottom: 1px solid #101a26; cursor: pointer; color: var(--fg2);
+}
+.sl-row:hover { background: #0f1a26; }
+.sl-row.on { background: #12222f; }
+.sl-row.dis { opacity: .66; cursor: default; }
+.sl-row.dis:hover { background: none; }
+.sl-chk { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--acc); cursor: inherit; }
+
+/* 有横幅时变成两行：上一行横幅，下一行名字 + 信息（与播放器侧栏一致）。
+   横幅画框固定 280×81 的透明底：角色横幅 81 高左对齐，章节横幅按宽铺满居中，
+   两种比例不同的图不用改图就能对齐。 */
+.sl-row.bnr { flex-wrap: wrap; align-items: flex-start; padding: 9px 14px; }
+.sl-bnr {
+  position: relative; display: block; flex: 0 0 auto;
+  width: 280px; height: 81px; border-radius: 6px; overflow: hidden;
+  border: 1px solid #2d3446; background: #0d1620; line-height: 0;
+}
+.sl-bnr img {
+  position: absolute; left: 0; top: 0; height: 81px; width: auto;
+  max-width: none; display: block; border: 0; border-radius: 0;
+}
+.sl-bnr img.adv {
+  height: auto; width: 280px; top: 50%; transform: translateY(-50%);
+}
+.sl-row.on .sl-bnr { border-color: #3d6f96; }
+
+.sl-row.bnr .sl-info { flex: 1 1 0; }
+.sl-row.bnr .sl-chk { margin-top: 32px; }   /* 与 81px 横幅垂直居中 */
+.sl-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sl-nm {
+  font-size: 14.6px; color: var(--fg); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.sl-row.on .sl-nm { color: var(--acc2); font-weight: 600; }
+.sl-sub {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 14px; color: var(--fg3);
+}
+.sl-rar-i { font-weight: 700; }
+.sl-rar-i[data-r="SSR"] { color: #f0c05a; }
+.sl-rar-i[data-r="SR"] { color: #7fc4f0; }
+.sl-rar-i[data-r="R"] { color: #9aa4b8; }
+
+.sl-badge { padding: 0 7px; border-radius: 20px; font-size: 14px; line-height: 21px; }
+.sl-badge.ok { background: #123524; color: #74e0a3; border: 1px solid #1e5a3a; }
+.sl-badge.no { background: #2a1b1e; color: #ff9aa5; border: 1px solid #4d2a30; }
+.sl-badge.must { background: #26231a; color: #e5c98a; border: 1px solid #4a422c; }
+.sl-badge.have-tr { background: #16283c; color: #9fe0ff; border: 1px solid #2f5478; }
+
+.sl-act {
+  flex: 0 0 auto; padding: 3px 10px; font-size: 14px; cursor: pointer;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg3); color: var(--fg2);
+}
+.sl-act:hover { color: var(--acc2); border-color: var(--line2); }
+.sl-act.rm { border-color: #7a3a42; background: #2a1418; color: #ffb3ba; }
+.sl-act.rm:hover { background: #3a1c22; color: #ffcdd2; }
+/* 「补齐」：缺语音 / 解包中断的那几行，点一下只补缺的，不用整个重装 */
+.sl-act.ok { border-color: #2f5a3a; background: #14281a; color: #9fe0a3; }
+.sl-act.ok:hover { background: #1b3a24; color: #c4f0c8; }
+
+.sl-empty { padding: 20px; text-align: center; color: var(--fg3); font-size: 14px; }
+
+/* 窄屏：横幅画框缩小，别把信息区挤没 */
+@media (max-width: 720px) {
+  .sl-bnr { width: 190px; height: 55px; }
+  .sl-bnr img { height: 55px; }
+  .sl-bnr img.adv { width: 190px; height: auto; }
+  .sl-row.bnr .sl-chk { margin-top: 18px; }
+  .sl-filters { margin-left: 0; }
+}

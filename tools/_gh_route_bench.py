@@ -25,7 +25,13 @@ PORTABLE_URL = ("https://github.com/allindusk/escahoffline/releases/download/"
                 "v1.0.0/ESCAH-Offline-v1.0.0-win64-portable.zip")
 
 # 候选线路：templates 里 {url} 换成原始 GitHub URL
+# 前四条与程序内置的 server/mirrors.py::GH_ROUTES 一致（程序本身**不测速**，
+# 这个脚本只用来研究各线路实际速度，结论不要反哺成"按速度排序"）。
 ROUTES = [
+    ("ghproxy",       "gh-proxy 主站",            "https://gh-proxy.org/{url}"),
+    ("ghproxy_v4",    "gh-proxy 优选 v4",         "https://v4.gh-proxy.org/{url}"),
+    ("ghproxy_v6",    "gh-proxy 优选 v4/v6",      "https://v6.gh-proxy.org/{url}"),
+    ("ghproxy_cdn",   "gh-proxy Fastly",          "https://cdn.gh-proxy.org/{url}"),
     ("direct",        "GitHub 直连",              "{url}"),
     ("edgeone",       "edgeone.gh-proxy.org",     "https://edgeone.gh-proxy.org/{url}"),
     ("yylx",          "git.yylx.win",             "https://git.yylx.win/{url}"),
