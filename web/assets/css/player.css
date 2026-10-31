@@ -230,21 +230,33 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
     0 2px 10px rgba(0,0,0,.8)}
 /* 设置面板 */
 /* top 跟着 header 的固定高度 50px 走，否则面板会压住顶栏下沿 */
-#settings{position:fixed;right:12px;top:56px;z-index:120;width:264px;
+/* 两列布局：单列 264px 时内容高约 1055px，1080p 下必然出滚动条。
+   两列后基本一屏放得下；屏幕窄了自动降回单列（见文件末尾媒体查询）。 */
+#settings{position:fixed;right:12px;top:56px;z-index:120;
+  width:min(608px,calc(100vw - 128px));
+  display:grid;grid-template-columns:1fr 1fr;gap:0 22px;align-content:start;
   background:rgba(18,22,32,.97);border:1px solid var(--line);border-radius:10px;
-  /* 左侧留 44px 给关闭按钮：按钮必须在框内，否则会被 overflow-y:auto 裁掉 */
-  padding:14px 16px 14px 44px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:12.5px;
+  /* 关闭按钮已经移到面板外（浮窗），这里不用再给左侧留 44px 空白 */
+  padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:12.5px;
   max-height:calc(100vh - 62px);overflow-y:auto}
-#settings h4{font-size:11px;color:var(--gold);letter-spacing:1px;margin:14px 0 9px;
+/* 分节标题 / 复选框行 / 说明文字 / 底部按钮：占满整行，不然两列会被拦腰截断 */
+#settings>h4,#settings>.row,#settings>.reset-row,#settings>div:not([class]){
+  grid-column:1/-1}
+/* 同一行里两个控件高度不齐时，别让下面的项跟着错位 */
+#settings>label{align-self:start}
+#settings h4{font-size:11px;color:var(--gold);letter-spacing:1px;margin:9px 0 5px;
   padding-bottom:5px;border-bottom:1px solid var(--line);font-weight:600}
 #settings h4:first-child{margin-top:0}
 #settings[hidden]{display:none}
-/* 关闭按钮：放在面板左边缘外侧、垂直居中 —— 手不用去找右上角的小叉 */
-#setClose{position:absolute;left:9px;top:50%;transform:translateY(-50%);
-  width:28px;height:28px;padding:0;border-radius:50%;cursor:pointer;
+/* 关闭按钮：**固定在面板左侧、垂直居中**的浮窗。
+   position:fixed + 兄弟节点 = 不随面板内容滚动，也不会被 overflow 裁掉。
+   具体 top/right 由 player.js 按面板实际矩形实时计算（窄屏会自动夹住）。 */
+#setClose{position:fixed;z-index:121;top:50%;right:286px;transform:translateY(-50%);
+  width:30px;height:30px;padding:0;border-radius:50%;cursor:pointer;
   border:1px solid var(--line2);background:rgba(18,22,32,.97);color:var(--fg2);
   font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;
   box-shadow:0 6px 18px rgba(0,0,0,.65)}
+#setClose[hidden]{display:none}
 #setClose:hover{color:#fff;border-color:var(--acc);background:#1b2740}
 
 /* 未下载角色的头像占位：不请求图片（避免成百上千个 404），用首字色块 */
@@ -254,20 +266,24 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   border:1px solid var(--line);color:#7f97b0;font-size:17px;font-weight:600;
   letter-spacing:0;user-select:none}
 .char-btn.nodl .ava-ph{color:#5d6f84;border-color:#1a2836}
-#settings label{display:block;margin-bottom:13px;color:var(--fg2)}
+#settings label{display:block;margin-bottom:5px;color:var(--fg2)}
 #settings label span{float:right;color:var(--gold);font-family:monospace}
-#settings input[type=range]{width:100%;margin-top:6px;accent-color:var(--purple)}
-#settings select{width:100%;margin-top:6px;padding:4px 6px;border-radius:5px;
+#settings input[type=range]{width:100%;margin-top:4px;accent-color:var(--purple)}
+#settings select{width:100%;margin-top:4px;padding:3px 6px;border-radius:5px;
   border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:12px}
 #settings .row{display:flex;justify-content:space-between;align-items:center;
   color:var(--fg2)}
 #btnSet{background:var(--bg3);border:1px solid var(--line);color:var(--fg);
   border-radius:6px;padding:4px 9px;cursor:pointer;font-size:14px}
 #btnSet:hover{color:var(--gold)}
-#settings .reset-row{margin-top:14px;text-align:right}
+#settings .reset-row{margin-top:10px;text-align:right}
 #settings .reset-row button{background:var(--bg3);border:1px solid var(--line);
   color:var(--fg);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12.5px}
 #settings .reset-row button:hover{color:var(--gold);background:#2a3448}
+/* 窄屏放不下两列：降回单列 + 允许滚动（此时关闭按钮会贴到面板左边框内） */
+@media (max-width:860px){
+  #settings{width:calc(100vw - 96px);grid-template-columns:1fr;gap:0}
+}
 #msgText.narr{font-style:normal}
 #msgText .cursor{display:inline-block;width:9px;color:var(--gold);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:0}}

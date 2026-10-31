@@ -1372,6 +1372,40 @@ $('#btnSet').onclick = () => { const s = $('#settings'); s.hidden = !s.hidden; }
 if ($('#setClose')) {
   $('#setClose').onclick = () => { $('#settings').hidden = true; };
 }
+
+/* 关闭按钮是**面板外的浮窗**，位置随面板实时算：
+ *   · 垂直居中于面板（不是视口 —— 面板高度随内容变）
+ *   · 水平贴面板左侧 10px；窄屏放不下就夹在屏幕内
+ * 面板显隐由很多地方改（按钮、Esc、代码），用 MutationObserver 统一同步，
+ * 免得漏一处就出现"面板关了按钮还在"。 */
+(function bindSetClose() {
+  const st = $('#settings');
+  const btn = $('#setClose');
+  if (!st || !btn) return;
+
+  function place() {
+    const r = st.getBoundingClientRect();
+    if (!r.height) return;
+    btn.style.top = Math.round(r.top + r.height / 2) + 'px';
+    const right = window.innerWidth - r.left + 10;
+    btn.style.right = Math.max(6, Math.min(right, window.innerWidth - 40)) + 'px';
+  }
+
+  function sync() {
+    btn.hidden = st.hidden;
+    if (!st.hidden) {
+      // 面板刚显示时高度可能还没算好，下一帧再定位一次
+      place();
+      requestAnimationFrame(place);
+    }
+  }
+
+  new MutationObserver(sync).observe(st, {
+    attributes: true, attributeFilter: ['hidden'],
+  });
+  window.addEventListener('resize', function () { if (!st.hidden) place(); });
+  sync();
+})();
 $('#btnReset').onclick = resetSettings;
 $('#setA').oninput = e => { SET.alpha = +e.target.value; applySettings(); };
 $('#setFS').oninput = e => { SET.fs = +e.target.value; applySettings(); };
@@ -1986,6 +2020,17 @@ $('#hTab').onclick = () => $('#hToggle').click();
 $('#speed').onchange = e => { ST.speed = parseFloat(e.target.value) || 1; };
 $('#auto').onchange = e => { ST.auto = e.target.checked; };
 document.addEventListener('keydown', e => {
+  // Esc 关设置面板：关闭按钮的提示里写着「（Esc）」，但这里以前压根没有
+  // Escape 分支 —— 提示是假的。放在输入框过滤**之前**，焦点在滑杆上也能关。
+  if (e.code === 'Escape' || e.key === 'Escape') {
+    const st = $('#settings');
+    if (st && !st.hidden) {
+      e.preventDefault();
+      st.hidden = true;
+      return;
+    }
+  }
+
   const tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 

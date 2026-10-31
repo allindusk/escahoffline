@@ -8,8 +8,10 @@
 <link rel="stylesheet" href="assets/css/extras.css?v=1030a">
 </head>
 <body>
+<!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
+     放在里面会跟着内容滚走（以前 top:50% 相对内容高度算，一拉就看不见了） -->
+<button id="setClose" title="关闭设置（Esc）" hidden>✕</button>
 <div id="settings" hidden>
-  <button id="setClose" title="关闭设置（Esc）">✕</button>
   <h4 data-i18n="sect.view">画面</h4>
   <label data-i18n="set.fit">画面缩放
     <select id="setFit">
