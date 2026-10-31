@@ -61,7 +61,7 @@
 > | `https://edgeone.gh-proxy.org/` + 原链接 | 16.6 MB/s |
 >
 > 把原链接**整个粘在斜杠后面**就行，例如：
-> `https://gh-proxy.com/https://github.com/allindusk/escahoffline/releases/download/v1.0.0/ESCAH-Offline-v1.0.0-win64-portable.zip`
+> `https://gh-proxy.com/https://github.com/allindusk/escahoffline/releases/download/v1.0.1/ESCAH-Offline-v1.0.1-win64-portable.zip`
 >
 > 三条快线下出来的 zip **sha256 与官方一致**。程序不会自己偷偷联网检查更新 ——
 > 想更新就在控制台点「检查程序更新」，看到有新版本再点「下载并应用」，装完会自动重启并提示刷新页面。

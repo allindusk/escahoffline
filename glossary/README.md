@@ -19,6 +19,20 @@
 | `r18.yaml` | 成人向用语（按需参考） |
 | `characters_generated.yaml` | 由 `characters.yaml` 自动展开的形态表，**不要手改** |
 
+## 怎么用（硬性 / 软性两档）
+
+导出时提示词会把这一节的意思告诉 AI：
+
+- **硬性 —— 必须照用**：角色名 / NPC 名 / 组织势力 / 地名 / 技能·装备·道具名 /
+  专有称号。换了就不是同一个人或东西。
+  对应：`characters.yaml`、`characters_generated.yaml`、`names.yaml`。
+- **软性 —— 优先参考，可按上下文调整**：普通词汇、惯用语、四字熟语。
+  表里给的是"最常用译法"；如果原文这里是比喻、双关、固定搭配，硬套会别扭，
+  就按上下文意译。
+  对应：`terms.yaml`、`phrases.yaml`、`phrases_manual.yaml`、`high_freq.yaml`。
+
+两档都守一条：**同一个词在同一语境下全篇只用一个译法**。
+
 ## 格式
 
 基本都是 YAML 的 `日文: 中文` 映射，例如：
