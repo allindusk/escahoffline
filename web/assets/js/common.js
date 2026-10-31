@@ -122,8 +122,21 @@
   }
 
   window.addEventListener('error', function (ev) {
-    // ev.message 为空的是资源加载失败（img/script），服务端已记录，跳过
-    if (!ev.message) return;
+    // ev.message 为空 = 资源加载失败。图片 404 服务端已有记录，跳过；
+    // 但 **<script> 加载失败**必须处理：data/index.js 挂了就是 INDEX=[]，
+    // 角色列表会永远转圈（程序更新重启的那 1~2 秒里打开页面必然踩到）。
+    if (!ev.message) {
+      const t = ev.target;
+      if (t && t.tagName === 'SCRIPT') {
+        const key = 'escah_retry_' + (t.src || '');
+        let last = 0;
+        try { last = +(sessionStorage.getItem(key) || 0); } catch (e) { }
+        if (Date.now() - last < 10000) return;        // 10 秒内只自动重试一次
+        try { sessionStorage.setItem(key, String(Date.now())); } catch (e) { }
+        location.reload();
+      }
+      return;
+    }
     reportError('error', ev.message,
       (ev.filename || '') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0),
       ev.error && ev.error.stack ? ev.error.stack : '');

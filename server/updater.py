@@ -500,15 +500,21 @@ except Exception:
 
 shutil.rmtree(os.path.join(ROOT, "userdata", "update"), ignore_errors=True)
 
-# 重启（Windows 用 .bat 里那条命令同款）
+# 重启：**必须给用户一个看得见的窗口**。
+# 以前用 CREATE_NO_WINDOW(0x8)：新进程在后台悄悄跑，任务栏里什么都没有 ——
+# 用户既不知道程序还活着，也没法"关窗口"停掉它。
+# 现在新开一个控制台(0x10)，并带 --open 打开一个**新标签页**：
+# 更新前那个标签页停在旧 DOM（实测角色列表会一直转圈），新标签才是干净的。
 try:
     if os.name == "nt":
-        subprocess.Popen([sys.executable, "-m", "server"],
-                         cwd=ROOT, creationflags=0x00000008)
+        subprocess.Popen([sys.executable, "-m", "server", "--open",
+                          "--page", "setup.html"],
+                         cwd=ROOT, creationflags=0x00000010)
     else:
-        subprocess.Popen([sys.executable, "-m", "server"], cwd=ROOT,
-                         start_new_session=True)
-    log("已拉起新版本")
+        subprocess.Popen([sys.executable, "-m", "server", "--open",
+                          "--page", "setup.html"],
+                         cwd=ROOT, start_new_session=True)
+    log("已拉起新版本（新控制台窗口 + 自动打开页面）")
 except Exception as e:
     log(f"重启失败: {e}")
 '''

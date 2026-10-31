@@ -31,6 +31,11 @@ from .cdn import wiki as cdn_wiki
 
 STOP = threading.Event()
 
+#: 本次进程的唯一标识。前端记住第一次拿到的值，一旦变了就说明**服务重启过**
+#: （程序更新：主进程退出 → 更新器覆盖文件 → 拉起新进程）。
+#: 没有它的话，更新完旧页面会一直显示旧 DOM，用户以为"没更新成功"。
+BOOT_ID = "%x%x" % (int(time.time() * 1000), os.getpid())
+
 
 class SubJob:
     """把子任务的进度"平移"到父任务上，且不改父任务的 total。"""
@@ -387,7 +392,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 applog.warn("static " + (fmt % args), tag="http")
             except Exception:                                    # noqa: BLE001
                 pass
-            super().log_message(fmt, *args)
+            # stdlib 的 log_message 会写 sys.stderr，而**无控制台启动**
+            # （pythonw / CREATE_NO_WINDOW）时 sys.stderr 是 None →
+            # AttributeError 一路冒到 send_error 里，把本该 404 的静态资源
+            # 变成 500。日志已经落到 app.log，这里直接跳过，别再往下走。
+            if sys.stderr is not None:
+                try:
+                    super().log_message(fmt, *args)
+                except Exception:                                # noqa: BLE001
+                    pass
 
     def translate_path(self, path):
         # 静态文件根固定为 web/
@@ -467,8 +480,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._log_req("GET", t0)
                 return r
             return super().do_GET()
-        except BrokenPipeError:
-            pass
+        except (BrokenPipeError, ConnectionResetError,
+                ConnectionAbortedError):
+            # 客户端提前断开（刷新/关标签/切页面）。这不是服务端错误，
+            # 记成 ERROR 只会淹没真正的问题（实测一天刷了 40 条）。
+            applog.debug("GET %s 客户端断开" % self.path, tag="http")
+            return None
         except Exception as e:                                   # noqa: BLE001
             self._status = 500
             applog.error("GET %s 未捕获异常\n%s"
@@ -490,8 +507,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             r = self._api_post(path)
             self._log_req("POST", t0)
             return r
-        except BrokenPipeError:
-            pass
+        except (BrokenPipeError, ConnectionResetError,
+                ConnectionAbortedError):
+            applog.debug("POST %s 客户端断开" % self.path, tag="http")
+            return None
         except Exception as e:                                   # noqa: BLE001
             self._status = 500
             applog.error("POST %s 未捕获异常\n%s"
@@ -519,7 +538,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                "effective": cdn_manifest_cdn(),
                                "custom": os.path.exists(paths.LINKS_FILE)})
         if path == "/api/jobs":
-            return self._json({"jobs": jobs.all_jobs()})
+            # boot/version 让前端能发现"服务重启过"：程序更新会先退出主进程、
+            # 由更新器覆盖文件后拉起新进程，旧页面完全感知不到（DOM 还是旧的），
+            # 必须靠这个标识触发自动刷新。
+            return self._json({"jobs": jobs.all_jobs(),
+                               "boot": BOOT_ID,
+                               "version": paths.app_version()})
         if path == "/api/jobs/stream":
             return self._sse()
         if path == "/api/stats":
@@ -956,15 +980,20 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
             media.rebuild_x2_overlay()
     except Exception:                                          # noqa: BLE001
         pass
-    # 同理补一份空的 sfxmap.js：它只有装过公共素材的「音效」才会生成，
-    # 全新包里缺它 → 页面 404，而且视频导出（tools/video/story.py）会直接崩。
-    try:
-        _p = os.path.join(paths.DATA, "sfxmap.js")
-        if not os.path.exists(_p):
-            with open(_p, "w", encoding="utf-8") as _f:
-                _f.write("window.__SFX={};")
-    except Exception:                                          # noqa: BLE001
-        pass
+    # 同理补空表：这几个索引被页面**无条件加载**，但只有用户做过对应操作才会生成
+    #   sfxmap.js        装过公共素材的「音效」才有（视频导出还直接读它）
+    #   imgmap.base.js   ｜做过「转 webp」才有
+    # 缺文件就是每次开页面 404（刷日志），无控制台运行时还会因为 stderr=None
+    # 把 404 变成 500。空表 = "没有任何覆盖层"，语义正确。
+    for _name, _body in (("sfxmap.js", "window.__SFX={};"),
+                         ("imgmap.base.js", "window.__IMGBASE={};")):
+        try:
+            _p = os.path.join(paths.DATA, _name)
+            if not os.path.exists(_p):
+                with open(_p, "w", encoding="utf-8") as _f:
+                    _f.write(_body)
+        except Exception:                                      # noqa: BLE001
+            pass
     handler = Handler
     try:
         httpd = http.server.ThreadingHTTPServer((host, port), handler)

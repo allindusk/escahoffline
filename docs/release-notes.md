@@ -8,10 +8,7 @@
 | 文件 | 说明 |
 |---|---|
 | `ESCAH-Offline-v{VERSION}-win64-portable.zip` | **给普通用户**。内置 Python 3.11 与全部依赖，解压后双击 `启动.bat` 即用 |
-| `ESCAH-Offline-v{VERSION}-update.zip` | **给程序内自动更新用**，也适合已装用户手动覆盖。只有代码与文档 |
-
-想二次开发请直接 `git clone` 仓库（`pip install -r requirements.txt`），不再单独提供
-"只有代码、要自己装 Python"的包。
+| `ESCAH-Offline-v{VERSION}-update.zip` | **程序更新时会自动下载安装这个包**，只有代码与文档 |
 
 ## 第一次用
 
@@ -23,8 +20,6 @@
 ## 注意
 
 - **本包不含任何游戏素材**，需按上述步骤自行从官方 CDN 下载并在本机解包
-- 已有安装：用新包解压后覆盖旧目录即可（`userdata/`、`web/media/`、剧情正文不会被覆盖），
-  也可以直接用程序内的「检查更新」
 - 请勿传播素材、请勿高调宣传，详见仓库 `NOTICE.md`
 
 > 本文件是 Release 说明模板，`{VERSION}` 会在构建时替换成实际版本号。

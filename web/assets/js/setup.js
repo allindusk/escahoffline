@@ -645,9 +645,33 @@
       if (document.hidden) return;
       try {
         const d = await api('jobs');
+        ST._fail = 0;
+        // 服务重启过（程序更新：主进程退出 → 更新器覆盖文件 → 拉起新进程）→
+        // 当前页面已经是旧 DOM，必须自动刷新，否则用户看到的是"更新没生效"。
+        if (d.boot) {
+          if (!ST.boot) {
+            ST.boot = d.boot;
+          } else if (ST.boot !== d.boot && !ST._reloading) {
+            ST._reloading = true;
+            ST.boot = d.boot;
+            const v = d.version ? ' v' + d.version : '';
+            toastMsg('程序已重启' + v + '，正在刷新页面…');
+            notify('程序已重启' + v + ' → 自动刷新页面', 'ok');
+            setTimeout(function () { location.reload(); }, 1500);
+            return;
+          }
+        }
         renderJobs(d.jobs || []);
         syncActBottom();          // 任务条高度变了，浮窗跟着抬高
-      } catch (e) { /* 服务停了就别刷了 */ }
+      } catch (e) {
+        // 连续取不到任务：更新期间会短暂这样（主进程退出、新进程还没起来）。
+        // 超过约 15 秒仍不恢复，就明确告诉用户该手动重启，而不是让页面干等。
+        ST._fail = (ST._fail || 0) + 1;
+        if (ST._fail === 13) {
+          notify('本地服务已停止。若一直不恢复，请关掉启动窗口后重新双击「启动.bat」',
+            'warn');
+        }
+      }
     };
     tick();
     jobTimer = setInterval(tick, 1200);
