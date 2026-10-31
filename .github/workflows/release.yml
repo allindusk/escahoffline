@@ -102,7 +102,12 @@ jobs:
           # 便携版用户下次启动就会报"没有找到 Python"。
           Copy-Item "$src/VERSION", "$src/README.md", "$src/NOTICE.md", "$src/LICENSE",
                     "$src/start.sh" -Destination $dst
-          Copy-Item "$src/web" -Filter *.html -Destination "$dst/web"
+          # 注意：**不能**写 `Copy-Item "$src/web" -Filter *.html -Destination ...`
+          # —— -Filter 只作用于 -Path 的子项，而 -Path 是目录本身，PowerShell 会
+          # 把整个 web 目录拷进 $dst/web（生成 web/web/），html 一个都进不来。
+          # 实测 v1.0.0–v1.0.2 的 update 包里**没有任何 .html**，前端改动一直没送达。
+          Get-ChildItem "$src/web" -Filter *.html -File |
+            Copy-Item -Destination "$dst/web"
           # 调试脚本（serve.py / stop_server.ps1 / dev-*.bat）不进更新包
           Copy-Item "$src/web/assets" -Destination "$dst/web" -Recurse
           # i18n 是用户自己攒的译文（属于用户数据），更新包里不带，
