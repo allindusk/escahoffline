@@ -29,7 +29,9 @@ $INDEX_FILES = @(
 New-Item -ItemType Directory -Force -Path $Dst | Out-Null
 New-Item -ItemType Directory -Force -Path "$Dst/web/data" | Out-Null
 
-Copy-Item server, tools, docs -Destination $Dst -Recurse
+Copy-Item server, tools, docs, glossary -Destination $Dst -Recurse
+# glossary（译名对照表）只进全量包，**不进纯代码更新包** —— 那是用户会自己
+# 维护的数据，更新时不该覆盖（release.yml 里只从 dist 拷 server/tools/docs）。
 Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh `
     -Destination $Dst
 # 启动脚本按通配符拷，**不要写死中文文件名**：

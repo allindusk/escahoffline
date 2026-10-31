@@ -32,6 +32,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(ROOT, "web")
 SERVER = os.path.join(ROOT, "server")
 TOOLS = os.path.join(ROOT, "tools")
+#: 译名对照表目录（随包分发、不随更新覆盖）。导出译文时把**绝对路径**写进提示词，
+#: 让 AI 先读这里再翻译，保证同一角色/术语全篇一致。
+GLOSSARY = os.path.join(ROOT, "glossary")
 USERDATA = os.path.join(ROOT, "userdata")
 DOWNLOADS = os.path.join(USERDATA, "downloads")
 BACKUP = os.path.join(USERDATA, "backup")

@@ -526,6 +526,22 @@
           <code>启动.bat</code> 即可恢复。
         </p>
       </div>
+
+      <div class="panel">
+        <h3>卸载</h3>
+        <p>
+          本程序是<b>免安装的便携程序</b>：不写注册表、不装系统服务、不往
+          <code>Program Files</code> 或 AppData 里塞东西。
+          <b>删除整个程序文件夹就等于完全卸载</b>，不会留下任何残留。
+        </p>
+        <p class="dim">
+          唯一的例外是你自己生成的东西，都在程序文件夹里的 <code>userdata/</code>：
+          已下载的素材、译文、导出成品、日志、设置。<br>
+          想保留就先把 <code>userdata/</code> 整个拷出来；想彻底清净就一起删掉。
+          删之前记得先点上面的「停止本地服务」（或直接关掉那个黑色命令行窗口），
+          否则文件被占用、删不干净。
+        </p>
+      </div>
     </section>
 
     <!-- ================= 帮助 ================= -->
@@ -623,6 +639,8 @@
 <div id="actPanel" class="collapsed">
   <div class="apHead" id="apHead">
     <span class="apTitle">操作记录</span>
+    <label class="apChk" id="apAutoWrap" title="关掉后：有新消息会展开并一直留着，由你手动收起">
+      <input type="checkbox" id="apAuto"> 自动收起</label>
     <button class="apBtn" id="apToggle" title="展开 / 收起">展开</button>
     <button class="apBtn" id="apClear" title="清空记录">清空</button>
   </div>

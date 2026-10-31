@@ -74,7 +74,7 @@
    * 右下角记录操作与提示；有新消息自动展开、5 秒后自动收起；
    * 不想看就点标题栏或「收起」手动折叠。
    */
-  const ACT = { rows: [], max: 150, hideTimer: null };
+  const ACT = { rows: [], max: 150, hideTimer: null, auto: true };
   const apPanel = $('#actPanel');
   const apBody = $('#apBody');
   const apToggle = $('#apToggle');
@@ -84,7 +84,8 @@
     apPanel.classList.remove('collapsed');
     if (apToggle) apToggle.textContent = '收起';
     clearTimeout(ACT.hideTimer);
-    ACT.hideTimer = setTimeout(actCollapse, 5000);   // 5 秒后自动收起
+    // 只有开了「自动收起」才计时；关掉就一直留着，等用户自己收
+    if (ACT.auto) ACT.hideTimer = setTimeout(actCollapse, 5000);
   }
 
   function actCollapse() {
@@ -139,6 +140,28 @@
       ACT.rows = [];
       renderAct();
       actCollapse();
+    };
+  }
+  // 「自动收起」开关：默认开。关掉后新消息只展开、不再自动收。
+  const apAuto = $('#apAuto');
+  const apAutoWrap = $('#apAutoWrap');
+  if (apAutoWrap) {
+    // 点开关只改设置，别冒泡到标题栏（那会顺带切换展开/收起）
+    apAutoWrap.onclick = function (e) { e.stopPropagation(); };
+  }
+  if (apAuto) {
+    try { ACT.auto = localStorage.getItem('escah_act_auto') !== '0'; } catch (e) { }
+    apAuto.checked = ACT.auto;
+    apAuto.onchange = function () {
+      ACT.auto = apAuto.checked;
+      try {
+        localStorage.setItem('escah_act_auto', ACT.auto ? '1' : '0');
+      } catch (e) { }
+      clearTimeout(ACT.hideTimer);
+      // 切回「自动」时，如果现在是展开的，重新开始 5 秒计时
+      if (ACT.auto && apPanel && !apPanel.classList.contains('collapsed')) {
+        ACT.hideTimer = setTimeout(actCollapse, 5000);
+      }
     };
   }
   const apHead = $('#apHead');

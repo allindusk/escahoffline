@@ -46,9 +46,20 @@ def load_settings() -> dict:
     return s
 
 
-def load_js_json(path: Path):
-    txt = path.read_text('utf-8')
-    return json.loads(txt[txt.index('=') + 1:].strip().rstrip(';'))
+def load_js_json(path: Path, default=None):
+    """读 ``window.__XXX=...;`` 形式的索引；文件缺失/损坏时返回 ``default``。
+
+    以前是直接 ``read_text``：全量包里没有 ``data/sfxmap.js``（只有装过公共
+    素材的「音效」才会生成）时直接抛 FileNotFoundError，整条视频导出全挂。
+    缺 BGM/音效映射最多是没声音，不该让视频导不出来。
+    """
+    try:
+        txt = path.read_text('utf-8')
+        return json.loads(txt[txt.index('=') + 1:].strip().rstrip(';'))
+    except Exception:
+        if default is None:
+            print(f'[warn] 缺少或无法解析索引：{path}（按空表处理）')
+        return {} if default is None else default
 
 
 def clean_text(s: str) -> str:

@@ -310,11 +310,47 @@ def sync_cgmap(cid: int) -> int:
             groups = []
     have = {(g.get("c"), g.get("k")) for g in groups}
 
+    # ① 自愈：同一角色内，若某组的文件被**其它组完全覆盖**（超集组），删掉它。
+    #    旧版本这里按"前两段"分组，会把 イベ_0126_純愛 / イベ_0126_陵辱 并成
+    #    一个大组 イベ_0126（12 张），CG 页于是显示 3 组、其中一组与另两组重复。
+    mine = [g for g in groups if g.get("c") == int(cid)]
+    dropped = 0
+    if len(mine) > 1:
+        drop = set()
+        for a in mine:
+            fa = set(a.get("f") or [])
+            if not fa:
+                continue
+            # 只跟**更小的组**比：大组被几个小组的并集覆盖才算重复。
+            # 反过来会误杀子组（純愛/陵辱 都会被那个 12 张的合集组"覆盖"）。
+            others: set = set()
+            for b in mine:
+                fb = set(b.get("f") or [])
+                if b is not a and len(fb) < len(fa):
+                    others |= fb
+            if fa <= others:                     # 全部文件别处都有 → 重复合集组
+                drop.add(id(a))
+        if drop:
+            groups = [g for g in groups if id(g) not in drop]
+            have = {(g.get("c"), g.get("k")) for g in groups}
+            dropped = len(drop)
+            print(f"  cgmap.js：清理 {dropped} 个重复组（角色 {cid}）")
+
+    # ② 分组规则与出厂数据一致：**去掉最后一段**（表情/序号），保留前面的组名。
+    #    以前取前两段，会把带后缀的子组并成一个合集组。
+    covered: set = set()
+    for g in groups:
+        if g.get("c") == int(cid):
+            covered.update(g.get("f") or [])
     by_group: dict[str, list[str]] = {}
     for k in keys:
+        fn = k + ".jpg"
+        if fn in covered:                        # 已经被某组收录 → 不重复加
+            continue
         seg = k.split("_")
-        label = "_".join(_hex_label(s) for s in seg[:2]) if len(seg) >= 2 else k
-        by_group.setdefault(label, []).append(k + ".jpg")
+        label = ("_".join(_hex_label(s) for s in seg[:-1])
+                 if len(seg) >= 3 else k)
+        by_group.setdefault(label, []).append(fn)
 
     added = 0
     for label in sorted(by_group):
@@ -322,11 +358,12 @@ def sync_cgmap(cid: int) -> int:
             continue
         groups.append({"c": int(cid), "k": label, "f": by_group[label]})
         added += 1
-    if added:
+    # 注意：**只清理没新增也要写回**，否则自愈结果留在内存里，文件还是脏的
+    if added or dropped:
         with open(path, "w", encoding="utf-8") as f:
             f.write("window.__CGMAP=" + json.dumps(groups, ensure_ascii=False,
                                                    separators=(",", ":")) + ";")
-        print(f"  cgmap.js：合并 {added} 组（角色 {cid}）")
+        print(f"  cgmap.js：合并 {added} 组、清理 {dropped} 组（角色 {cid}）")
     return added
 
 
@@ -832,8 +869,15 @@ def regen_sfxmap() -> int:
     以前靠手动转换。这里补上。
     """
     src = os.path.join(DATA, "sfxmap.json")
+    out = os.path.join(DATA, "sfxmap.js")
     if not os.path.exists(src):
-        print("  没有 sfxmap.json（先跑 export_sfx.py music/sound）")
+        # 没装公共素材（BGM / 音效）时也要留一份**空表**：
+        # 播放器三个页面都无条件加载 data/sfxmap.js，视频导出（tools/video/
+        # story.py）也直接读它 —— 缺文件就是 404 + 导出直接崩。
+        if not os.path.exists(out):
+            with open(out, "w", encoding="utf-8") as f:
+                f.write("window.__SFX={};")
+            print("  sfxmap.js：空表（还没装公共素材的音效）")
         return 0
     mp = json.load(open(src, encoding="utf-8"))
     # 网页里的媒体统一在 media/ 下；sfxmap.json 记的是相对 web 根的 audio/...

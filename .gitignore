@@ -36,6 +36,7 @@
 !/server/
 !/tools/
 !/docs/
+!/glossary/
 
 # 超分引擎（Real-CUGAN 的 exe + models，约 80 MB）不入库：
 # 由 CI 在打「全量包」时放进 tools/realcugan/（见 release.yml）。

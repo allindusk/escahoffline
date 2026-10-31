@@ -956,6 +956,15 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
             media.rebuild_x2_overlay()
     except Exception:                                          # noqa: BLE001
         pass
+    # 同理补一份空的 sfxmap.js：它只有装过公共素材的「音效」才会生成，
+    # 全新包里缺它 → 页面 404，而且视频导出（tools/video/story.py）会直接崩。
+    try:
+        _p = os.path.join(paths.DATA, "sfxmap.js")
+        if not os.path.exists(_p):
+            with open(_p, "w", encoding="utf-8") as _f:
+                _f.write("window.__SFX={};")
+    except Exception:                                          # noqa: BLE001
+        pass
     handler = Handler
     try:
         httpd = http.server.ThreadingHTTPServer((host, port), handler)
