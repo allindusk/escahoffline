@@ -32,9 +32,9 @@ from .. import proc
 
 from . import select
 from .config import (ARCHIVE_DIR, AUDIO, DATA, FILES_AUDIO, FILES_IMG,
-                     FILES_STORY, IMG, ROOT, SCRIPTS, WEB, WS,
+                     FILES_STORY, IMG, IMG_X2, ROOT, SCRIPTS, WEB, WS,
                      add_scripts_to_path)
-from .net import fetch_many
+from .net import _log, fetch_many
 
 add_scripts_to_path()          # 之后才能 import unityfs_probe / parse_script
 
@@ -834,7 +834,7 @@ def export_avatar(cid, size: int = 96, force: bool = False,
                     quality=92, method=4)
             return True
     except Exception as e:
-        print(f"    头像导出失败 {cid}: {e}")
+        _log(f"    头像导出失败 {cid}: {e}")
     return False
 
 

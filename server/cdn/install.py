@@ -415,121 +415,114 @@ def install_base(job=None, workers: int = 48,
                           if n.startswith(_pref))
         job.bytes_total = _bytes
 
-    # ① 背景：用 imgmap 里的全部 key（大小写正确，导出的文件名才能对上映射）
+    # 先把「要下的全部包」按类别登记好，再分两个阶段执行：
+    #   阶段一：一股脑把全部资源包下载完（网络瓶颈，默认 32 并发）
+    #   阶段二：逐个类别解包（CPU/磁盘瓶颈）
+    # 这样背景解包（比下载慢）与 BGM 下载（长板）能错峰，
+    # 而不是「下完一批、解完一批、再下一批」地串行浪费时间。
+    plan = []
     if "bg" in parts:
-        from .. import media
-        keys = list((media.load_imgmap().get("back") or {}))
+        from .. import media as _media
+        keys = list((_media.load_imgmap().get("back") or {}))
         ents = _entries(mf, [mf.back_bundle(k) for k in keys])
         sz = sum(int(e.get("size") or 0) for e in ents)
-        if job is not None:
-            job.log(f"① 背景 {len(ents)} 个包 / {sz / 1048576:.0f} MB")
-        _collect("背景", stages.fetch(ents, workers, "背景素材", skip=True,
-                                     pause_event=_pe(job), job=job,
-                                     done_offset=done_base))
-        done_base += len(ents)
-        if job is not None:
-            job.progress(message=f"解包背景图（{len(ents)} 个包，这步比下载还久）…")
-        stages.export_images(mf, {"back": set(keys),
-                                  "stand": set(), "cg": set()})
-        out["bg"] = len(ents)
-        out["bytes"] += sz
-
-    # ② BGM / 音效：包名 = bundle_<kind>_<资源名小写>，每个包一个 AudioClip
-    #   注意对外参数叫 bgm / sfx，而 bundle 前缀是 music / sound，别混。
-    for key, kind, label in (("bgm", "music", "BGM"),
-                             ("sfx", "sound", "音效")):
-        if key not in parts:
-            continue
-        pref = f"bundle_{kind}_"
-        ents = [e for n, e in mf.index.items() if n.startswith(pref)]
+        plan.append({"tag": "bg", "label": "背景", "ents": ents, "sz": sz,
+                     "keys": keys})
+    if "bgm" in parts:
+        ents = [e for n, e in mf.index.items() if n.startswith("bundle_music_")]
         sz = sum(int(e.get("size") or 0) for e in ents)
-        if job is not None:
-            job.log(f"{'②' if kind == 'music' else '③'} {label} {len(ents)} 个包"
-                    f" / {sz / 1048576:.0f} MB")
-        _collect(label, stages.fetch(ents, workers, f"{label}素材", skip=True,
-                                     pause_event=_pe(job), job=job,
-                                     done_offset=done_base))
-        done_base += len(ents)
-        if job is not None:
-            job.progress(message=f"解包 {label}（{len(ents)} 个包，这步比下载还久）…")
-        cnt = stages.run_script("export_sfx.py", kind, quiet=True)
-        if cnt != 0:
-            if job is not None:
-                job.log(f"   {label}导出异常（exit={cnt}），已跳过")
-        stages.regen_sfxmap()
-        out[kind] = len(ents)
-        out["bytes"] += sz
-
-    # ④ 角色头像：剧本不引用 c-panel，但它小又不依赖任何包，
-    #    放进公共素材后**未装的角色也有头像**，比"装剧情时才下"更实用。
+        plan.append({"tag": "bgm", "label": "BGM", "ents": ents, "sz": sz})
+    if "sfx" in parts:
+        ents = [e for n, e in mf.index.items() if n.startswith("bundle_sound_")]
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        plan.append({"tag": "sfx", "label": "音效", "ents": ents, "sz": sz})
     if "avatar" in parts:
-        pref = "bundle_chara_c-panel_"
-        ents = [e for n, e in mf.index.items() if n.startswith(pref)]
+        ents = [e for n, e in mf.index.items()
+                if n.startswith("bundle_chara_c-panel_")]
         sz = sum(int(e.get("size") or 0) for e in ents)
-        if job is not None:
-            job.log(f"④ 角色头像 {len(ents)} 个包 / {sz / 1048576:.0f} MB")
-        _collect("角色头像", stages.fetch(ents, workers, "角色头像", skip=True,
-                                         pause_event=_pe(job), job=job,
-                                         done_offset=done_base))
-        done_base += len(ents)
-        if job is not None:
-            job.progress(message=f"生成头像（{len(ents)} 个，这步比下载久）…")
-        n_ok = 0
-        n_bad = 0
-        for e in ents:
-            name = str(e.get("bundle_name") or "")
-            tail = name.rsplit("_", 1)[-1]
-            try:
-                # force=True：旧版本生成过一批错头像（同一张图贴到多个 id），
-                # 必须重做才能修好；x2 一起重做，否则播放器优先读的还是旧超分图。
-                if stages.export_avatar(int(tail), force=True):
-                    n_ok += 1
-                else:
-                    n_bad += 1
-            except Exception as ex:                            # noqa: BLE001
-                n_bad += 1
-                if job is not None and n_bad <= 3:
-                    job.log(f"   头像导出失败 cid={tail}：{str(ex)[:80]}")
-        # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
-        try:
-            stages.regen_imgmap()
-        except Exception:                                      # noqa: BLE001
-            pass
-        out["avatar"] = n_ok
-        out["bytes"] += sz
-        if job is not None:
-            job.log(f"   头像生成完毕：{n_ok}/{len(ents)}"
-                    + (f"，失败 {n_bad} 个" if n_bad else ""))
-        if n_bad:
-            fails.append(f"头像导出失败 {n_bad} 个（多为包损坏或缺少解码组件）")
-
-    # ⑤ 剧情横幅：角色剧情入口图（episode_character_<cid>）+ 主线/活动/其他的章节横幅
-    #    播放器现在拿横幅当标题（剧情列表的第一行），所以它们也是"公共"的：
-    #    没装某部剧情也该看得见它的横幅，装完才有图就不用每题都下一遍。
+        plan.append({"tag": "avatar", "label": "角色头像", "ents": ents, "sz": sz})
     if "banner" in parts:
         names = [n for n in mf.index if n.startswith(BANNER_PREFIXES)]
         ents = _entries(mf, names)
         sz = sum(int(e.get("size") or 0) for e in ents)
-        if job is not None:
-            job.log(f"⑤ 剧情横幅 {len(ents)} 个包 / {sz / 1048576:.1f} MB")
-        _collect("剧情横幅", stages.fetch(ents, workers, "剧情横幅", skip=True,
-                                         pause_event=_pe(job), job=job,
-                                         done_offset=done_base))
+        plan.append({"tag": "banner", "label": "剧情横幅", "ents": ents, "sz": sz})
+
+    # ---- 阶段一：下载全部资源包 ----
+    done_base = 0
+    for step in plan:
+        ents = step["ents"]
+        if job is not None and ents:
+            job.log(f"下载{step['label']} {len(ents)} 个包 "
+                    f"/ {step['sz'] / 1048576:.0f} MB")
+        _collect(step["label"],
+                 stages.fetch(ents, workers, f"{step['label']}素材", skip=True,
+                              pause_event=_pe(job), job=job,
+                              done_offset=done_base))
         done_base += len(ents)
-        if job is not None:
-            job.progress(message=f"导出剧情横幅（{len(ents)} 个包）…")
-        try:
-            stages.export_char_banners()
-        except Exception as e:                                 # noqa: BLE001
+
+    # ---- 阶段二：逐个类别解包 ----
+    for step in plan:
+        tag = step["tag"]
+        ents = step["ents"]
+        sz = step["sz"]
+        if job is not None and ents:
+            extra = "，这步比下载还久" if tag == "bg" else ""
+            job.progress(message=f"解包{step['label']}（{len(ents)} 个包{extra}）…")
+        if tag == "bg":
+            stages.export_images(mf, {"back": set(step["keys"]),
+                                      "stand": set(), "cg": set()})
+            out["bg"] = len(ents)
+            out["bytes"] += sz
+        elif tag in ("bgm", "sfx"):
+            kind = "music" if tag == "bgm" else "sound"
+            cnt = stages.run_script("export_sfx.py", kind, quiet=True)
+            if cnt != 0 and job is not None:
+                job.log(f"   {step['label']}导出异常（exit={cnt}），已跳过")
+            stages.regen_sfxmap()
+            out[kind] = len(ents)
+            out["bytes"] += sz
+        elif tag == "avatar":
+            n_ok = n_bad = 0
+            for e in ents:
+                name = str(e.get("bundle_name") or "")
+                tail = name.rsplit("_", 1)[-1]
+                try:
+                    # force=True：旧版本生成过一批错头像（同一张图贴到多个 id），
+                    # 必须重做才能修好；x2 一起重做，否则播放器优先读的还是旧超分图。
+                    if stages.export_avatar(int(tail), force=True):
+                        n_ok += 1
+                    else:
+                        n_bad += 1
+                except Exception as ex:                        # noqa: BLE001
+                    n_bad += 1
+                    if job is not None and n_bad <= 3:
+                        job.log(f"   头像导出失败 cid={tail}：{str(ex)[:80]}")
+            # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
+            try:
+                stages.regen_imgmap()
+            except Exception:                                  # noqa: BLE001
+                pass
+            out["avatar"] = n_ok
+            out["bytes"] += sz
             if job is not None:
-                job.log(f"   角色横幅导出失败：{e}")
-        try:
-            stages.export_story_topics()
-        except Exception as e:                                 # noqa: BLE001
-            if job is not None:
-                job.log(f"   章节横幅导出失败：{e}")
-        out["banner"] = len(ents)
-        out["bytes"] += sz
+                job.log(f"   头像生成完毕：{n_ok}/{len(ents)}"
+                        + (f"，失败 {n_bad} 个" if n_bad else ""))
+            if n_bad:
+                fails.append(f"头像导出失败 {n_bad} 个"
+                             "（多为包损坏或缺少解码组件）")
+        elif tag == "banner":
+            try:
+                stages.export_char_banners()
+            except Exception as e:                             # noqa: BLE001
+                if job is not None:
+                    job.log(f"   角色横幅导出失败：{e}")
+            try:
+                stages.export_story_topics()
+            except Exception as e:                             # noqa: BLE001
+                if job is not None:
+                    job.log(f"   章节横幅导出失败：{e}")
+            out["banner"] = len(ents)
+            out["bytes"] += sz
 
     # 记录本次各类的清单包数，下次刷新清单据此判断"有没有新增"
     # **有失败就不写**：写了等于"这一类已经跟上清单"，下次刷新就不会自动补，
