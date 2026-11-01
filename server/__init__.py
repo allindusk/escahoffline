@@ -14,7 +14,7 @@ updater  应用自更新（检查 GitHub Release + 退出后替换文件）
 api      HTTP 路由与静态站点服务
 """
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 #: 数据结构（packs.json / state.json）变更时递增
 SCHEMA = 1

@@ -425,7 +425,7 @@
         <h3>② 更新程序本体</h3>
         <p class="dim">
           点「检查程序更新」看有没有新版；有新版本再点右边那个按钮，
-          程序会自己换好文件并重启。整个过程中
+          程序会自己换好文件并重启。<b>发现有新版时，下面会列出本次更新修了什么。</b>整个过程中
           <b>你的素材、译文、设置一个都不会丢</b>。
         </p>
         <div class="optrow">
@@ -441,6 +441,7 @@
           <button class="primary" id="btnApplyUpdate" disabled>下载并应用</button>
           <span id="updResult" class="dim"></span>
         </div>
+        <div id="updNotes" style="display:none;margin-top:10px;padding:10px 14px;border:1px solid rgba(255,255,255,.15);border-radius:8px;background:rgba(255,255,255,.03);max-height:320px;overflow:auto;font-size:14px;line-height:1.65"></div>
 
         <details class="explain">
           <summary>更新是从哪下的？（技术细节，不看也不影响使用）</summary>

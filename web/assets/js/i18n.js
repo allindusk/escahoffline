@@ -118,14 +118,17 @@ window.I18N = (() => {
     return story.get(key(storyKey)) || null;
   }
 
-  /* 这门语言的整体译文包在不在：只发一次 index.json 探测。
+  /* 这门语言的整体译文包在不在：只发一次顶层 index.json 探测。
+   * 清单是语言无关的，固定在 assets/i18n/index.json（server/exports.py
+   * 与 i18n_store.build_index 都落这个路径，不要写成 ${lang}/index.json，
+   * 否则永远 404 → 判"没有" → 逐条 char_<id>.json 永远不被请求）。
    * 纯净环境（没下过译文）里 index.json 也不存在 → 判"没有"，
    * 之后不再逐个去请求 char_<id>.json / _speakers.json，避免一打开就刷 404。 */
   let _langAvail = undefined;            // undefined=未知 / true=有 / false=无
   function langAvailable() {
     if (lang === SOURCE) { _langAvail = false; return Promise.resolve(false); }
     if (_langAvail !== undefined) return Promise.resolve(_langAvail);
-    _langAvail = loadJson(`assets/i18n/${lang}/index.json`)
+    _langAvail = loadJson('assets/i18n/index.json')
       .then(d => !!(d && d.chars && Object.keys(d.chars).length))
       .catch(() => false);
     return _langAvail;

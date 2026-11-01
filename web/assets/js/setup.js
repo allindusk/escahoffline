@@ -24,6 +24,30 @@
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
+  /* 极简 Markdown→HTML（只给「更新说明」用，来源是本项目自己的 Release 正文）。
+   * 先整体转义再套少量规则，杜绝 XSS。支持：#~#### 标题、**粗体**、`代码`、
+   * 无序列表（-/* 起头）、空行分段。 */
+  function renderMd(src) {
+    if (!src) return '';
+    const inline = s => esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+    const lines = String(src).split(/\r?\n/);
+    let html = '', inList = false;
+    const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+    for (const line of lines) {
+      const h = line.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { closeList(); const lv = h[1].length; html += `<h${lv}>${inline(h[2])}</h${lv}>`; continue; }
+      const li = line.match(/^\s*[-*]\s+(.*)$/);
+      if (li) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
+      if (!line.trim()) { closeList(); continue; }
+      closeList();
+      html += `<p>${inline(line)}</p>`;
+    }
+    closeList();
+    return html;
+  }
+
   function human(n) {
     n = +n || 0;
     const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -1766,6 +1790,17 @@
       const applyBtn = $('#btnApplyUpdate');
       applyBtn.textContent = ready ? '重启并应用' : '下载并应用';
       applyBtn.disabled = !ready && !d.hasUpdate;
+      // 「检查更新」发现新版时，把 Release 说明（更新修复了哪些功能）也显示出来
+      const notesBox = $('#updNotes');
+      if (notesBox) {
+        if ((ready || d.hasUpdate) && d.notes) {
+          notesBox.innerHTML = renderMd(d.notes);
+          notesBox.style.display = 'block';
+        } else {
+          notesBox.innerHTML = '';
+          notesBox.style.display = 'none';
+        }
+      }
     } catch (e) {
       $('#updResult').textContent = '⚠ ' + e.message;
     }
