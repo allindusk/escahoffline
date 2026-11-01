@@ -112,7 +112,9 @@ window.SL = (() => {
     }
     const a = advOf(key);
     // 标题统一走 common.js 的 ESC.storyTitle：主线章节标题是「编号推算」出来的
-    // （数据里没有文字 title，158/225 条是空的，直接拿 a.title 会显示成「第 null 话」），
+    // （官方剧本 JSON 只有 9 个字段、没有 title，标题只能从 `_0` 段台词或封面图
+    //  识读补进 server/cdn/data/story_titles.json；现在 225 条里还剩 110 条是空的，
+    //  直接拿 a.title 会显示成「第 null 话」），
     // 播放器侧栏、控制台 ②③⑤、导出列表必须显示同一个名字。
     if (a) {
       return {

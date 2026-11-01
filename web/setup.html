@@ -129,10 +129,21 @@
     <!-- ================= 提高CG画质 ================= -->
     <section id="sec-quality">
       <h2>提高CG画质</h2>
-      <p class="lead">
-        把已经装好的图片<b>放大成高清版</b>，看着更清楚。原图不会被改动，随时能反悔；
-        想删高清图、看占了多少空间，都在「设置 / 清理空间」页。
-      </p>
+      <!-- 说明文字 + 右边一个大按钮：先看一眼效果再决定要不要做全量，
+           比读十行说明有用 -->
+      <div class="leadrow">
+        <p class="lead">
+          把已经装好的图片<b>放大成高清版</b>，看着更清楚。原图不会被改动，随时能反悔；
+          想删高清图、看占了多少空间，都在「设置 / 清理空间」页。
+        </p>
+        <button class="cmpbtn" id="btnCmpDemo">
+          <span class="cmpbtn-ico">🔍</span>
+          <span class="cmpbtn-tx">
+            <b>查看效果</b>
+            <small>左边原图 · 右边高清</small>
+          </span>
+        </button>
+      </div>
 
       <div class="panel">
         <h3>先选范围（可选）</h3>
@@ -402,18 +413,19 @@
           把<b>勾选的剧情</b>原文打成一个 zip，方便备份，或者一次全丢给 AI 翻。
           翻好之后用上面的「批量导入」逐部导回即可。<b>只有装好的剧情能勾。</b>
         </p>
+        <!-- 全选 / 清空 / 导出挤在一行：导出是这一屏的主操作，放最右边（margin-left:auto 顶到行尾），
+             省掉原来列表下面那一行，滚动时也不用先滚到底才找得到按钮。 -->
         <div class="optrow" style="flex-wrap:wrap;gap:10px">
           <button class="small" id="trAll">全选本类</button>
+          <button class="small" id="trAllTrans" title="勾选当前筛选里已经有译文的">全选已翻译</button>
+          <button class="small" id="trNotTrans" title="勾选当前筛选里还没有译文的（只算已安装的剧情）">全选未翻译</button>
           <button class="small" id="trNone">清空</button>
-          <button class="small" id="trAllTrans" title="只勾选已经有译文的">全选已翻译</button>
           <span class="hint" id="trSelInfo">未选择剧情</span>
+          <span id="trExpResult" class="dim" style="margin-left:auto"></span>
+          <button class="primary" id="btnTrExport">导出所选剧情</button>
         </div>
         <div id="trBar" class="sl-bar" style="border:1px solid var(--line);border-radius:10px 10px 0 0;margin-top:10px"></div>
         <div id="trList" class="sl-list" style="border:1px solid var(--line);border-top:none;border-radius:0 0 10px 10px"></div>
-        <div class="optrow" style="margin-top:10px">
-          <button class="primary" id="btnTrExport">导出所选剧情</button>
-          <span id="trExpResult" class="dim"></span>
-        </div>
       </div>
     </section>
 
@@ -750,6 +762,52 @@
 
 <div id="jobbar"></div>
 
+<!-- ============ 画质对比：全屏，两张图叠在一起，中间一条竖线左右拖 ============
+     两张图是**同一段剧情的同一个画面**（背景 + 立绘），位置、裁切完全一致，
+     只有分辨率不同 —— 所以叠起来看不出接缝，竖线左边是原图、右边是超分。 -->
+<div id="cmpMask" class="cmpMask" hidden>
+  <div class="cmpHead">
+    <b>画质对比</b>
+    <span class="cmpSub" id="cmpSub">左边原图，右边超分 2 倍</span>
+    <span class="cmpHint" id="cmpHint">拖动中间竖线左右对比</span>
+    <button class="cmpX" id="cmpClose" title="关闭（Esc）">✕ 关闭</button>
+  </div>
+  <div class="cmpBody" id="cmpBody">
+    <div class="cmpStage" id="cmpStage">
+      <!-- 底层：超分 2 倍（整张都在，右上角标尺寸） -->
+      <div class="cmpLayer" id="cmpLayerB">
+        <div class="cmpIn">
+          <img class="cmpBg" alt=""><img class="cmpSt" alt="">
+        </div>
+      </div>
+      <!-- 上层：原图，按竖线位置把右边裁掉 -->
+      <div class="cmpLayer cmpTop" id="cmpTopA">
+        <div class="cmpIn">
+          <img class="cmpBg" alt=""><img class="cmpSt" alt="">
+        </div>
+      </div>
+      <div class="cmpSplit" id="cmpSplit"><span class="cmpKnob">⇔</span></div>
+      <span class="cmpTagL" id="cmpTagL">原图</span>
+      <span class="cmpTagR" id="cmpTagR">超分 2 倍</span>
+    </div>
+    <!-- 全屏后一眼看不出怎么退，先给一句、几秒后自己淡出 -->
+    <div class="cmpFade" id="cmpFade">按 <b>Esc</b> 或点右上角「✕ 关闭」退出</div>
+  </div>
+  <div class="cmpFoot">
+    <span class="cmpNote" id="cmpNote"></span>
+    <button class="smallBtn" id="cmpZoom">看细节（放大 2.4 倍）</button>
+  </div>
+  <div class="cmpWait" id="cmpWait" hidden>
+    <div class="cmpWaitBox">
+      <b id="cmpWaitTitle">正在对原图进行超分…</b>
+      <div class="cmpBar"><i id="cmpBarI"></i></div>
+      <span class="cmpWaitMsg" id="cmpWaitMsg"></span>
+      <!-- 一部剧情都没装时给个能点的去处，而不是只留一行"请先装剧情" -->
+      <button class="primary" id="cmpGoPacks" hidden>去「剧情安装」挑一部</button>
+    </div>
+  </div>
+</div>
+
 <!-- 右下角操作记录：有新消息自动展开，几秒后自动收起；可手动收起/清空 -->
 <div id="actPanel" class="collapsed">
   <div class="apHead" id="apHead">
@@ -774,6 +832,6 @@
 <script src="assets/js/disclaimer.js?v=1101a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
-<script src="assets/js/setup.js?v=1101c"></script>
+<script src="assets/js/setup.js?v=1103a"></script>
 </body>
 </html>

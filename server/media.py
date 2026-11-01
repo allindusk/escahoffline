@@ -295,6 +295,140 @@ def collect_upscale_targets(kinds=("stand", "back", "cg"),
     return out
 
 
+# ---------------------------------------------------------------- 画质对比样例
+#: 对比图固定 2 倍：界面上那句"右边是超分 2 倍"是写死的，
+#: 跟着控制台里选的 3/4 倍走会把说明文字说错。
+DEMO_SCALE = 2
+
+#: 选中的那一对图 (unit, 段号, 背景键, 立绘键)。**只缓存"选谁"**，
+#: 不缓存 ready —— 超分跑完后再问一次，同一个键就该立刻算成已就绪。
+_DEMO_PICK = None
+
+
+def _unit_parts(unit: str) -> list:
+    """读 ``web/data/<unit>.js`` 的 parts（读不到就返回空列表）。"""
+    p = os.path.join(paths.DATA, unit + ".js")
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            s = f.read()
+        return json.loads(s[s.find("=") + 1:].strip().rstrip(";")).get("parts") or []
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def _demo_one(kind: str, key: str, imgmap: dict, base: dict) -> dict:
+    src = src_rel_for(kind, key, imgmap, base)
+    x2 = overlay_path("x2", kind, key) + ".webp"
+    return {"key": key, "src": src or "", "x2": x2,
+            "ready": bool(src) and os.path.exists(paths.web_path(x2))}
+
+
+#: 挑不到画面时给用户的话 + 按钮写什么。三种原因分开说，
+#: 因为**用户要做的事不一样**：没装剧情要去装，删过原图要去补齐，别混成一句"没图"。
+_DEMO_REASON = {
+    "no_story": (
+        "还没有可以对比的画面 —— 先在「剧情安装」里装一部角色剧情"
+        "（对比用的是剧情里的背景 + 立绘），装完回来点「查看效果」。",
+        "去「剧情安装」挑一部"),
+    "no_original": (
+        "剧情已经装了，但对比要用的原图被清理掉了（超分图不能当原图用）。"
+        "到「剧情安装」把这部剧重新装一次，只补缺的文件，很快。",
+        "去「剧情安装」补齐原图"),
+    "no_pair": (
+        "已装的剧情里没有「同一段既有背景又有立绘」的画面，换一部剧情再试试。",
+        "去「剧情安装」换一部"),
+}
+
+
+def _demo_fail(reason: str) -> dict:
+    text, go = _DEMO_REASON.get(reason, _DEMO_REASON["no_story"])
+    # needInstall：前端据此把「去装一部剧情」按钮亮出来，并换成对应文案
+    return {"ok": False, "needInstall": True, "reason": reason,
+            "error": text, "goText": go}
+
+
+def _pick_demo(base: dict, imgmap: dict):
+    """挑一段"同一段剧情里既有背景又有立绘"的画面。
+
+    → ``((unit, 段号, 背景键, 立绘键) | None, 原因)``
+    原因用于告诉用户"为什么没得比"（见 ``_DEMO_REASON``），三种：
+      ``no_story``    一个角色剧情都没装
+      ``no_original`` 剧情装了，但那段画面的**原图**不在磁盘上（删过原图）
+      ``no_pair``     这些剧情里没有"同时有背景和立绘"的段落
+
+    为什么要按段落挑：随便拿一张背景 + 一张立绘拼在一起，人可能站在别人的房间里
+    或者干脆对环境不对，看着像 P 的。同一段落里的组合本来就是同框的。
+    再优先选"立绘编号和角色编号一致"的那部（char_121 → stand_0121_*），
+    避免出现"这房间站了个不相干的人"。
+    """
+    try:
+        units = [fn[:-3] for fn in sorted(os.listdir(paths.DATA))
+                 if fn.startswith("char_") and fn.endswith(".js")]
+    except OSError:
+        return None, "no_story"
+    if not units:
+        return None, "no_story"
+    fallback = None
+    saw_pair = False            # 有没有"键齐全"的段落（只看键，不看文件在不在）
+    for unit in units:
+        num = unit.rsplit("_", 1)[-1].lstrip("0")
+        for pi, part in enumerate(_unit_parts(unit)):
+            bkeys = list(part.get("back") or [])
+            skeys = [k for k in (part.get("stand") or [])
+                     if not k.lower().endswith("_base")]
+            if not bkeys or not skeys:
+                continue
+            saw_pair = True
+            backs = [k for k in bkeys if src_rel_for("back", k, imgmap, base)]
+            stands = [k for k in skeys if src_rel_for("stand", k, imgmap, base)]
+            if not backs or not stands:
+                continue
+            same = None
+            for s in stands:
+                seg = s.split("_")
+                if len(seg) > 1 and seg[1].lstrip("0") == num:
+                    same = s
+                    break
+            if same:
+                return (unit, pi + 1, backs[0], same), ""
+            if fallback is None:
+                fallback = (unit, pi + 1, backs[0], stands[0])
+    if fallback:
+        return fallback, ""
+    return None, ("no_original" if saw_pair else "no_pair")
+
+
+def demo_scene(force: bool = False) -> dict:
+    """「画质对比图」用的那一个画面 —— 背景 + 立绘，各带原图与超分图地址。
+
+    ``{'ok': True, 'back': {...}, 'stand': {...}, 'ready': bool, 'scale': 2}``
+    未就绪时前端先把这个 job 跑完再打开；已就绪就直接显示，不再重跑。
+
+    用户可能在「设置 / 清理空间」里删过图，所以这里**每次调用都按磁盘实际情况
+    重算**：超分图没了 → ready=False（前端自动重做）；原图没了 → 重新挑一对，
+    挑不到就返回带原因的错误，让前端给出对应的下一步。
+    """
+    global _DEMO_PICK
+    base = load_overlay("base")
+    imgmap = load_imgmap()
+    if force or not _DEMO_PICK:
+        _DEMO_PICK, reason = _pick_demo(base, imgmap)
+        if not _DEMO_PICK:
+            return _demo_fail(reason)
+    unit, part_no, bkey, skey = _DEMO_PICK
+    back = _demo_one("back", bkey, imgmap, base)
+    stand = _demo_one("stand", skey, imgmap, base)
+    if not back["src"] or not stand["src"]:
+        # 缓存的这一对没原图了（清理空间删过原图 / 卸载过剧情）→ 重新挑一次再答
+        _DEMO_PICK = None
+        if not force:
+            return demo_scene(force=True)
+        return _demo_fail("no_original")
+    return {"ok": True, "unit": unit, "part": part_no, "scale": DEMO_SCALE,
+            "back": back, "stand": stand,
+            "ready": back["ready"] and stand["ready"]}
+
+
 #: unit → (mtime, {(kind, key)})。一次超分可能带上几部剧情，没必要
 #: 每次都重读 200 KB 的剧本；重装会改 mtime，缓存自动失效。
 _UNIT_KEYS: dict = {}
@@ -483,17 +617,27 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
     targets = collect_upscale_targets(kinds, only=only)
     if limit:
         targets = targets[:limit]
-    if not targets:
+    extra = f"（仅所选 {len(units)} 部剧情）" if units else ""
+    return _run_upscale(job, eng, targets, scale, extra)
+
+
+def _run_upscale(job, eng: dict, pairs, scale: int, extra: str = "") -> dict:
+    """逐张超分 ``(img_kind, key, 原图相对路径)``，成功的写回 x2 覆盖层。
+
+    ``upscale()``（批量）和 ``upscale_pairs()``（画质对比图只跑一两张）共用这一段，
+    避免"只跑两张"另写一份、把落盘路径和覆盖层写坏。
+    """
+    pairs = list(pairs)
+    if not pairs:
         return {"done": 0, "failed": 0, "skipped": 0, "note": "没有需要超分的图"}
 
-    job.set_total(len(targets))
-    job.set_items(len(targets))
-    job.log(f"引擎：{eng['note']}；共 {len(targets)} 张"
-            + (f"（仅所选 {len(units)} 部剧情）" if units else ""))
+    job.set_total(len(pairs))
+    job.set_items(len(pairs))
+    job.log(f"引擎：{eng['note']}；共 {len(pairs)} 张{extra}")
     x2 = load_overlay("x2")
     ok = fail = 0
     t0 = time.time()
-    for kind, key, rel in targets:
+    for kind, key, rel in pairs:
         if job.cancelled:
             break
         src = paths.web_path(rel)
@@ -516,10 +660,21 @@ def upscale(job, kinds=("stand", "back", "cg"), scale: int = 2,
                 # 必须把原因写进日志，否则用户只看到"全部失败"。
                 job.log("  超分失败示例：" + (_CUGAN_LAST_ERR[:300] or "（无输出）"))
         sp = (ok + fail) / max(0.001, time.time() - t0)
-        job.progress(add=1, message=f"超分 {ok + fail}/{len(targets)}"
+        job.progress(add=1, message=f"超分 {ok + fail}/{len(pairs)}"
                                    f"（{sp:.1f} 张/秒，失败 {fail}）")
     save_overlay("x2", x2)
     return {"done": ok, "failed": fail, "skipped": 0}
+
+
+def upscale_pairs(job, pairs, scale: int = DEMO_SCALE) -> dict:
+    """只超分指定的几张图（画质对比图用）。
+
+    只看个对比不该让用户把几千张图全跑一遍 —— 这两张做完就有得看了。
+    """
+    eng = find_engine()
+    if eng["kind"] == "none":
+        raise RuntimeError(eng["note"])
+    return _run_upscale(job, eng, pairs, scale)
 
 
 # ---------------------------------------------------------------- 批量转码

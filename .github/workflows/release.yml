@@ -1,28 +1,125 @@
 name: build-release
 
-# 什么时候跑：
-#   · 推 `v*` 标签 → 自动构建并**发 Release**（portable + update 两个 zip）
-#   · Actions 页面点 Run workflow → 只构建，产物在本次运行的 Artifacts 里，
-#     不建 Release（想发正式版就走 tag）
+# ============================================================================
+# 触发与「打包什么」—— 2026-11-02 改成按版本号触发，别改回 push tags
+# ============================================================================
+# 唯一判据是 VERSION 里的版本号，不是 tag：
+#   · push 到 main 但没动 VERSION → **不触发，连一次运行都不创建**（on.push.paths 过滤）
+#     注意 paths 比的是「这次 push 全部提交的合计 diff」，不是最后一个提交，
+#     所以一次推 5 个 commit、其中某个改了 VERSION 也会触发。
+#   · push 到 main 且动过 VERSION → gate 再看一眼 tag：v<ver> 已发布就跳过，否则打包
+#   · Actions 页面 Run workflow   → 总是打包（publish 关掉就只出 Artifacts）
+#
+# **打包内容 = 这次运行的 HEAD（main 最新），不是某个 tag 的快照。**
+# 旧机制是 `push: tags: v*` 触发，checkout 默认检出 tag 指向的那个提交，于是
+# "打完 tag 之后又 push 的修复"永远进不了同版本的包 —— v1.0.4 的 tag 停在
+# 9c930ef，其后 main 上还有 3 个提交，任何一次重跑都只会打出旧代码。
+# 现在改为按版本号闸门 + 取最新 HEAD，"先推代码、再推版本号"两次 push 也
+# 不会漏：后一次打包的是 main 的 HEAD，前一次的提交已经在里面。
+#
+# 发完版会把 tag **强制对齐**到这次构建用的提交，保证
+# `git checkout v<ver>` 与包里的代码是同一份（以前 tag 已存在就静默失败，
+# tag 指针与包内容不一致，每次都要被问"包里的文件是不是旧的"）。
+#
+# 注意：VERSION 不变就不会重发同版本 —— 程序内的更新检查只比较 tag 号
+# （server/updater.py 的 `_ver_tuple`），同版本覆盖附件对老用户没有意义。
+# 热修请 bump VERSION；手动 Run workflow 重发同版本只对之后新下载的人生效。
+
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '构建后发布到 Release（关掉则只上传 Artifacts，不动已有 Release）'
+        type: boolean
+        default: true
   push:
-    tags: ['v*']
+    branches: [main]
+    paths:
+      - 'VERSION'        # 不动版本号的提交不该跑 CI，GitHub 直接在事件层就过滤掉
 
 permissions:
-  contents: write        # 创建 Release 需要
+  contents: write        # 创建/更新 Release 与推送 tag 需要
+
+# 两次运行绝不并行改同一个 Release；后到的排队等前一次发完。
+# 不要 cancel-in-progress：会把正在发的版掐成半截（附件少一个）。
+concurrency:
+  group: build-release
+  cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: windows-latest
+  # ---------------------------------------------------------------------------
+  # 闸门：几秒钟的 Linux job，先回答「这个版本要不要打包」
+  # ---------------------------------------------------------------------------
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
+      reason: ${{ steps.gate.outputs.reason }}
+      version: ${{ steps.gate.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0       # 要看到已有 tag，判断这个版本号发过没有
+
+      - id: gate
+        shell: bash
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          if [ -z "$v" ]; then v="0.0.0"; fi
+          tag="v$v"
+          head=$(git rev-parse HEAD)
+
+          # 走到这里说明「VERSION 被动过」或「手动触发」（paths 过滤已经挡掉了其余情况），
+          # 这里只处理一个边界：版本号撞上已发布的 tag（比如把 VERSION 改回旧值），
+          # 别去覆盖一个已经发出去的版本。
+          build=false
+          reason=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            build=true
+            reason="手动触发（Run workflow），版本 $v"
+          elif git rev-parse -q --verify "refs/tags/$tag" > /dev/null 2>&1; then
+            reason="tag $tag 已存在 → 不覆盖已发布版本（真要重打同版本请 Run workflow）"
+          else
+            build=true
+            reason="VERSION 动过且 $tag 尚未发布 → 打包 $v"
+          fi
+
+          echo "构建来源提交：$head"
+          echo "结论：build=$build（$reason）"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: 说明
+        shell: bash
+        run: |
+          if [ "${{ steps.gate.outputs.build }}" != "true" ]; then
+            echo "::notice::本次不打包：${{ steps.gate.outputs.reason }}"
+          fi
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
+    runs-on: windows-latest
+    steps:
+      # 不指定 ref：push 事件就是这次推送的 HEAD，手动触发就是所选分支的 HEAD。
+      # 这正是「用仓库里的最新文件打包」—— 别再写成检出某个 tag。
+      - uses: actions/checkout@v7
+
+      - name: 构建来源
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $sub = (git log -1 --format='%s').Trim()
+          Write-Host "事件：${{ github.event_name }}｜闸门理由：${{ needs.gate.outputs.reason }}"
+          Write-Host "提交：$sha  $sub"
+          Write-Host "版本：${{ needs.gate.outputs.version }}"
 
       - name: 读取版本号
         id: ver
         shell: pwsh
         run: |
-          $v = (Get-Content VERSION -Raw).Trim()
+          $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
           if (-not $v) { $v = "0.0.0" }
           "version=$v" >> $env:GITHUB_OUTPUT
           Write-Host "版本：$v"
@@ -207,7 +304,7 @@ jobs:
           }
           # 内容断言：必须优先用内置解释器。少了这一句，用户双击就会掉到系统
           # Python，报出 "D:\python\python.exe: No module named server" 这种看不懂的错。
-          $bat = Get-Content "$dst/启动.bat" -Raw
+          $bat = Get-Content "$dst/启动.bat" -Raw -Encoding UTF8
           if ($bat -notmatch '%~dp0python') {
             throw "启动.bat 没有优先使用内置 Python（找不到 %~dp0python）"
           }
@@ -269,7 +366,7 @@ jobs:
           Compress-Archive -Path dist/ESCAH-Offline-update/* -DestinationPath "dist/ESCAH-Offline-v$v-update.zip" -CompressionLevel Optimal
           Get-ChildItem dist/*.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
 
-      # ---------------- 发布 ----------------
+      # ---------------- 构建产物留档 ----------------
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
@@ -280,47 +377,72 @@ jobs:
             dist/ESCAH-Offline-v${{ steps.ver.outputs.version }}-update.zip
 
       # ---------------- 发布 ----------------
-      # 注意：本 workflow 是**手动触发**，github.ref 是 refs/heads/main，
-      # 不是 refs/tags/v…。所以不能用 "if: startsWith(github.ref,'refs/tags/v')"
-      # 那种条件（会永远跳过，产物只进 Artifacts，Releases 里没有文件）。
-      # 这里改用 gh CLI，按 VERSION 里的版本号打 tag 并发 Release；
-      # 若该版本的 Release 已存在，就覆盖上传其中的附件。
       # 说明文案放在 docs/release-notes.md（模板，{VERSION} 为占位符）。
       # 不要写进 YAML 的 PowerShell here-string：那里反引号是转义字符，
       # Markdown 里的 `userdata/` 会被当成 Unicode 转义序列，直接把构建搞挂。
       - name: 准备 Release 说明
         shell: pwsh
         run: |
-          $v = (Get-Content VERSION -Raw).Trim()
-          $tpl = Get-Content docs/release-notes.md -Raw
-          Set-Content dist/notes.md -Value ($tpl -replace '\{VERSION\}', $v) -Encoding UTF8
-          "已生成 dist/notes.md（v$v）"
+          $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
+          $tpl = Get-Content docs/release-notes.md -Raw -Encoding UTF8
+          $sha = (git rev-parse --short HEAD).Trim()
+          $stamp = (Get-Date).ToUniversalTime().AddHours(8).ToString('yyyy-MM-dd HH:mm')
+          Set-Content dist/notes.md -Value (($tpl -replace '\{VERSION\}', $v).TrimEnd()) -Encoding UTF8
+          Add-Content dist/notes.md -Value "" -Encoding UTF8
+          Add-Content dist/notes.md -Value ("> 本包构建自 main@" + $sha + "（北京时间 " + $stamp + "）") -Encoding UTF8
+          "已生成 dist/notes.md（v$v，构建提交 $sha）"
 
       - name: 发布到 Release
+        # 手动触发时可以用 publish=false 只留 Artifacts（不想动线上 Release 时用）
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          $v = (Get-Content VERSION -Raw).Trim()
+          $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
           $tag = "v$v"
+          $head = (git rev-parse HEAD).Trim()
           # 明确只发这两个成品（排除 dist/py.zip：那是 embedded Python 的原始压缩包）
           $files = @(
             "dist/ESCAH-Offline-v$v-win64-portable.zip",
             "dist/ESCAH-Offline-v$v-update.zip"
           ) | Where-Object { Test-Path $_ }
+          if ($files.Count -lt 2) { throw "成品 zip 不全，拒绝发布" }
 
-          # 打 tag（已存在就忽略错误）
-          git tag $tag 2>$null
-          git push origin $tag 2>$null
+          # ---- tag 必须指向**这次构建用的提交** ----
+          # 以前是 `git tag $tag 2>$null`（已存在就静默失败），于是同版本重发时
+          # tag 还停在旧提交，`git checkout v1.0.4` 拿到的代码和包里的不是一份。
+          git fetch --tags --force 2>$null | Out-Null
+          $have = ""
+          $ref = git rev-parse -q --verify "refs/tags/$tag" 2>$null
+          if ($LASTEXITCODE -eq 0 -and $ref) { $have = ($ref | Out-String).Trim() }
+
+          if ($have -eq $head) {
+            Write-Host "tag $tag 已指向本次构建提交 $head"
+          } else {
+            if ($have) {
+              Write-Host "tag $tag 原来指向 $have → 改指向 $head（保证 tag 与包内容一致）"
+            } else {
+              Write-Host "新建 tag $tag → $head"
+            }
+            git tag -f $tag $head
+            if ($LASTEXITCODE -ne 0) { throw "打 tag 失败" }
+            git push origin "refs/tags/$tag" --force
+            if ($LASTEXITCODE -ne 0) { throw "推送 tag 失败" }
+          }
 
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $tag 已存在，覆盖上传附件"
+            Write-Host "Release $tag 已存在，覆盖附件并刷新说明"
             gh release upload $tag $files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "覆盖 Release 附件失败" }
+            # 说明也要刷新，否则包换了、Release 页面还是上一次的文案
+            gh release edit $tag --notes-file dist/notes.md
+            if ($LASTEXITCODE -ne 0) { throw "更新 Release 说明失败" }
           } else {
             Write-Host "创建 Release $tag"
             gh release create $tag $files --title "v$v" --notes-file dist/notes.md
+            if ($LASTEXITCODE -ne 0) { throw "发布 Release 失败" }
           }
-          if ($LASTEXITCODE -ne 0) { throw "发布 Release 失败" }
           gh release view $tag

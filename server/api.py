@@ -436,9 +436,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._json({"error": str(msg)[:600]}, code)
 
     def _body(self) -> dict:
+        # 同一个请求里可能被取多次（do_POST 统一先读一遍，路由里再取一次）。
+        # 不缓存的话第二次 read 读到 0 字节、返回空 dict，POST 参数就全没了。
+        if getattr(self, "_body_cache", None) is not None:
+            return self._body_cache
         n = int(self.headers.get("Content-Length") or 0)
         if not n:
-            return {}
+            self._body_cache = {}
+            return self._body_cache
         raw = self.rfile.read(n)
         # 只留个摘要：别把整段译文/大 JSON 塞进日志
         self._body_note = "%dB %s" % (
@@ -446,10 +451,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ctype = (self.headers.get("Content-Type") or "").lower()
         if "application/json" in ctype:
             try:
-                return json.loads(raw.decode("utf-8"))
+                self._body_cache = json.loads(raw.decode("utf-8"))
             except ValueError:
-                return {}
-        return {"_raw": raw}
+                self._body_cache = {}
+        else:
+            self._body_cache = {"_raw": raw}
+        return self._body_cache
 
     def _q(self) -> dict:
         q = urllib.parse.urlparse(self.path).query
@@ -480,6 +487,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._status = 200
         self._err_msg = ""
         self._body_note = ""
+        self._body_cache = None
 
     # ---------------- 路由
     def do_GET(self):
@@ -510,6 +518,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         t0 = time.time()
+        # 请求体**在这里统一读掉**：只要有一条 POST 路由忘了读，剩下的字节就留在
+        # keep-alive 连接里，下一个请求会被解析成 "{}GET /api/jobs" 直接 501 ——
+        # 表现为"点了按钮之后页面就不刷新进度了"，排查起来极其费劲。
+        self._body_cache = None
+        try:
+            self._body()
+        except Exception:                                        # noqa: BLE001
+            pass
         try:
             if not path.startswith("/api/"):
                 self._err("not found", 404)
@@ -606,6 +622,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json(media.upscale_plan(kinds, scale, units or None))
             except Exception as e:                             # noqa: BLE001
                 return self._err(e)
+        if path == "/api/upscale/demo":
+            # 「画质对比图」用的那一个画面（背景 + 立绘）。只读：告诉前端
+            # 比的是哪两张、各自原图/超分图地址、超分图是不是已经做好了。
+            try:
+                return self._json(media.demo_scene(force=q.get("force") == "1"))
+            except Exception as e:                             # noqa: BLE001
+                return self._err(e)
         if path == "/api/export/video/info":
             miss = videxport.missing_deps()
             return self._json({"missing": miss, "ready": not miss})
@@ -697,6 +720,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             job = jobs.submit("upscale", "图片超分", fn,
                               holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
+        if path == "/api/upscale/demo":
+            # 首次点「看超分效果对比」时，只对这一个画面的两张图做超分
+            # （背景 + 立绘，几秒～十几秒）。做完就留着了，之后点按钮直接显示。
+            _DEMO_TITLE = "画质对比图超分"
+            try:
+                sc = media.demo_scene(force=True)
+            except Exception as e:                             # noqa: BLE001
+                return self._err(e)
+            if not sc.get("ok"):
+                return self._err(sc.get("error") or "现在还没有可以对比的图片")
+            # 已经在跑（连点两下 / 关掉页面又点开）就复用同一个任务，别排两遍
+            for j in jobs.active():
+                if j.get("title") == _DEMO_TITLE:
+                    return self._json({"job": j, "scene": sc})
+            pairs = [(k, sc[k]["key"], sc[k]["src"])
+                     for k in ("back", "stand")
+                     if sc[k].get("src") and not sc[k].get("ready")]
+            if not pairs:
+                return self._json({"job": None, "scene": sc})
+            eng = media.find_engine()
+            if eng["kind"] == "none":
+                return self._err(eng["note"])
+            job = jobs.submit("upscale", _DEMO_TITLE,
+                              lambda j: media.upscale_pairs(j, pairs))
+            return self._json({"job": job.snapshot(), "scene": sc})
         if path == "/api/convert":
             b = self._body()
             q = int(b.get("quality") or paths.load_config()["webpQuality"])
@@ -797,9 +845,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             chars = [int(x) for x in (b.get("chars") or [])]
             groups = [[int(x[0]), int(x[1])] for x in (b.get("groups") or [])]
             whole = bool(b.get("whole", False))
-            # 导出 CG 要读当前装着的图；卸载同时把图删了就只能导出半套，所以也占住单元
-            hold = ([f"char_{c}" for c in chars] if chars
-                    else _installed_char_units())
+            # 导出 CG 要读当前装着的图；卸载同时把图删了就只能导出半套，所以也占住单元。
+            # 剧情 CG（groups 里带 -1/-2/-3）没有对应资源包，只占它引用的那些角色单元。
+            if groups and not chars:
+                hold = [f"char_{c}" for c in sorted({g[0] for g in groups}) if c > 0] \
+                    or _installed_char_units()
+            else:
+                hold = ([f"char_{c}" for c in chars] if chars
+                        else _installed_char_units())
             job = jobs.submit(
                 "export", "导出角色 CG", lambda j: exports.export_cg(
                     j, chars=chars or None, groups=groups or None, whole=whole),

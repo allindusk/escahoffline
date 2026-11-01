@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色 CG 查看</title>
-<link rel="stylesheet" href="assets/css/cg.css?v=1101b">
+<link rel="stylesheet" href="assets/css/cg.css?v=1102a">
 </head>
 <body>
 <div class="layout">
@@ -12,6 +12,14 @@
     <!-- 搜索框放在角色列表正上方（和播放器一致）：
          列表在左、搜索在右会让人先往右看再往左点，很别扭 -->
     <input id="q" placeholder="搜索角色 / 事件…" autocomplete="off">
+    <!-- CG 有两大类：角色 CG（384 个角色）和剧情 CG（主线/活动/其他，按剧本分组）。
+         它们是不同组的东西，不能混在一起算"全部角色"，所以上面先分范围。 -->
+    <div id="cgScope">
+      <button data-scope="char" class="on">角色</button>
+      <button data-scope="-1">主线</button>
+      <button data-scope="-2">活动</button>
+      <button data-scope="-3">其他</button>
+    </div>
     <div id="filters">
       <select id="sortBy">
         <option value="id">按角色 ID</option>
@@ -78,9 +86,9 @@
 <script src="assets/js/common.js?v=1122a"></script>
 <script src="assets/js/header.js?v=1101a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
-<script src="assets/js/cg.js?v=1101d"></script>
-<script src="assets/js/cgexport.js?v=1101a"></script>
-<script src="assets/js/disclaimer.js?v=1101a"></script>
+<script src="assets/js/cg.js?v=1103a"></script>
+<script src="assets/js/cgexport.js?v=1103a"></script>
+<script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
 </body>

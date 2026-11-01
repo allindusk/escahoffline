@@ -31,9 +31,12 @@ select,input,button{font-family:inherit}
 #sidebar{width:300px;flex-shrink:0;background:var(--bg2);
   border-right:1px solid var(--line);display:flex;flex-direction:column}
 /* 搜索命中计数：列表是可滚动的，命中结果可能多到超出可视区，
-   没有这个计数用户会以为"搜不到"（char_415 接入时就踩过） */
-#hit{flex-shrink:0;padding:0 10px 6px;font-size:14px;color:var(--fg3);
-  min-height:20px;line-height:20px}
+   没有这个计数用户会以为"搜不到"（char_415 接入时就踩过）。
+   **没搜索时必须完全收起**：原来 min-height:20px 恒定占 20px，看起来像侧栏中间
+   凭空多了一条空黑条（用户 2026-11-02 截图指出）。 */
+#hit{flex-shrink:0;padding:0;font-size:14px;color:var(--fg3);
+  min-height:0;height:0;overflow:hidden;line-height:20px}
+#hit.on,#hit.none{height:auto;min-height:20px;padding:0 10px 6px}
 #hit.on{color:var(--gold)}
 #hit.none{color:#e06c75}
 /* 剧情来源切换：角色 / 主线 / 活动 / 其他 */
@@ -51,16 +54,22 @@ select,input,button{font-family:inherit}
 .char-btn .srcTag[data-k="other"]{color:#8de0b0}
 .char-btn.on .srcTag{border-color:rgba(224,181,102,.7)}
 .advEmpty{padding:14px 10px;font-size:14px;color:var(--fg3);line-height:1.7}
-#filters{padding:7px 8px;border-bottom:1px solid var(--line);flex-shrink:0}
-#filters select{width:100%;padding:4px 6px;border-radius:5px;font-size:14px;
+/* 排序 + 资源筛选两个下拉并排一行（稀有度按钮换行到第二行） */
+#filters{padding:7px 8px;border-bottom:1px solid var(--line);flex-shrink:0;
+  display:flex;flex-wrap:wrap;gap:6px}
+#filters select{flex:1 1 130px;min-width:0;padding:4px 6px;border-radius:5px;font-size:14px;
   border:1px solid var(--line);background:var(--bg3);color:var(--fg)}
 #filters select:focus{outline:none;border-color:var(--purple)}
-.rar-row{display:flex;gap:4px;margin-top:5px}
+.rar-row{flex:1 0 100%;display:flex;gap:4px;margin-top:5px}
 .rar-row button{flex:1;border:1px solid var(--line);background:var(--bg3);
   color:var(--fg3);border-radius:5px;padding:2px 0;font-size:14px;cursor:pointer}
 .rar-row button:hover{color:var(--fg)}
 .rar-row button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
-#charList{flex:1;overflow-y:auto;padding:4px}
+/* overflow-x:hidden 是必须的：.char-btn.bnr 原来是写死 296px，加 padding 后
+   比列表宽 5px，Windows 上就会出现一条**横向滚动条**（默认样式的浅色轨道 + 深色滑块，
+   看起来就是侧栏底部多了一条"黑条+白条"，用户 2026-11-02 截图指出）。
+   宽度改成 100% 之后不再溢出，横向滚动条也就不会出现。 */
+#charList{flex:1;overflow-y:auto;overflow-x:hidden;padding:4px}
 #charList::-webkit-scrollbar{width:7px}
 #charList::-webkit-scrollbar-thumb{background:#333a4d;border-radius:4px}
 .char-btn{display:flex;align-items:center;gap:8px;
@@ -104,13 +113,28 @@ select,input,button{font-family:inherit}
   transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
-#tabs{display:flex;gap:5px;padding:6px 14px;background:var(--bg2);
-  border-bottom:1px solid var(--line);flex-shrink:0;align-items:center;flex-wrap:wrap}
-.tab{padding:3px 11px;border-radius:13px;font-size:14px;cursor:pointer;
+/* 段标签条：**一行不换行**。段数多的时候由 #tabStrip 横向滚动 + 最右边的 ◀ ▶ 翻页，
+   绝不换成两行把标题栏撑高（用户 2026-11-02 要求）。统计文字 #meta 放最左边。 */
+#tabs{display:flex;gap:6px;padding:6px 14px;background:var(--bg2);
+  border-bottom:1px solid var(--line);flex-shrink:0;align-items:center;flex-wrap:nowrap}
+#meta{flex:0 0 auto;font-size:14px;color:var(--fg3);white-space:nowrap}
+/* 段标签右对齐（用户 2026-11-02）：统计文字在最左、段标签靠右并紧挨翻页按钮。
+   margin-left:auto 把整条 strips 推向右；段数多到装不下时它自己收缩并横向滚动。 */
+#tabStrip{display:flex;gap:5px;align-items:center;flex:0 1 auto;min-width:0;
+  margin-left:auto;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:none;-ms-overflow-style:none}
+#tabStrip::-webkit-scrollbar{height:0}
+.tab{flex:0 0 auto;padding:3px 11px;border-radius:13px;font-size:14px;cursor:pointer;
   background:var(--bg3);color:var(--fg2);border:1px solid transparent}
 .tab:hover{color:var(--fg)}
 .tab.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
-#meta{margin-left:auto;font-size:14px;color:var(--fg3)}
+/* 翻页按钮：只在装不下的时候显示（#tabs.paged），装得下就不占位、不打扰 */
+.tabPg{display:none;flex:0 0 auto;padding:2px 8px;border-radius:11px;font-size:14px;
+  cursor:pointer;background:var(--bg3);color:var(--fg2);border:1px solid transparent;
+  font-family:inherit;line-height:1.4}
+.tabPg:hover{color:var(--gold);border-color:#4a3f78}
+.tabPg:disabled{opacity:.35;cursor:default;color:var(--fg3);border-color:transparent}
+#tabs.paged .tabPg{display:block}
 
 /* ---------- 舞台 ---------- */
 #stageWrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
@@ -298,9 +322,20 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #vhint{position:absolute;right:14px;bottom:8px;font-size:14px;color:var(--fg3);
   background:rgba(0,0,0,.5);padding:2px 9px;border-radius:9px;pointer-events:none}
 
-/* 底部控制条 */
-#controls{display:flex;align-items:center;gap:10px;padding:7px 16px;
-  background:var(--bg2);border-top:1px solid var(--line);flex-shrink:0}
+/* 底部控制条：三段式（左=播放 / 中=进度 / 右=参数与工具） */
+/* 窗口很窄时**换行**而不是裁掉按钮（以前 nowrap+overflow:hidden 会把右边的
+   翻译/设置直接切掉）。≥1366 的窗口一行放得下。
+   「版本 / 免责声明」那条由 disclaimer.js 直接塞进本行末尾（#dlBar.inline），
+   所以这里不用再给它留 padding。 */
+#controls{display:flex;align-items:center;gap:10px;row-gap:6px;padding:7px 16px;
+  background:var(--bg2);border-top:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+#controls .grp{display:flex;align-items:center;gap:8px;min-width:0}
+#controls .gPlay{flex:0 0 auto}
+/* basis 用 0：否则按 max-content 参与换行计算，明明放得下也会被折到第二行 */
+#controls .gProgress{flex:1 1 0;min-width:180px;gap:10px}
+/* 右侧按钮多，单独收紧一点内边距（全局 13px 是给左侧三连用的） */
+#controls .gOpt{flex:0 0 auto;gap:5px}
+#controls .gOpt button{padding:6px 10px}
 #controls button{border:none;background:var(--bg3);color:var(--fg);border-radius:6px;
   padding:6px 13px;cursor:pointer;font-size:14px;box-sizing:border-box;
   height:30px;display:inline-flex;align-items:center;justify-content:center}
@@ -312,14 +347,36 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #controls label.ctl{font-size:14px;color:var(--fg3);display:inline-flex;
   align-items:center;gap:5px;white-space:nowrap}
 #controls label.ctl input[type=checkbox]{accent-color:var(--purple)}
-#controls .kbd{font-size:14px;color:var(--fg3);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;min-width:0}
-#controls .vsep{width:1px;height:18px;background:var(--line);margin:0 4px}
+#controls .vsep{width:1px;height:18px;background:var(--line);margin:0 2px}
 #controls #btnSet{font-size:15.7px;padding:3px 10px;line-height:1.3}
-#pinfo{font-size:14px;color:var(--fg3);flex:1;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-#progress{width:120px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
-#progress>i{display:block;height:100%;width:0;background:var(--cyan)}
+/* 快捷键「?」：快捷键说明原来是一整句占半屏的字，现在收进这个圆钮的 title */
+#controls .qbtn{width:26px;padding:0;border-radius:50%;color:var(--fg3);
+  font-size:14px;font-weight:600}
+#controls .qbtn:hover{color:var(--gold)}
+
+/* 快捷键帮助卡片（点控制条最右边的 ? 弹出）。
+   用 grid + .kt-r{display:contents} 让按键列宽度自动对齐到最宽的那个。 */
+#keyTip{position:fixed;z-index:400;min-width:216px;padding:11px 13px;
+  background:#12161e;border:1px solid #3a4a5e;border-radius:10px;
+  box-shadow:0 16px 44px rgba(0,0,0,.6);font-size:14px;color:var(--fg2);
+  display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:5px;
+  align-items:center}
+#keyTip .kt-h{grid-column:1/-1;font-weight:600;color:var(--gold);margin-bottom:3px}
+#keyTip .kt-r{display:contents}
+#keyTip kbd{white-space:nowrap;text-align:center}
+#keyTip .kt-r span{color:var(--fg3)}
+/* 段信息：**不参与收缩**（否则窄窗口先被砍掉的是「46 句」），右对齐；
+   进度条自己会让位。上限 260px 兜住异常长的文本。 */
+#pinfo{flex:0 0 auto;max-width:260px;text-align:right;font-size:14px;
+  color:var(--fg3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 进度条弹性占满中间，别再用 120px 的小短条缩在角落。
+   轨道要用比控制条背景亮一点的颜色，否则深色主题下"完全看不见还剩多少"。
+   可点击跳转（seekByRatio），所以给手型光标 + 悬停加亮。 */
+#progress{flex:1 1 80px;width:auto;min-width:60px;height:6px;background:#232c3c;
+  border-radius:3px;overflow:hidden;box-shadow:inset 0 0 0 1px #2c3648;
+  cursor:pointer;transition:box-shadow .12s}
+#progress:hover{box-shadow:inset 0 0 0 1px #4a5c78}
+#progress>i{display:block;height:100%;width:0;background:var(--cyan);border-radius:3px}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--fg3);font-size:14.6px;line-height:2;text-align:center;background:#05060a}
 /* 主区域：舞台与文本列表并列，互不遮挡 */
@@ -368,6 +425,21 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   border-radius:8px 0 0 8px;padding:12px 5px;cursor:pointer;color:var(--gold);
   font-size:14px;writing-mode:vertical-rl;letter-spacing:2px;display:none}
 #hTab.show{display:block}
+/* 左侧栏收起/展开：与右侧「文本列表」同一套交互
+   (#sidebar.hide 隐藏整栏，#sTab 是贴在左边缘的竖向把手，点它重新展开) */
+#sidebar.hide{display:none}
+#sHead{display:flex;align-items:center;justify-content:space-between;
+  padding:7px 10px;font-size:14px;color:var(--gold);border-bottom:1px solid var(--line);
+  flex-shrink:0}
+#sHead button{border:none;background:var(--bg3);color:var(--fg2);border-radius:5px;
+  padding:3px 8px;cursor:pointer;font-size:14px}
+#sHead button:hover{color:var(--gold)}
+/* 左边缘把手：与右侧 #hTab 镜像（border 在右、圆角朝右） */
+#sTab{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:71;
+  background:rgba(18,22,32,.95);border:1px solid var(--line);border-left:none;
+  border-radius:0 8px 8px 0;padding:12px 5px;cursor:pointer;color:var(--gold);
+  font-size:14px;writing-mode:vertical-rl;letter-spacing:2px;display:none}
+#sTab.show{display:block}
 #dbg{position:fixed;left:0;bottom:0;z-index:98;font:14px1.4 monospace;
   color:#7fe08a;background:rgba(0,0,0,.8);padding:2px 6px;pointer-events:none;
   max-width:100%;white-space:pre}
@@ -379,10 +451,11 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
    第一行是剧情横幅（角色剧情用入口图 / 主线活动用章节横幅），第二行是标题与信息。
    原来是一个小圆头像 + 单行标题，横幅太窄看不清，也分不出是哪一部。 */
 #charList .char-btn.bnr{display:flex;flex-direction:column;align-items:stretch;
-  gap:4px;padding:6px 7px}
-/* 横幅统一用 280×81 的透明底当"画框"，原图按 81 高左对齐叠在上面：
-   宽图右侧被裁掉、窄图右侧自然透出透明 —— 不用改图就能对齐。 */
-#charList .char-btn.bnr .bnr{position:relative;display:block;width:280px;height:81px;
+  gap:4px;padding:6px 7px;width:100%;box-sizing:border-box}
+/* 横幅统一用 81 高的透明底当"画框"，原图按 81 高左对齐叠在上面：
+   宽图右侧被裁掉、窄图右侧自然透出透明 —— 不用改图就能对齐。
+   宽度跟着容器走（原来是写死 280px，外层 296px，比列表还宽 → 横向滚动条）。 */
+#charList .char-btn.bnr .bnr{position:relative;display:block;width:100%;height:81px;
   border-radius:6px;overflow:hidden;background:transparent;line-height:0;
   border:1px solid #2d3446}
 /* 图自己去边框/圆角：边框画在固定的透明画框上，宽窄不一的原图才不会各自框一个 */
@@ -392,13 +465,14 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 /* 角色剧情横幅本来就是 81 高（宽 125~298），按高对齐即可；
    主线/活动是 827×146 的宽横幅，按 81 高缩放会把右侧标题文字裁掉 ——
    那类改成按宽 280 缩放、在 81 高的画框里垂直居中。 */
-#charList .char-btn.adv .bnr img{height:auto;width:280px;top:50%;
+#charList .char-btn.adv .bnr img{height:auto;width:100%;top:50%;
   transform:translateY(-50%)}
 /* 横幅没图时（新环境还没下公共素材）用首字色块填满整个画框，
    否则 384 行都是空框，看起来像"图全裂了" */
 #charList .char-btn.bnr .bnr .ava-ph{display:flex;height:81px;align-items:center;
   justify-content:center;font-size:16.8px;color:var(--fg3);background:#141a26}
-#charList .char-btn.bnr{width:296px}
+/* 宽度跟着列表走（原来写死 296px，比列表内容区宽 5px → Windows 上出横向滚动条） */
+#charList .char-btn.bnr{width:100%;box-sizing:border-box}
 #charList .char-btn.bnr .info{display:flex;flex-direction:row;align-items:center;
   gap:7px;min-width:0}
 #charList .char-btn.bnr .info .sub{flex:0 0 auto;display:flex;gap:7px;align-items:center;
@@ -419,16 +493,33 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #bnrTip dd{margin:0;word-break:break-all}
 
 
-/* 「其他」入口分组（横幅 + 名字 + 话数 + 箭头） */
-#charList .og-head{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-top:6px;
-  border-radius:6px;background:#161c26;border:1px solid #232b36;cursor:pointer;
-  font-size:14px;color:var(--fg2)}
+/* 「其他」入口分组：**两行卡片** —— 第一行横幅（280×81 画框，跟主线/活动行同一套），
+   第二行 名字 + 话数 + 箭头。原来横幅和文字挤在一行，827×146 的入口图被压成 26px 高，
+   名字也被挤得只剩几个字（用户 2026-11-02 要求拆两行）。 */
+#charList .og-head{display:flex;flex-direction:column;align-items:stretch;gap:5px;
+  padding:6px 7px;margin-top:6px;border-radius:7px;background:#161c26;
+  border:1px solid #232b36;cursor:pointer;font-size:14px;color:var(--fg2)}
 #charList .og-head:hover{background:#1b2330;color:var(--fg)}
 #charList .og-head.open{color:var(--gold);border-color:#3a3350}
-#charList .og-head img{height:26px;border-radius:4px;flex:0 0 auto}
+/* 横幅按容器宽等比铺满（827×146 → 宽约 277、高约 49）：**不做 81 高的画框**，
+   否则上下各留 16px 黑边，17 个分组白白多占 500 多像素 */
+#charList .og-head .bnr{display:block;width:100%;border-radius:6px;overflow:hidden;
+  background:#141a26;line-height:0;border:1px solid #2d3446}
+#charList .og-head .bnr img{display:block;width:100%;height:auto;max-width:none;
+  border:0;border-radius:0}
+#charList .og-head.open .bnr{border-color:rgba(224,181,102,.7)}
+#charList .og-head .row{display:flex;align-items:center;gap:8px;min-width:0}
 #charList .og-head .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #charList .og-head .cnt{color:var(--fg3);font-size:14px;flex:0 0 auto}
 #charList .og-head .arw{color:var(--fg3);flex:0 0 auto}
-/* 话：比角色行更窄、无横幅 */
-#charList .char-btn.ep{padding:4px 8px 4px 16px;gap:6px}
-#charList .char-btn.ep .info .nm{font-size:14px}
+
+/* 话：**一行**——话名左对齐（超长省略）、句数右对齐；带边框，免得一章挨一章分不清 */
+#charList .char-btn.ep{padding:5px 8px;gap:6px;margin:0 0 3px 8px;
+  border:1px solid #1f2733;border-radius:6px;background:#121820}
+#charList .char-btn.ep:hover{border-color:#3a4a5e;background:#181f2a}
+#charList .char-btn.ep.on{border-color:rgba(224,181,102,.55);
+  background:linear-gradient(90deg,#3a2d5c,#2a2340)}
+#charList .char-btn.ep .info{flex-direction:row;align-items:center;gap:8px;min-width:0}
+#charList .char-btn.ep .info .nm{flex:1;min-width:0;font-size:14px}
+#charList .char-btn.ep .info .sub{flex:0 0 auto;white-space:nowrap;gap:6px}
+#charList .char-btn.ep .info .cpy{flex:0 0 auto}

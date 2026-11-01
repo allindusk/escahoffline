@@ -117,13 +117,48 @@ function cmpDate(a, b, asc) {
   return asc ? da.localeCompare(db) : db.localeCompare(da);
 }
 
-/* 只保留真正有 CG 的角色 */
-const withCG = [...chars.values()].filter(c => c.groups.length > 0)
+/* 只保留真正有 CG 的角色。
+   **必须剔除 -1/-2/-3 三个分类桶**：它们是"主线/活动/其他的剧情 CG"，
+   跟角色不是一回事，混进来会变成"全部角色（387）"（角色实际 384 个）。 */
+const allWithCG = [...chars.values()].filter(c => c.groups.length > 0)
   .sort((a, b) => a.id - b.id);
+const withCG = allWithCG.filter(c => !isCat(c.id));
+/* 分类桶：-1 主线 / -2 活动 / -3 其他，各自按"哪部剧情"再分组 */
+const catUnits = {};      // -1 -> [{u, title, groups:[gi], imgs}]
+for (const id of Object.keys(CATS).map(Number)) {
+  const m = new Map();
+  for (const gi of (chars.get(id) || { groups: [] }).groups) {
+    const u = GROUPS[gi].u || ('cat' + id);
+    if (!m.has(u)) m.set(u, { u, title: unitTitle(u, GROUPS[gi].k), groups: [], imgs: 0 });
+    const e = m.get(u);
+    e.groups.push(gi);
+    e.imgs += GROUPS[gi].f.length;
+  }
+  catUnits[id] = [...m.values()].sort((a, b) => advOrder(a.u) - advOrder(b.u) || a.u.localeCompare(b.u));
+}
+/** 剧情在 advindex 里的顺序（= 游戏发布顺序），拿不到就沉底 */
+function advOrder(u) {
+  const i = ADV.findIndex(a => a.key === u);
+  return i < 0 ? 99999 : i;
+}
+
+/** 剧情 key → 可读名字。advindex 里查不到时（有几个活动剧情已不在清单里）
+    退回"活动 第42话"这种从 key 推出来的名字，别直接显示 adv_event_42。 */
+function unitTitle(u, fallback) {
+  if (u && ADV_TITLE[u]) return ADV_TITLE[u];
+  const m = /^adv_(main|event|other|tutorial|op)_(\d+)$/.exec(u || '');
+  if (m) {
+    const label = { main: '主线', event: '活动', other: '其他', tutorial: '教程', op: '开场' }[m[1]];
+    return label + ' 第' + m[2] + '话';
+  }
+  return fallback || u || '未知';
+}
 
 /* ---------- 状态 ---------- */
 const PAGE = 120;        // 每次渲染的卡片数，滚动到底自动追加
-let curChar = null;      // null = 全部
+let scope = 'char';      // 'char' = 角色 CG；-1/-2/-3 = 主线/活动/其他剧情 CG
+let curChar = null;      // 角色范围下选中的角色；null = 全部
+let curUnit = null;      // 剧情范围下选中的剧情 key；null = 全部
 let keyword = '';
 let sortBy = 'id';
 /* 每部剧情的本地状态（char_N -> ready/soft-missing/missing），用来做"只看已下载" */
@@ -171,7 +206,12 @@ function thumbOf(c) {
 function renderChars() {
   const box = $('#charList');
   box.innerHTML = '';
+  if (scope === 'char') return renderCharList(box);
+  return renderCatList(box, scope);
+}
 
+/** 角色范围：384 个角色（不含 -1/-2/-3 剧情桶） */
+function renderCharList(box) {
   const all = el('div', 'char-btn all' + (curChar === null ? ' on' : ''));
   all.textContent = `全部角色（${withCG.length}）`;
   all.onclick = () => { curChar = null; renderChars(); renderGrid(); };
@@ -223,6 +263,43 @@ function renderChars() {
   }
 }
 
+/** 剧情范围（主线/活动/其他）：侧栏列的是"哪部剧情"，不是角色 */
+function renderCatList(box, id) {
+  let units = catUnits[id] || [];
+  const totalG = units.reduce((a, u) => a + u.groups.length, 0);
+  const totalI = units.reduce((a, u) => a + u.imgs, 0);
+
+  const all = el('div', 'char-btn all' + (curUnit === null ? ' on' : ''));
+  all.textContent = `全部（${units.length} 部 / ${totalG} 组 / ${totalI} 张）`;
+  all.onclick = () => { curUnit = null; renderChars(); renderGrid(); };
+  box.appendChild(all);
+
+  const dlf = ($('#dlFilter') || {}).value || '';
+  if (dlf === 'have') units = units.filter(u => u.groups.some(gi => groupHave(GROUPS[gi])));
+  if (dlf === 'miss') units = units.filter(u => u.groups.some(gi => !groupHave(GROUPS[gi])));
+
+  if (keyword) {
+    const k = keyword.toLowerCase();
+    units = units.filter(u => u.title.toLowerCase().includes(k) || u.u.toLowerCase().includes(k));
+  }
+  if (sortBy === 'count') {
+    units = [...units].sort((a, b) => b.imgs - a.imgs || advOrder(a.u) - advOrder(b.u));
+  } else if (sortBy === 'name') {
+    units = [...units].sort((a, b) => a.title.localeCompare(b.title, 'ja'));
+  }
+  // 其余排序（ID / 日期）在剧情范围下没意义，按游戏发布顺序
+
+  for (const u of units) {
+    const d = el('div', 'char-btn' + (curUnit === u.u ? ' on' : ''));
+    d.innerHTML =
+      `<span class="ava-ph">${u.title.trim().slice(0, 1)}</span>` +
+      `<span class="info"><span class="nm">${u.title}</span>` +
+      `<span class="sub">${u.groups.length} 组 / ${u.imgs} 张</span></span>`;
+    d.onclick = () => { curUnit = u.u; renderChars(); renderGrid(); };
+    box.appendChild(d);
+  }
+}
+
 /* ---------- 卡片墙 ---------- */
 /* 某一组算不算"已下载"。占位判断和筛选共用这一份口径：
  *   · 分类桶（-1/-2/-3，主线/活动/其他的 CG）挂在 adv_* 单元上（``g.u``），
@@ -239,9 +316,17 @@ function groupHave(g) {
 function renderGrid() {
   visible = [];
   const dlf = ($('#dlFilter') || {}).value || '';
+  const bucket = scope === 'char' ? null : +scope;   // 剧情范围：只看这一个分类桶
   for (let gi = 0; gi < GROUPS.length; gi++) {
     const g = GROUPS[gi];
-    if (curChar !== null && g.c !== curChar) continue;
+    if (bucket === null) {
+      // 角色范围：不混剧情 CG（-1/-2/-3 那三桶）
+      if (isCat(g.c)) continue;
+      if (curChar !== null && g.c !== curChar) continue;
+    } else {
+      if (g.c !== bucket) continue;
+      if (curUnit !== null && (g.u || '') !== curUnit) continue;
+    }
     // 已下载 / 未下载筛选：侧栏一直按它筛，卡片墙以前根本不看这个下拉，
     // 于是"只看未下载"时左侧空了、墙上还是满的，同一个控件两套答案
     if (dlf === 'have' && !groupHave(g)) continue;
@@ -250,6 +335,7 @@ function renderGrid() {
       const k = keyword.toLowerCase();
       const ch = chars.get(g.c);
       const hit = g.k.toLowerCase().includes(k) ||
+        (ADV_TITLE[g.u] || '').toLowerCase().includes(k) ||
         (ch && (ch.name.toLowerCase().includes(k) || ch.zh.toLowerCase().includes(k)));
       if (!hit) continue;
     }
@@ -275,10 +361,14 @@ function renderGrid() {
   }
 
   const totalImgs = visible.reduce((s, gi) => s + GROUPS[gi].f.length, 0);
-  $('#barInfo').innerHTML =
-    `<b>${visible.length}</b> 组 · <b>${totalImgs}</b> 张` +
-    (curChar !== null ? ` · 角色 <b>${(chars.get(curChar) || {}).name || curChar}</b>` : '');
-  $('#hdrSub').textContent = ` ${GROUPS.length} 组 / ${GROUPS.reduce((s, g) => s + g.f.length, 0)} 张`;
+  let who = '';
+  if (scope === 'char') {
+    if (curChar !== null) who = ` · 角色 <b>${(chars.get(curChar) || {}).name || curChar}</b>`;
+  } else {
+    who = ` · ${CATS[scope]}` + (curUnit ? ` · <b>${unitTitle(curUnit)}</b>` : '');
+  }
+  $('#barInfo').innerHTML = `<b>${visible.length}</b> 组 · <b>${totalImgs}</b> 张` + who;
+  updateExportBtn();
 
   const grid = $('#grid');
   grid.innerHTML = '';
@@ -310,7 +400,7 @@ function appendCards() {
   for (const gi of next) {
     const g = GROUPS[gi];
     const ch = chars.get(g.c) || { name: CATS[g.c] || ('ID ' + g.c), zh: '' };
-    const unit = g.u ? (ADV_TITLE[g.u] || g.u) : '';
+    const unit = g.u ? unitTitle(g.u, g.k) : '';
     const card = el('div', 'card');
     // 该角色没下载 → 缩略图必然 404，直接给占位底色（点开会有提示）
     const have = groupHave(g);
@@ -403,6 +493,49 @@ function closeLB() {
   lb.g = -1;
 }
 
+/* ---------- 范围切换（角色 CG / 主线·活动·其他剧情 CG） ---------- */
+/* 两个范围能选的排序不一样：剧情范围按"角色 ID / 实装日期"排没意义，给的是剧情顺序 */
+const SORT_OPTS = {
+  char: [['id', '按角色 ID'], ['name', '按名字（あいうえお）'], ['count', '按 CG 数'],
+    ['date-desc', '实装日期 新→旧'], ['date-asc', '实装日期 旧→新']],
+  cat: [['id', '按剧情顺序'], ['name', '按剧情名'], ['count', '按 CG 数']],
+};
+function rebuildSort() {
+  const so = $('#sortBy');
+  if (!so) return;
+  const list = scope === 'char' ? SORT_OPTS.char : SORT_OPTS.cat;
+  so.innerHTML = list.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  so.value = list.some(([v]) => v === sortBy) ? sortBy : 'id';
+  sortBy = so.value;
+  const dl = $('#dlFilter');
+  if (dl) dl.querySelector('option[value=""]').textContent =
+    scope === 'char' ? '全部角色' : '全部剧情';
+}
+
+function setScope(v) {
+  scope = v;
+  curChar = null;
+  curUnit = null;
+  document.querySelectorAll('#cgScope button').forEach(b =>
+    b.classList.toggle('on', b.dataset.scope === String(v)));
+  rebuildSort();
+  renderChars();
+  renderGrid();
+}
+document.querySelectorAll('#cgScope button').forEach(b => {
+  b.onclick = () => setScope(b.dataset.scope === 'char' ? 'char' : +b.dataset.scope);
+});
+/* 导出按钮在两个范围下都能用：角色走 {chars}，剧情 CG 走 {groups:[[桶id,组序号]]}
+   （服务端 exports.export_cg 本来就支持 groups 参数，以前只是前端没接）。 */
+function updateExportBtn() {
+  const btn = $('#btnExportCg');
+  if (!btn) return;
+  btn.disabled = false;
+  btn.title = scope === 'char'
+    ? '把当前角色（未选角色时为全部角色）的 CG 打包成 zip'
+    : `把${CATS[scope]}${curUnit ? '「' + unitTitle(curUnit) + '」' : '（当前筛选结果）'}打包成 zip`;
+}
+
 /* ---------- 事件绑定 ---------- */
 $('#lbClose').onclick = closeLB;
 $('#lbPrev').onclick = e => { e.stopPropagation(); moveImg(-1); };
@@ -426,6 +559,7 @@ try {
   const s = localStorage.getItem(SORT_KEY);
   if (s) { sortBy = s; $('#sortBy').value = s; }
 } catch (e) { /* file:// 下可能被禁 */ }
+rebuildSort();   // 按当前范围（默认角色）重建下拉，顺手纠正存下来的旧值
 
 $('#sortBy').onchange = e => {
   sortBy = e.target.value;
@@ -491,20 +625,53 @@ document.addEventListener('keydown', e => {
     if (e.key === 'ArrowUp') { moveGroup(-1); e.preventDefault(); return; }
     return;
   }
-  if (e.key === 'Escape' && curChar !== null) { curChar = null; renderChars(); renderGrid(); }
+  if (e.key === 'Escape' && (curChar !== null || curUnit !== null)) {
+    curChar = null; curUnit = null; renderChars(); renderGrid();
+  }
 });
 
 /* ---------- 对外接口（导出 CG 用） ---------- */
 window.CGPAGE = {
-  /** 当前筛选的角色 id（null = 全部） */
-  cur: () => curChar,
+  /** 当前筛选的角色 id（null = 全部角色 / 当前是剧情范围） */
+  cur: () => (scope === 'char' ? curChar : null),
+  /** 当前范围：'char' 或 -1/-2/-3 */
+  scope: () => scope,
   /** 当前可见的组索引，导出时用得上 */
   visible: () => [...visible],
+  /** 剧情范围导出用：[[桶 id, 组序号], …]（服务端按这个精确挑组） */
+  groupsForExport: () => visible.map(gi => [GROUPS[gi].c, gi]),
+  /** 当前可见的 组数 / 张数 */
+  visibleCounts: () => ({
+    groups: visible.length,
+    imgs: visible.reduce((a, gi) => a + GROUPS[gi].f.length, 0),
+  }),
+  scopeName: () => (scope === 'char' ? '角色 CG' : CATS[scope]),
+  /** 角色范围下所有有 CG 的角色 id（384 个；显式给列表，别让服务端 whole 把剧情桶也带上） */
+  allCharIds: () => withCG.map(c => c.id),
   counts: () => ({ chars: withCG.length, total: withCG.reduce((a, c) => a + c.total, 0) }),
   nameOf: id => (chars.get(id) || {}).name || String(id),
 };
 
+/* 总量改为各范围按钮的悬停提示（不再写在标题区 #hdrSub）。
+ * 各范围计数是静态的，启动时一次性算好 */
+function updateScopeTitles() {
+  document.querySelectorAll('#cgScope button').forEach(b => {
+    const sc = b.dataset.scope;
+    if (sc === 'char') {
+      const g = withCG.reduce((a, c) => a + c.groups.length, 0);
+      const i = withCG.reduce((a, c) => a + c.total, 0);
+      b.title = `${withCG.length} 个角色 · ${g} 组 / ${i} 张`;
+    } else {
+      const units = catUnits[+sc] || [];
+      const g = units.reduce((a, u) => a + u.groups.length, 0);
+      const i = units.reduce((a, u) => a + u.imgs, 0);
+      b.title = `${units.length} 部剧情 · ${g} 组 / ${i} 张`;
+    }
+  });
+}
+
 /* ---------- 启动 ---------- */
+updateScopeTitles();
 renderChars();
 renderGrid();
 /* ?g=N 表示打开当前筛选结果中的第 N 组（从 0 开始） */

@@ -58,14 +58,15 @@ except Exception as _e:                          # noqa: BLE001
 
 def fetch(entries, workers: int = 48, desc: str = "bundle",
           skip: bool = True, pause_event=None, job=None,
-          done_offset: int = 0) -> dict:
+          done_offset: int = 0, count_skipped: bool = True) -> dict:
     """下载一批资源包（``entries`` 是清单条目 dict 列表）。默认跳过已完成的。
 
     ``pause_event`` 由任务传入，用来支持「暂停 / 继续」。
+    ``count_skipped`` 见 :func:`server.cdn.net.fetch_many`。
     """
     return fetch_many(entries, workers=workers, desc=desc, skip_existing=skip,
                       pause_event=pause_event, job=job,
-                      done_offset=done_offset)
+                      done_offset=done_offset, count_skipped=count_skipped)
 
 
 def read_bundle(path: str) -> bytes:
@@ -232,26 +233,103 @@ PROLOGUES = [
 ]
 
 
+#: ``_0`` 段里的「〇名札（角色）」说话人前缀 —— 标题显示时要剥掉
+NAME_TAG_RE = re.compile(r"^[〇○]?名札（[^）]{1,24}）\s*")
+
+
+def _squash(s: str) -> str:
+    """去掉引号与空白，只用于「这几句是不是同一个标题的分解」的判断。"""
+    return re.sub(r"[「」『』\s]", "", s)
+
+
+#: 「UTF-8 被当 cp932 读」的乱码特征字（正常日文里几乎不会连出现）
+MOJIBAKE_RE = re.compile(r"[縲繧繝繿譁隸隹]")
+
+
+def _repair_mojibake(s: str) -> str:
+    """官方数据里个别标题行是双重编码的乱码，能还原就还原，还原不了给空串。
+
+    实测只有**两处**（``adv_main_47_0`` / ``adv_event_95_0`` 的标题行），其余
+    2000+ 句正文都正常，属于官方自己的录入问题，不是解析错。原始字节丢了、
+    还原出来还带 ``?`` 的，就返回空串让调用方回退（这两条的标题已在
+    ``data/story_titles.json`` 里按封面横幅重新识读）。
+    """
+    if not MOJIBAKE_RE.search(s):
+        return s
+    try:
+        fixed = s.encode("cp932").decode("utf-8", "replace")
+    except Exception:                                          # noqa: BLE001
+        return ""
+    if "\ufffd" in fixed or "?" in fixed:
+        return ""
+    return fixed
+
+
 def _part_title(parts: list) -> str:
-    """``_0`` 段只有一句时，那句就是**章节/活动的标题**（数据里真的有文本）。
+    """``_0`` 段（标题段）里的文本就是**章节/活动的标题**。
+
+    三条实测事实（都拿原始剧本包核对过）：
+
+    1. 剧本 JSON 只有 9 个字段（FileName / 各类 Images / Methods…），**没有
+       title 字段** —— 文字标题只可能来自 ``_0`` 段里 ``ShowMessage`` 的那句。
+    2. 大量包**根本没有** ``_0`` 段（如 ``bundle_scenarioscript_event_41`` 里只有
+       ``_1``..``_8``），或者 ``_0`` 段存在但 ``Methods`` 为空（``main_24_0``）。
+       这些章节的标题在官方数据里是**图片**（活动 logo / 章节横幅 / 剧本内
+       ``ShowStand`` 的 ``GroupId="タイトルロゴ"``），没有任何可读文本，
+       不是提取漏了 —— 拿不出来就是拿不出来。
+    3. 有 ``_0`` 段的包里台词**不一定只有一句**：有的标题由多名角色各念半句
+       （「魔女が西向きゃ」「尾は東」），最后一句是拼好的完整标题；有的带
+       「〇名札（角色）」前缀（event_79）。以前要求 ``== 1`` 句，这类标题被整体
+       丢掉，于是侧栏退回「活动剧情 第N话」。
 
     例：``adv_main_1_0`` = 「超昂戦士、始動！」、``adv_event_1_0`` = 「別次元から来たあのこ」。
-    以前把它当"空占位段"跳过，于是只能靠横幅图看标题、还以为标题没有文本。
     """
-    if len(parts) < 2:
+    if len(parts) < 2:          # 单段包：那段是正文，不是标题段
         return ""
     p0 = next((p for p in parts if str(p.get("file", "")).endswith("_0")), None)
     if not p0:
         return ""
-    msgs = [" ".join(str(m.get("Message") or "").split())
-            for m in p0.get("methods") or [] if m.get("Method") == "ShowMessage"]
-    if len(msgs) != 1 or len(msgs[0]) < 2:
+    raw = [" ".join(str(m.get("Message") or "").split())
+           for m in p0.get("methods") or [] if m.get("Method") == "ShowMessage"]
+    uniq = []
+    for msg in raw:
+        t = _repair_mojibake(NAME_TAG_RE.sub("", msg).strip())
+        if len(t) >= 2 and t not in uniq:
+            uniq.append(t)
+    if not uniq:
         return ""
-    return msgs[0].strip("「」\"' ")
+    if len(uniq) > 1:
+        # 只接受「拆句」：最长那句必须把其它几句都包含进去（拼好的完整标题），
+        # 否则就是正文（比如 adv_other_1_0 是 26 句人気投票说明），不能当标题。
+        longest = max(uniq, key=len)
+        flat = _squash(longest)
+        if len(uniq) > 3 or len(longest) > 60 or \
+                any(_squash(u) not in flat for u in uniq if u is not longest):
+            return ""
+        uniq = [longest]
+    # 「A」「B」→ A B：多人各念半句的标题拼起来要留个分隔，别粘成一坨
+    return re.sub(r"」\s*「", " ", uniq[0]).strip("「」\"' ")
+
+
+def load_story_titles() -> dict:
+    """读「封面横幅上识读出来的标题」表（``data/story_titles.json``）。
+
+    为什么需要这张表：官方剧本包里没有 title 字段，很多章节连 ``_0`` 标题段都没有，
+    标题只存在于封面横幅图的美术字里（见 :func:`_part_title`）。识读结果放在这里，
+    与剧本包解耦 —— 改标题不用重新下载/解析资源。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "story_titles.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("titles") or {}
+    except Exception:                                          # noqa: BLE001
+        return {}
 
 
 def sync_advindex() -> int:
     """把已接入的非角色剧情汇总成 ``web/data/advindex.js``（侧栏列表数据源）。"""
+    titles = load_story_titles()
     rows = []
     for fn in os.listdir(DATA):
         if not select.PAT_ADV_FILE.fullmatch(fn):
@@ -280,8 +358,9 @@ def sync_advindex() -> int:
             "kind": kind,
             # tutorial / op 无编号，no = None（前端不显示「第X话」）
             "no": n,
-            # 序章这类需要有自定义标题（如「第2部 序章」）：数据里写了就用
-            "title": d.get("title") or _part_title(d["parts"]),
+            # 优先级：剧本自带的 title（序章这类）> 封面图识读表 > ``_0`` 段台词。
+            # 识读表放中间：它只在剧本完全没有标题时补位，不会盖掉官方文本。
+            "title": d.get("title") or titles.get(key) or _part_title(d["parts"]),
             # 排序用：序章插在部与部之间（0 / 23.5 / 44.5），普通章节就是章号
             "order": d.get("order") if d.get("order") is not None else (
                 n if isinstance(n, (int, float)) else 0),

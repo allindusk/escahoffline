@@ -130,10 +130,17 @@ def fetch_bundle(name: str, size: int, dest: str | None = None,
 
 def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
                skip_existing: bool = True, pause_event=None,
-               job=None, done_offset: int = 0) -> dict:
+               job=None, done_offset: int = 0,
+               count_skipped: bool = True) -> dict:
     """并发下载一批 ``(name, size[, dest])``。
 
     返回 ``{"ok": n, "new": n, "skip": n, "fail": [(name, err)], "bytes": n}``。
+
+    ``count_skipped``：已存在（本次跳过）的包，其字节是否计入 ``job.bytes_done``。
+    默认算 —— 任务条上的"已下 / 总量"必须是**全量里的已完成部分**，只算本次新下的
+    就会出现「70.9% · 8.40 MB / 893.01 MB」：用户补全过一次，几百个包已在磁盘上，
+    一个字节都不用下，却按 893 MB 的分母显示。调用方若已自己预扫过一遍
+    （见 ``install.install_base``），传 False 避免重复累加。
     """
     tasks = []
     for it in items:
@@ -151,8 +158,22 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
 
     stat = {"ok": 0, "new": 0, "skip": len(tasks) - len(left), "fail": [], "bytes": 0}
     total = sum(t[1] for t in left)
+    skipped_bytes = sum(t[1] for t in tasks) - total
     _log(f"[{desc}] 共 {len(tasks)} 个，需下载 {len(left)} 个 / "
          f"{total / 1048576:.1f} MB，并发 {workers}")
+
+    # 进度上报放在"没有要下的包就返回"之前：全部已存在的阶段（补全时很常见）
+    # 也得把跳过的量记进去，否则字节进度会一直停在上一阶段的数字上。
+    if job is not None:
+        if count_skipped and skipped_bytes:
+            job.bytes_done += skipped_bytes
+        # 总量只增不减：公共素材那边是"五类之和"（一次给全），
+        # 单部剧情则是分批 fetch，分母要跟着这批的包数长大，
+        # 否则会出现 "done 28 / total 2" 这种分母比分子还小的进度。
+        need_total = done_offset + len(tasks)
+        if job.total < need_total:
+            job.set_total(need_total, "个")
+        job.progress(done=done_offset + stat["skip"])
 
     if not left:
         return stat
@@ -169,16 +190,11 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
 
         futs = {ex.submit(_worker, n, s, d): (n, s) for n, s, d in left}
         # 逐包上报：不报的话前端进度条永远 0%，用户只能看网卡猜
-        if job is not None:
-            # 已经有总量（公共素材会是"三类之和"）就别覆盖，只接着往上加
-            if not job.total:
-                job.set_total(done_offset + len(left), "个")
-            job.progress(done=done_offset)
         for fut in cf.as_completed(futs):
             n, sz = futs[fut]
             done += 1
             if job is not None:
-                job.progress(done=done_offset + done)
+                job.progress(done=done_offset + stat["skip"] + done)
             try:
                 _, is_new, nbytes = fut.result()
                 if job is not None:

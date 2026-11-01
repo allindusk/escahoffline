@@ -39,6 +39,10 @@ window.DISCLAIMER = (() => {
    避免用户误以为 "v1.0.0" 是声明的版本号 */
 #dlBar{position:fixed;right:12px;bottom:10px;z-index:10100;
   display:flex;align-items:center;gap:8px}
+/* 播放器页：这条被塞进底部控制条末尾（见 footer()），改成流式布局。
+   固定定位会正好压在控制条最右边的按钮上（实测重叠 161px，那些按钮点不到）。 */
+#dlBar.inline{position:static;right:auto;bottom:auto;z-index:auto;
+  margin-left:auto;flex:0 0 auto}
 #appVer{font-size:14px;color:#4d5f74;background:rgba(10,16,24,.7);
   border:1px solid #1a2836;border-radius:7px;padding:4px 9px;
   letter-spacing:.3px;user-select:text}
@@ -68,7 +72,15 @@ window.DISCLAIMER = (() => {
     bar.innerHTML =
       '<span id="appVer" title="程序版本号">v—</span>' +
       '<div id="dlFoot" title="使用条款与版权声明（点开可再看一遍）">免责声明</div>';
-    document.body.appendChild(bar);
+    // 播放器页底部有 #controls：直接放进控制条右端，别浮在上面挡按钮
+    // （fixed 定位时它正好压在 翻译 / ⚙ / ? 上）。其它页面没有控制条，仍挂 body 走右下角。
+    const host = document.getElementById('controls');
+    if (host) {
+      bar.className = 'inline';
+      host.appendChild(bar);
+    } else {
+      document.body.appendChild(bar);
+    }
 
     bar.querySelector('#dlFoot').onclick = () => show();
     // 版本号从本地服务取（项目版本，不是声明版本）；纯静态打开时显示 v—

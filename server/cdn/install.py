@@ -447,6 +447,28 @@ def install_base(job=None, workers: int = 48,
         sz = sum(int(e.get("size") or 0) for e in ents)
         plan.append({"tag": "banner", "label": "剧情横幅", "ents": ents, "sz": sz})
 
+    # ---- 进度条的起点：先把"磁盘上已有、这次不会重下"的字节扫进来 ----
+    # 必须是全量已完成字节，而不是本次新下的字节：用户第二次点「补全」时，
+    # 背景/音乐/音效大半已经在本地（一个字节都不用传），而总量仍是全量 893 MB。
+    # 以前只累加新下的量，于是任务条上出现「70.9% · 8.40 MB / 893.01 MB」——
+    # 8 MB 按总量算才 1%，两个数字互相打脸（用户就是这么报的）。
+    _have = 0
+    if job is not None and job.bytes_total:
+        for step in plan:
+            for e in step["ents"]:
+                name = str(e.get("bundle_name") or "")
+                sz = int(e.get("size") or 0)
+                if not name or not sz:
+                    continue
+                try:
+                    if not net.need_download(net.bundle_path(name), sz):
+                        _have += sz
+                except OSError:
+                    pass
+        if _have:
+            job.bytes_done = max(job.bytes_done, float(_have))
+            job.log(f"本地已有 {_have / 1048576:.0f} MB 不会重下，进度从这部分开始算")
+
     # ---- 阶段一：下载全部资源包 ----
     done_base = 0
     for step in plan:
@@ -457,10 +479,17 @@ def install_base(job=None, workers: int = 48,
         _collect(step["label"],
                  stages.fetch(ents, workers, f"{step['label']}素材", skip=True,
                               pause_event=_pe(job), job=job,
-                              done_offset=done_base))
+                              done_offset=done_base,
+                              # 上面已经预扫过"已存在"的字节，别再重复累加
+                              count_skipped=False))
         done_base += len(ents)
 
     # ---- 阶段二：逐个类别解包 ----
+    # 百分比分两段：下载 0–60%、解包 60–100%。解包（尤其背景）常常比下载还久，
+    # 如果仍按下载字节算，下载一完进度条就顶到 100% 干等十几分钟，像卡死了。
+    if job is not None:
+        job.phase(60.0, 40.0, total=max(1, len(plan)), unit="类")
+        job.progress(done=0)
     for step in plan:
         tag = step["tag"]
         ents = step["ents"]
@@ -483,7 +512,10 @@ def install_base(job=None, workers: int = 48,
             out["bytes"] += sz
         elif tag == "avatar":
             n_ok = n_bad = 0
-            for e in ents:
+            for i, e in enumerate(ents, 1):
+                # 384 个头像逐个导出要好几分钟，中途得让任务条有话说
+                if job is not None and (i % 20 == 0 or i == len(ents)):
+                    job.progress(message=f"解包角色头像 {i}/{len(ents)}…")
                 name = str(e.get("bundle_name") or "")
                 tail = name.rsplit("_", 1)[-1]
                 try:
@@ -523,6 +555,10 @@ def install_base(job=None, workers: int = 48,
                     job.log(f"   章节横幅导出失败：{e}")
             out["banner"] = len(ents)
             out["bytes"] += sz
+
+        # 每解包完一类推一格（解包阶段百分比由"类"决定，见上面 job.phase）
+        if job is not None:
+            job.progress(add=1, message=f"{step['label']} 已就绪")
 
     # 记录本次各类的清单包数，下次刷新清单据此判断"有没有新增"
     # **有失败就不写**：写了等于"这一类已经跟上清单"，下次刷新就不会自动补，

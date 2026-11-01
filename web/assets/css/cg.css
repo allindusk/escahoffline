@@ -29,6 +29,13 @@ nav a.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 /* min-width:0 是必需的：<select> 的默认 min-width 是内容宽度（auto），
    两个下拉在 252px 的侧栏里会被撑到「按名字（あいうえお）」那么宽，
    于是整排控件横向溢出、压在右边的卡片墙上。 */
+/* 范围切换：角色 CG / 主线·活动·其他剧情 CG（两类不同组，不能混算） */
+#cgScope{display:flex;gap:4px;padding:6px 8px 0;flex-shrink:0}
+#cgScope button{flex:1;border:1px solid var(--line);background:var(--bg3);
+  color:var(--fg3);border-radius:5px;padding:3px 0;font-size:14px;cursor:pointer;
+  font-family:inherit}
+#cgScope button:hover{color:var(--fg)}
+#cgScope button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 #filters{padding:7px 8px;border-bottom:1px solid var(--line);flex-shrink:0;display:flex;gap:5px;
   overflow:hidden}
 #filters select{flex:1;min-width:0;padding:4px 6px;border-radius:5px;font-size:14px;font-family:inherit;
@@ -68,6 +75,13 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #bar .sizes span{font-size:14px;color:var(--fg3);margin-right:2px}
 #bar .sz{border:1px solid var(--line);background:var(--bg3);color:var(--fg3);
   border-radius:5px;padding:2px 10px;font-size:14px;cursor:pointer;font-family:inherit}
+/* 导出按钮：和设置页 / 翻译面板的主按钮同一套观感（蓝底白字）。
+   原来这里写了 button.primary，但 cg.css 里没有这条规则，落成了浏览器默认灰按钮。 */
+#bar button.primary{background:#2b6ea8;color:#eaf6ff;border:1px solid #4b96d4;
+  border-radius:8px;padding:4px 14px;font-size:14px;font-weight:600;cursor:pointer;
+  font-family:inherit}
+#bar button.primary:hover{filter:brightness(1.15)}
+#bar button.primary:disabled{opacity:.5;cursor:default;filter:none}
 #bar .sz:hover{color:var(--fg)}
 #bar .sz.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 #grid{flex:1;overflow-y:auto;padding:14px 16px 40px;

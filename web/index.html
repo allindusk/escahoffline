@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1101a">
+<link rel="stylesheet" href="assets/css/player.css?v=1106a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 </head>
 <body>
@@ -144,6 +144,8 @@
   </div>
 <div class="layout">
   <aside id="sidebar">
+    <div id="sHead"><span data-i18n="sidebar.title">剧情列表</span>
+      <button id="sToggle" title="收起/展开左侧栏（[）">收起 ◂</button></div>
     <input id="search" placeholder="角色名 / ID…" autocomplete="off" data-i18n-ph="search.ph">
     <div id="srcRow">
       <button data-src="char" class="on" data-i18n="src.char">角色</button>
@@ -173,7 +175,7 @@
     <div id="charList"></div>
   </aside>
   <main>
-    <div id="tabs"><div id="meta"></div></div>
+    <div id="tabs"><div id="meta"></div><div id="tabStrip"></div><button id="tabPrev" class="tabPg" data-d="-1" title="上一组段">◀</button><button id="tabNext" class="tabPg" data-d="1" title="下一组段">▶</button></div>
     <div id="mainBody">
     <div id="stageWrap">
       <div id="dbgFit"></div>
@@ -198,34 +200,47 @@
       <div id="hPager"></div>
     </aside>
     </div>
+    <!-- 控制条按"用得多 → 用得少、从中间往两边"排：
+         左 = 播放三连（重播/播放暂停/下一段），主体操作挨在一起；
+         中 = 进度条 + 段信息（都是"现在到哪了"，必须贴在一起，进度条弹性占满）；
+         右 = 播放参数（倍速/自动）→ 显示（对话框/全屏）→ 工具（翻译/设置/快捷键）。
+         原来进度条只有 120px 缩在最右角落、段信息占着中间半屏，非常别扭。 -->
     <div id="controls">
-      <button id="btnRestart" data-i18n="ctrl.restart">⏮ 重播</button>
-      <button id="btnPlay" class="primary">▶ 播放</button>
-      <button id="btnNext" data-i18n="ctrl.nextPart">下一段 ⏭</button>
-      <span class="vsep"></span>
-      <label class="ctl" data-i18n="ctrl.speed">倍速
-        <select id="speed">
-          <option value="0.5">0.5x</option>
-          <option value="1" selected>1x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-          <option value="3">3x</option>
-        </select>
-      </label>
-      <label class="ctl"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
-      <span class="vsep"></span>
-      <span class="kbd" data-i18n="ctrl.hotkeys" data-i18n-title="ctrl.hotkeys">空格/P/点画面 暂停 · 回车/↓→ 下一句 · ↑← 上一句 · 按住 K 快进</span>
-      <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
-      <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
-      <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
-      <button id="btnTrans" title="导出本剧情原文给 AI 翻译，或把译好的 txt 导回">翻译</button>
-      <div id="progress"><i></i></div>
-      <div id="pinfo"></div>
+      <div class="grp gPlay">
+        <button id="btnRestart" data-i18n="ctrl.restart">⏮ 重播</button>
+        <button id="btnPlay" class="primary">▶ 播放</button>
+        <button id="btnNext" data-i18n="ctrl.nextPart">下一段 ⏭</button>
+      </div>
+      <div class="grp gProgress">
+        <div id="progress"><i></i></div>
+        <div id="pinfo"></div>
+      </div>
+      <div class="grp gOpt">
+        <label class="ctl" data-i18n="ctrl.speed">倍速
+          <select id="speed">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+          </select>
+        </label>
+        <label class="ctl"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
+        <span class="vsep"></span>
+        <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
+        <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
+        <button id="btnTrans" title="导出本剧情原文给 AI 翻译，或把译好的 txt 导回">翻译</button>
+        <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
+        <!-- 快捷键提示原来是一整句占半屏的文字，把进度条挤到了角落；改成最右边的「?」，悬停看全句 -->
+        <button id="btnKeys" class="qbtn" data-i18n-title="ctrl.hotkeys"
+                title="空格/P/点画面 暂停 · 回车/↓→ 下一句 · ↑← 上一句 · 按住 K 快进">?</button>
+      </div>
     </div>
     <div id="dbg">调试</div>
   </main>
 </div>
 <div id="hTab" data-i18n="history.tab">文本列表</div>
+<div id="sTab" data-i18n="sidebar.tab">剧情列表</div>
 <div id="toast"></div>
 <script src="data/names.js"></script>
 <script src="data/charmeta.js"></script>
@@ -246,10 +261,10 @@
 <script src="assets/js/header.js?v=1101a"></script>
 <script src="assets/js/i18n.js?v=1102a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
-<script src="assets/js/player.js?v=1101d"></script>
+<script src="assets/js/player.js?v=1105a"></script>
 <script src="assets/js/transui.js?v=1120a"></script>
 <script src="assets/js/tour.js?v=1101c"></script>
-<script src="assets/js/disclaimer.js?v=1101a"></script>
+<script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */

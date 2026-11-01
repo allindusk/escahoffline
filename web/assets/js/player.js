@@ -1026,9 +1026,12 @@ function replayOne(m) {
 let seeking = false;
 
 /* 跳到某条台词：重建画面状态后从该句继续播 */
-async function seekTo(midx) {
+async function seekTo(midx, opt) {
   if (seeking || !ST.methods.length) return;
   if (midx == null || midx < 0 || midx >= ST.methods.length) return;
+  /* opt.keepPaused：跳过去但**不自动播**（暂停时点进度条用）。
+     其它调用方（方向键、句子跳转）不传，行为不变。 */
+  const resume = !(opt && opt.keepPaused);
   seeking = true;
   try {
     haltLoop();                    // 只杀循环与语音，保留 BGM
@@ -1071,10 +1074,17 @@ async function seekTo(midx) {
 
     ST.idx = midx;
     ST.curMsgIdx = midx;          // 立刻更新：连按方向键才不会被当成「还在原句」
-    ST.running = true;
-    setPlayBtn(true);
+    ST.running = resume;
+    setPlayBtn(resume);
     if (ST.lineMap && ST.lineMap[midx] != null) focusLine(ST.lineMap[midx]);
     updateProgress();
+    if (!resume) {
+      // 暂停着点进度条：把那一句的文本贴上去，画面停在这儿等人点播放
+      const m = ST.methods[midx];
+      if (m && m.Method === 'ShowMessage') $('#msgText').textContent = lineText(m);
+      seeking = false;
+      return;
+    }
     await wait(50);
     continueLoop();
   } finally {
@@ -1184,7 +1194,13 @@ function updateInfo() {
   const p = S.data?.parts[ST.part];
   if (!p) return;
   const n = ST.methods.filter(x => x.Method === 'ShowMessage').length;
-  $('#pinfo').textContent = `${p.file} · 第 ${ST.part + 1}/${S.data.parts.length} 段 · ${n} 句`;
+  const human = `第 ${ST.part + 1}/${S.data.parts.length} 段 · ${n} 句`;
+  // 控制条上只显示「第 N/M 段 · K 句」（玩家要的是这个）；
+  // 剧本内部文件名（adv_op_4 这种）塞进 title，需要排查时悬停就能看到。
+  // 这样进度条能占满中间，窄窗口也不会把「46 句」挤掉。
+  const pinfo = $('#pinfo');
+  pinfo.textContent = human;
+  pinfo.title = `${p.file} · ${human}`;
 }
 
 /* ================= 句子级跳转 / 暂停 / 快进 ================= */
@@ -1395,6 +1411,77 @@ function resetSettings() {
   toast('已恢复默认设置');
 }
 $('#btnSet').onclick = () => { const s = $('#settings'); s.hidden = !s.hidden; };
+
+/* ================= 进度条点击跳转 ================= */
+/* 像视频播放器那样：点哪跳哪。比例先换算成"第几条指令"，再**吸附到它前面最近的一句台词**
+   —— 必须落在 ShowMessage 的下标上，因为 seekTo 是从头重放到那一条来重建画面的。 */
+function seekByRatio(ratio) {
+  if (!S.data || !ST.methods.length) return;
+  const list = lineIdxList();
+  if (!list.length) return;
+  const r = Math.max(0, Math.min(1, ratio));
+  const target = Math.round(r * (ST.methods.length - 1));
+  let pick = list[0];
+  for (const i of list) { if (i <= target) pick = i; else break; }
+  seekTo(pick, { keepPaused: !ST.running });
+}
+
+(() => {
+  const bar = $('#progress');
+  if (!bar) return;
+  bar.title = L10N.t('ctrl.seek', '点击进度条跳到对应位置');
+  bar.onclick = e => {
+    const r = bar.getBoundingClientRect();
+    if (!r.width) return;
+    seekByRatio((e.clientX - r.left) / r.width);
+  };
+})();
+
+/* ================= 快捷键帮助（最右边的 ? 按钮） ================= */
+/* 原来这个按钮只有 title，**没有 onclick**，用户点了没反应。
+   现在点一下弹一张小卡片，把播放器实际绑定的快捷键列清楚。 */
+const KEY_HELP = [
+  ['空格 / P', 'keys.play', '暂停 · 继续'],
+  ['回车 / ↓ / →', 'keys.next', '下一句'],
+  ['↑ / ←', 'keys.prev', '上一句'],
+  ['按住 K', 'keys.rush', '快进'],
+  ['点画面', 'keys.click', '暂停 · 继续'],
+  ['S', 'keys.set', '显示设置'],
+  ['F', 'keys.fs', '全屏'],
+  ['L', 'keys.lang', '切换语言'],
+  ['Esc', 'keys.esc', '关闭浮层'],
+];
+
+function closeKeyHelp() {
+  const t = $('#keyTip');
+  if (t) t.remove();
+}
+
+function toggleKeyHelp() {
+  if ($('#keyTip')) { closeKeyHelp(); return; }
+  const btn = $('#btnKeys');
+  const tip = document.createElement('div');
+  tip.id = 'keyTip';
+  tip.innerHTML = `<div class="kt-h">${L10N.t('keys.title', '快捷键')}</div>`
+    + KEY_HELP.map(([k, key, def]) =>
+      `<div class="kt-r"><kbd>${esc(k)}</kbd><span>${esc(L10N.t(key, def))}</span></div>`).join('');
+  document.body.appendChild(tip);
+  const b = btn.getBoundingClientRect();
+  tip.style.right = Math.max(8, Math.round(innerWidth - b.right)) + 'px';
+  tip.style.bottom = Math.round(innerHeight - b.top + 8) + 'px';
+}
+
+if ($('#btnKeys')) {
+  $('#btnKeys').onclick = e => { e.stopPropagation(); toggleKeyHelp(); };
+  // 点别处 / 滚轮 / 窗口变化就收起，别让它一直挂着挡画面
+  document.addEventListener('click', e => {
+    if (!$('#keyTip')) return;
+    if (e.target.closest && e.target.closest('#keyTip')) return;
+    if (e.target.id === 'btnKeys') return;
+    closeKeyHelp();
+  });
+  window.addEventListener('resize', closeKeyHelp);
+}
 if ($('#setClose')) {
   $('#setClose').onclick = () => { $('#settings').hidden = true; };
 }
@@ -1625,16 +1712,46 @@ function refreshSelection() {
   });
 }
 
+/* 侧栏重渲染的**统一滚动保护**（beginScroll / endScroll 一对）。
+   为什么要有这个东西：`box.innerHTML = ''` 会把 scrollTop 归零，而侧栏有三条渲染路径
+   （角色 / 主线活动 / 「其他」分组）。以前每条各写一遍保护，新加一条就忘一次 ——
+   于是"点一下就跳回顶部"反复出现：2026-10-26 修过「点播放跳顶」（给角色和主线加了保护），
+   2026-11-01 新写的「其他」分组视图又直接写了 `box.scrollTop = 0`，2026-11-02 用户再次反馈。
+   现在只留这一个入口：key 变了（搜索词/分类切换）才回顶部，否则原地不动；
+   传 anchorSel 就按"被点的那个元素"做锚点，展开/收起后它仍在视野里的同一位置。 */
+function beginScroll(box, key, anchorSel) {
+  const same = (beginScroll._k === key);
+  beginScroll._k = key;
+  const sc = { top: same ? box.scrollTop : 0, gap: null };
+  if (same && anchorSel) {
+    const el = box.querySelector(anchorSel);
+    if (el) sc.gap = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+  }
+  return sc;
+}
+
+function endScroll(box, sc, anchorSel) {
+  if (sc.gap !== null && anchorSel) {
+    const el = box.querySelector(anchorSel);
+    if (el) {
+      const now = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      box.scrollTop += (now - sc.gap);
+      return;
+    }
+  }
+  box.scrollTop = sc.top;
+}
+
 function renderSidebar(filter = '') {
   const box = $('#charList');
   if (!box) return;
-  // 同一批内容（过滤条件没变）重渲染时保留滚动位置，避免"一闪回到顶部"
-  const keepTop = (renderSidebar._f === filter) ? box.scrollTop : 0;
-  renderSidebar._f = filter;
-  box.innerHTML = '';
   const flt = $('#filters');
   if (flt) flt.style.display = SRC === 'char' ? '' : 'none';   // 排序/稀有度只对角色有意义
+  // 非角色列表各自由 renderAdvList / renderOtherGroups 负责清空与还原滚动，
+  // 这里**不能**先清空，否则它们读到的 scrollTop 已经是 0，等于强制回顶部
   if (SRC !== 'char') { renderAdvList(filter); return; }
+  const sc = beginScroll(box, 'char|' + filter);
+  box.innerHTML = '';
   const f = filter.trim().toLowerCase();
   const sel = SET.rarSel ? SET.rarSel.split(',') : [];
   // 「已下载 / 未下载」筛选：和安装列表、CG 页同一套状态口径
@@ -1745,7 +1862,7 @@ function renderSidebar(filter = '') {
     };
     box.appendChild(d);
   });
-  box.scrollTop = keepTop;
+  endScroll(box, sc);
 }
 
 /** 侧栏用的「封面横幅」路径。
@@ -1813,16 +1930,25 @@ function avatarCands(id) {
 const ADV_BATCH = 45;
 let advAll = [], advCursor = 0;
 
-/** 侧栏「其他」：16 个入口分组 → 展开成话。
+/** 侧栏「其他」：16 个游戏入口分组 + 投票说明 + 未归类（新剧情）→ 展开成话。
     数据来自 window.__OTHER_EPS：[{no,name,eps:[{k,i,t,n,c}]}]，
-    一条话 = 包 key + 第 i 段（不拆文件，播放时跳段）。 */
+    一条话 = 包 key + 第 i 段（不拆文件，播放时跳段）。
+    t 现在是游戏里的话名（来襲/退場 そのN、周年、愚人节…），不再是首句截断。
+    no<=0 的两组（0 投票说明 / -1 未归类）没有游戏横幅，靠 hasBnr 自动跳过。 */
 const OTHER_OPEN = new Set();      // 展开的入口号（内存态，刷新后默认全收起）
 
-function renderOtherGroups(box, filter = '') {
+function renderOtherGroups(box, filter = '', opt = {}) {
   const f = (filter || '').trim().toLowerCase();
   const groups = window.__OTHER_EPS || [];
+
+  /* 滚动位置：同一过滤条件下重渲染（展开/收起某一组）必须留在原位。
+     以前这里直接 `box.scrollTop = 0`，于是"点分组就跳回顶部"——现在走统一保护，
+     并以**被点的那个分组头**为锚点：展开/收起后它仍在视野里的同一位置。 */
+  const anchor = opt.anchor || null;
+  const anchorSel = anchor ? `.og-head[data-key="${anchor}"]` : null;
+  const sc = beginScroll(box, 'other|' + f, anchorSel);
+
   box.innerHTML = '';
-  box.scrollTop = 0;
 
   groups.forEach(g => {
     const eps = f
@@ -1835,24 +1961,22 @@ function renderOtherGroups(box, filter = '') {
     const head = document.createElement('div');
     head.className = 'og-head' + (open ? ' open' : '');
     head.dataset.key = 'etc_' + (g.no ?? '?');
-    // 横幅里已经写着 RAID BOSS / 拡域戦，标题里就不重复了，省出宽度给后半段
-    const shortName = g.name.replace(/^RAID BOSS\s*/, '').replace(/^拡域戦\s*/, '拡域 ');
-    // 入口横幅也是解包产物：没下过公共素材就别请求（否则「其他」一展开就一片 404）
-    const hasBnr = !!g.no && imgLayer().banners;
+    // 横幅里已经写着 RAID BOSS / 広域戦，标题里就不重复了，省出宽度给后半段
+    const shortName = g.name.replace(/^RAID BOSS\s*/, '').replace(/^広域戦\s*/, '広域 ');
+    // 入口横幅也是解包产物：没下过公共素材就别请求（否则「其他」一展开就一片 404）。
+    // 只用正数入口号：0=投票说明、-1=未归类（新剧情），这两个没有游戏横幅。
+    const hasBnr = g.no > 0 && imgLayer().banners;
+    // 两行：第一行横幅（280×81 画框，跟主线/活动行同一套），第二行名字 + 话数 + 箭头
     head.innerHTML =
-      (hasBnr ? `<img alt="" loading="lazy" src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
-        + ` onerror="this.style.display='none'">` : '')
-      + `<span class="nm">${esc(shortName)}</span>`
+      (hasBnr ? `<span class="bnr"><img alt="" loading="lazy"`
+        + ` src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
+        + ` onerror="this.closest('.bnr').style.display='none'"></span>` : '')
+      + `<span class="row"><span class="nm">${esc(shortName)}</span>`
       + `<span class="cnt">${eps.length}</span>`
-      + `<span class="arw">${open ? '▾' : '▸'}</span>`;
-    if (hasBnr) bindTip(head, () => `<img src="${esc(imgSrc(`media/img/story/etc_${g.no}.webp`))}"`
-      + ` alt="" onerror="this.style.display='none'">`
-      + `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
-      + `<dl><dt>入口</dt><dd>etc_${g.no}</dd>`
-      + `<dt>话数</dt><dd>${g.eps.length}</dd></dl>`);
+      + `<span class="arw">${open ? '▾' : '▸'}</span></span>`;
     head.onclick = () => {
       if (OTHER_OPEN.has(g.no)) OTHER_OPEN.delete(g.no); else OTHER_OPEN.add(g.no);
-      renderOtherGroups(box, filter);
+      renderOtherGroups(box, filter, { anchor: head.dataset.key });
     };
     box.appendChild(head);
 
@@ -1863,6 +1987,7 @@ function renderOtherGroups(box, filter = '') {
       d.className = 'char-btn ep' + (on ? ' on' : '');
       d.dataset.key = e.k;
       d.dataset.part = e.i;
+      // 一行：话名左对齐（超长省略）＋ 句数右对齐 ＋ 复制
       d.innerHTML = `<span class="info"><span class="nm">${esc(e.t)}</span>`
         + `<span class="sub">${e.m ? `<span>#${e.i + 1}</span>` : ''}`
         + `<span>${e.n} 句</span></span>`
@@ -1885,13 +2010,24 @@ function renderOtherGroups(box, filter = '') {
   const extra = ADV.filter(a => a.kind === 'tutorial' || a.kind === 'op')
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f));
   if (extra.length) {
+    // 这一组也是可折叠的（以前写死 open 又没有 onclick，点了没反应）。
+    // 用伪入口号 'tuto' 存展开态，跟其它分组一样默认收起。
+    const openT = OTHER_OPEN.has('tuto') || !!f;
     const head = document.createElement('div');
-    head.className = 'og-head open';
-    head.innerHTML = `<span class="nm">教程 / 开场</span>`
-      + `<span class="cnt">${extra.length}</span><span class="arw">▾</span>`;
+    head.className = 'og-head' + (openT ? ' open' : '');
+    head.dataset.key = 'tuto';
+    head.innerHTML = `<span class="row"><span class="nm">${L10N.t('other.tuto', '教程 / 开场')}</span>`
+      + `<span class="cnt">${extra.length}</span>`
+      + `<span class="arw">${openT ? '▾' : '▸'}</span></span>`;
+    head.onclick = () => {
+      if (OTHER_OPEN.has('tuto')) OTHER_OPEN.delete('tuto'); else OTHER_OPEN.add('tuto');
+      renderOtherGroups(box, filter, { anchor: 'tuto' });
+    };
     box.appendChild(head);
-    extra.forEach(a => box.appendChild(advItem(a)));
+    if (openT) extra.forEach(a => box.appendChild(advItem(a)));
   }
+
+  endScroll(box, sc, anchorSel);
 
   const total = groups.reduce((a, g) => a + g.eps.length, 0) + extra.length;
   const hit = $('#hit');
@@ -1941,8 +2077,7 @@ function renderAdvList(filter = '') {
   }
 
   // 过滤条件没变时保留滚动位置（否则切语言/刷新下载状态都会跳回顶部）
-  const keepTop = (renderAdvList._f === filter) ? box.scrollTop : 0;
-  renderAdvList._f = filter;
+  const sc = beginScroll(box, 'adv|' + SRC + '|' + filter);
   box.innerHTML = '';
   advCursor = 0;
   if (!advAll.length) {
@@ -1955,7 +2090,7 @@ function renderAdvList(filter = '') {
     return;
   }
   appendAdvChunk();
-  box.scrollTop = keepTop;
+  endScroll(box, sc);
 }
 
 /** 追加下一批（滚动到底部时由 #charList 的 scroll 事件调用） */
@@ -2161,14 +2296,14 @@ function transStats() {
 }
 
 function renderTabs() {
-  const t = $('#tabs');
-  t.querySelectorAll('.tab').forEach(e => e.remove());
+  const strip = $('#tabStrip') || $('#tabs');
+  strip.querySelectorAll('.tab').forEach(e => e.remove());
   S.data.parts.forEach((p, i) => {
     const d = document.createElement('div');
     d.className = 'tab' + (i === ST.part ? ' on' : '');
     d.textContent = L10N.t('meta.part', `第 ${i + 1} 段`, { n: i + 1 });
     d.onclick = () => playPart(i);
-    t.appendChild(d);
+    strip.appendChild(d);
   });
   const total = S.data.parts.reduce((a, p) =>
     a + p.methods.filter(m => m.Method === 'ShowMessage').length, 0);
@@ -2186,7 +2321,45 @@ function renderTabs() {
   $('#meta').textContent = meta;
   updateCnt();
   updateBanner();
+  fitTabs(true);
 }
+
+/** 段标签条自适应：装得下就一排放平；装不下就横向滚动 + 在最右边亮出 ◀ ▶ 翻页。
+    **绝不换行把标题栏撑高**（用户 2026-11-02 明确要求）。
+    scrollToActive=true 时把当前段滚进视野（切段/跳段后调用）。 */
+function fitTabs(scrollToActive) {
+  const t = $('#tabs'), s = $('#tabStrip');
+  if (!t || !s) return;
+  const over = s.scrollWidth > s.clientWidth + 2;
+  t.classList.toggle('paged', over);
+  const prev = $('#tabPrev'), next = $('#tabNext');
+  if (prev) prev.disabled = s.scrollLeft <= 1;
+  if (next) next.disabled = s.scrollLeft >= s.scrollWidth - s.clientWidth - 1;
+  // 当前段可能被挤到可视区外（切段/翻页后），自动带进视野
+  if (scrollToActive) {
+    const on = s.querySelector('.tab.on');
+    if (on) {
+      const r = on.getBoundingClientRect(), sr = s.getBoundingClientRect();
+      if (r.left < sr.left) s.scrollLeft -= (sr.left - r.left) + 8;
+      else if (r.right > sr.right) s.scrollLeft += (r.right - sr.right) + 8;
+    }
+  }
+}
+
+/* 翻页按钮：只在 #tabs.paged（装不下）时由 CSS 显示 */
+(() => {
+  const s = $('#tabStrip');
+  const prev = $('#tabPrev'), next = $('#tabNext');
+  if (!s || !prev || !next) return;
+  const page = d => {
+    s.scrollLeft += d * Math.max(120, s.clientWidth * 0.8);
+    fitTabs();
+  };
+  prev.onclick = () => page(-1);
+  next.onclick = () => page(1);
+  s.addEventListener('scroll', () => fitTabs(), { passive: true });
+  window.addEventListener('resize', () => fitTabs());
+})();
 
 /** 当前剧情的横幅图路径。
     主线/活动/其他的章节标题在游戏里本身就是图（topic_*，导出成 main_N/event_N），
@@ -2227,17 +2400,19 @@ function updateBanner() {
   $('#storyName').textContent = storyTitle(S.key);
 }
 
-/** 顶部标题旁的总量：随侧栏来源切换 */
+/** 总量改为各剧情分类按钮的悬停提示（不再写在标题区）。
+ *  每个分类的计数是静态的，所以一次性给四个按钮都算好 */
 function updateCnt() {
-  const el = $('#hdrSub');
-  if (!el) return;
-  if (SRC === 'char') {
-    el.textContent = L10N.t('cnt.char', `${INDEX.length} 个角色`, { n: INDEX.length });
-  } else {
-    const kinds = ADV_MENU[SRC] || [SRC];
-    const n = ADV.filter(a => kinds.includes(a.kind)).length;
-    el.textContent = L10N.t('cnt.adv', `${n} 部剧情`, { n });
-  }
+  document.querySelectorAll('#srcRow button').forEach(b => {
+    const src = b.dataset.src;
+    if (src === 'char') {
+      b.title = L10N.t('cnt.char', `${INDEX.length} 个角色`, { n: INDEX.length });
+    } else {
+      const kinds = ADV_MENU[src] || [src];
+      const n = ADV.filter(a => kinds.includes(a.kind)).length;
+      b.title = L10N.t('cnt.adv', `${n} 部剧情`, { n });
+    }
+  });
 }
 
 /* ================= 语言切换（日文 ↔ 中文） =================
@@ -2265,6 +2440,7 @@ function refreshForLang() {
       ? L10N.t('history.expand', '展开 ◂')
       : L10N.t('history.collapse', '收起 ▸');
   }
+  updateSidebarToggleText();              // 左侧栏开合按钮文案同样跟随语言
   if (ST.curMsgIdx != null && ST.methods[ST.curMsgIdx]) {
     // 正在播：整句重放（连带语音）；暂停中：直接把画面上的文字换掉
     if (ST.running) seekTo(ST.curMsgIdx);
@@ -2318,12 +2494,33 @@ $('#hToggle').onclick = () => {
   localStorage.setItem('escah_hist', opened ? '1' : '0');
 };
 $('#hTab').onclick = () => $('#hToggle').click();
+/* 左侧栏收起/展开：与右侧文本列表同一套交互 */
+function updateSidebarToggleText() {
+  const st = $('#sToggle');
+  if (!st) return;
+  const opened = !$('#sidebar').classList.contains('hide');
+  st.textContent = opened ? L10N.t('sidebar.collapse', '收起 ◂')
+    : L10N.t('sidebar.expand', '展开 ▸');
+}
+$('#sToggle').onclick = () => {
+  const s = $('#sidebar');
+  s.classList.toggle('hide');
+  const opened = !s.classList.contains('hide');
+  document.body.classList.toggle('sideOpen', opened);
+  $('#sTab').classList.toggle('show', !opened);
+  updateSidebarToggleText();
+  fitStage();
+  localStorage.setItem('escah_sidebar', opened ? '1' : '0');
+};
+$('#sTab').onclick = () => $('#sToggle').click();
 $('#speed').onchange = e => { ST.speed = parseFloat(e.target.value) || 1; };
 $('#auto').onchange = e => { ST.auto = e.target.checked; };
 document.addEventListener('keydown', e => {
   // Esc 关设置面板：关闭按钮的提示里写着「（Esc）」，但这里以前压根没有
   // Escape 分支 —— 提示是假的。放在输入框过滤**之前**，焦点在滑杆上也能关。
   if (e.code === 'Escape' || e.key === 'Escape') {
+    const kt = $('#keyTip');
+    if (kt) { e.preventDefault(); kt.remove(); return; }
     const st = $('#settings');
     if (st && !st.hidden) {
       e.preventDefault();
@@ -2352,6 +2549,7 @@ document.addEventListener('keydown', e => {
     case 'KeyL': e.preventDefault(); switchLang(); break;   // L = 切换语言
     case 'KeyS': $('#btnSet').click(); break;
     case 'KeyF': e.preventDefault(); toggleFullscreen(); break; // F = 全屏
+    case 'BracketLeft': $('#sToggle').click(); break;           // [ = 收起/展开左侧栏
     case 'KeyK': setRush(true); break;              // K = 快进（按住）
     case 'KeyD': {
       const d = $('#dbg');
@@ -2406,6 +2604,7 @@ updateLangBtn();                      // 按钮先显示当前语言（不等 ui
 L10N.ready.then(() => {               // ui.json 到位后再刷一遍静态文案
   L10N.applyDom();
   updateLangBtn();
+  updateSidebarToggleText();
   setPlayBtn(ST.running);
   if (S.data) renderTabs();
 });
@@ -2416,6 +2615,16 @@ renderSidebar();
   document.body.classList.toggle('histOpen', open);
   $('#history').classList.toggle('hide', !open);
   $('#hTab').classList.toggle('show', !open);
+})();
+// 恢复左侧栏展开状态（?collapse=side|hist|both 测试钩子可强制收起，与 ?autoplay 同套约定）
+(() => {
+  const qc = new URLSearchParams(location.search).get('collapse');
+  const forceHide = qc === 'side' || qc === 'both';
+  const open = !forceHide && localStorage.getItem('escah_sidebar') !== '0';
+  document.body.classList.toggle('sideOpen', open);
+  $('#sidebar').classList.toggle('hide', !open);
+  $('#sTab').classList.toggle('show', !open);
+  updateSidebarToggleText();
 })();
 fitStage();
 updateCnt();

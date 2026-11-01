@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""把「其他」拆成"话"，并生成 `web/data/othereps.js`（播放器侧栏用）。
+"""生成 `web/data/othereps.js`（播放器侧栏「其他」的分组清单）。
 
-思路
-----
+分组与话名**不再靠关键词猜**，全部来自 tools/other_taxonomy.py 的硬编码映射
+（依据用户在游戏里抄下来的三张表，见那个模块的文档）。
+
 **不拆数据文件**：`adv_other_N.js` 原样保留，侧栏的一条"话"指向
 「哪个包 + 第几段」，播放时先加载包再跳到那一段。
 这样 PACKSTATE 的下载状态、语音/图片映射全都不受影响。
-
-一话的判定与 tools/classify_other.py 一致：
-* 1 段包 / 2 段包 → 一话（2 段是前篇+后篇，播放器里就是两个段标签）
-* ≥6 段包 → 合集，每段一话
 
 用法：
     python tools/build_other_episodes.py
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sys
@@ -24,49 +22,64 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-from classify_other import ENTRIES, episodes, build_class_index, classify  # noqa: E402
+from other_taxonomy import (  # noqa: E402
+    DATA, ENTRIES, ORDER, messages, plan, read_js, verify,
+)
 
-DATA = os.path.join(ROOT, "web", "data")
+CACHE = {}
+
+
+def pack(no):
+    if no not in CACHE:
+        CACHE[no] = read_js(os.path.join(DATA, f"adv_other_{no}.js"))["parts"]
+    return CACHE[no]
+
+
+def cast_of(part, k=3):
+    """该段出场最多的立绘组（用来做悬停提示里的「主要人物」）。"""
+    c = collections.Counter(
+        str(m["GroupId"]) for m in part["methods"]
+        if m.get("GroupId") and m.get("Method") == "ShowStand"
+        and str(m["GroupId"]) != "タイトルロゴ")
+    return [n for n, _ in c.most_common(k)]
 
 
 def main() -> int:
-    cls = build_class_index()
-    rows = episodes()
-    for r in rows:
-        r["entry"], r["why"] = classify(r, cls)
-        r.pop("_text", None)
-
-    # 分组：入口号升序，未分类放最后
-    rows.sort(key=lambda r: (r["entry"] is None, r["entry"] or 0, r["pack"], r["ep"]))
+    rows, parts, bad = verify()
+    if bad:
+        print("分类表自检失败，已中止：")
+        for b in bad:
+            print("  -", b)
+        return 1
 
     groups = []
-    seen = {}
-    for r in rows:
-        g = r["entry"]
-        if g not in seen:
-            seen[g] = {"no": g, "name": ENTRIES.get(g, "未分类") if g else "未分类",
-                       "eps": []}
-            groups.append(seen[g])
-        seen[g]["eps"].append({
-            # 数据文件始终是整包（adv_other_<N>），播放时再跳到第 i 段
-            "k": f"adv_other_{r['pack']}",
-            "i": r["ep"],
-            "t": r["first"][:28] or f"第{r['ep'] + 1}段",
-            "n": r["lines"],
-            # 1 = 合集包里的一话（侧栏显示 #N）；0 = 独立一话（2 段包算一话）
-            "m": 1 if r.get("_collection") else 0,
-            "c": (r["cast"] or [""])[0],
-        })
+    for entry in ORDER:
+        rs = [r for r in rows if r[2] == entry]
+        if not rs:
+            continue
+        eps = []
+        for no, i, _e, title in rs:
+            p = pack(no)[i]
+            eps.append({
+                # 数据文件始终是整包（adv_other_<N>），播放时再跳到第 i 段
+                "k": f"adv_other_{no}",
+                "i": i,
+                "t": title,
+                "n": len(messages(p)),
+                "c": (cast_of(p) or [""])[0],
+            })
+        groups.append({"no": entry, "name": ENTRIES[entry], "eps": eps})
 
-    out = groups
     p = os.path.join(DATA, "othereps.js")
-    with open(p, "w", encoding="utf-8") as f:
-        f.write("window.__OTHER_EPS=" + json.dumps(out, ensure_ascii=False,
-                                                   separators=(",", ":")) + ";")
-    total = sum(len(g["eps"]) for g in out)
-    print(f"写出 {os.path.relpath(p, ROOT)}：{len(out)} 组 / {total} 话")
-    for g in out:
-        print(f"  etc_{g['no'] if g['no'] else '?'} {g['name']} —— {len(g['eps'])} 话")
+    with open(p, "w", encoding="utf-8", newline="\n") as f:
+        f.write("window.__OTHER_EPS=" + json.dumps(groups, ensure_ascii=False,
+                                                  separators=(",", ":")) + ";")
+
+    total = sum(len(g["eps"]) for g in groups)
+    print(f"写出 {os.path.relpath(p, ROOT)}：{len(groups)} 组 / {total} 话")
+    for g in groups:
+        print(f"  etc_{g['no']:<4} {g['name']:<26} {len(g['eps']):>3} 话"
+              f"  （首话：{g['eps'][0]['t']}）")
     return 0
 
 

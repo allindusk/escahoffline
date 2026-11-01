@@ -136,13 +136,18 @@ def _unique_path(base: str, ext: str = ".zip") -> str:
 
 
 # ---------------------------------------------------------------- CG 导出
+#: cgmap 里的负数 id 是**剧情 CG 的分类桶**（不是角色）。导出时要给它们人类可读的名字，
+#: 否则 zip 里会出现「角色-1」这种文件夹。
+CG_CAT = {-1: "主线剧情CG", -2: "活动剧情CG", -3: "其他剧情CG"}
+
+
 def export_cg(job, chars: list[int] | None = None,
               groups: list[list[int]] | None = None,
               whole: bool = False) -> dict:
-    """导出角色 CG 为 zip。
+    """导出 CG 为 zip（角色 CG 和剧情 CG 都支持）。
 
     ``chars``  角色 id 列表（None = 全部有 CG 的角色）
-    ``groups`` 精确到事件组：[charId, groupIndex] 的列表（可选）
+    ``groups`` 精确到事件组：[charId, groupIndex] 的列表（剧情 CG 走这条，charId 是 -1/-2/-3）
     ``whole``  True 表示忽略筛选导出全部
     """
     cgmap = _load_js(os.path.join(paths.DATA, "cgmap.js"))
@@ -150,7 +155,7 @@ def export_cg(job, chars: list[int] | None = None,
     base = media.load_overlay("base")
     x2 = media.load_overlay("x2")
 
-    picked: list[tuple[int, str, list[str]]] = []
+    picked: list[tuple[int, str, list[str], str]] = []
     for gi, g in enumerate(cgmap):
         cid = g.get("c")
         if groups and not whole:
@@ -158,9 +163,10 @@ def export_cg(job, chars: list[int] | None = None,
                 continue
         elif chars and not whole and cid not in chars:
             continue
-        picked.append((cid, g.get("k") or f"group{gi}", g.get("f") or []))
+        picked.append((cid, g.get("k") or f"group{gi}", g.get("f") or [],
+                       g.get("u") or ""))
 
-    total = sum(len(f) for _, _, f in picked)
+    total = sum(len(f) for _, _, f, _u in picked)
     if job is not None:
         job.set_total(total)
         job.set_items(total)
@@ -169,27 +175,38 @@ def export_cg(job, chars: list[int] | None = None,
 
     # zip 名字用角色名，别再用 cg_20261029_xxx 这种看不出是谁的
     from . import names as nameutil
-    ids = sorted({cid for cid, _k, _f in picked})
+
+    def owner(cid):
+        """负数 id → 「活动剧情CG」；正数 → 角色名。"""
+        return CG_CAT.get(cid) or nameutil.of(cid)
+
+    ids = sorted({cid for cid, _k, _f, _u in picked})
     if len(ids) == 1:
-        tag = nameutil.of(ids[0]) + "_CG"
+        # 剧情桶本身就叫「活动剧情CG」，别再拼 _CG
+        tag = owner(ids[0]) + ("" if ids[0] < 0 else "_CG")
     elif len(ids) <= 3:
-        tag = "、".join(nameutil.of(c) for c in ids) + "_CG"
+        tag = "、".join(owner(c) for c in ids) + "_CG"
     else:
-        tag = f"{nameutil.of(ids[0])}等{len(ids)}个_CG"
+        tag = f"{owner(ids[0])}等{len(ids)}个_CG"
     out = _unique_path(nameutil.safe(tag, 70))
 
     written = missing = 0
     names = _safe_names(cgmap)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as z:
-        for gi, (cid, gname, files) in enumerate(picked):
+        for gi, (cid, gname, files, unit) in enumerate(picked):
             if job is not None and job.cancelled:
                 break
-            base_nm = nameutil.safe(names.get(cid) or nameutil.of(cid))
-            # 只有真的两个角色同名时才退回 id 区分（正常情况直接用名字）
-            if len(ids) > 1 and \
-                    sum(1 for c in ids if nameutil.of(c) == nameutil.of(cid)) > 1:
-                base_nm += f"_{cid}"
-            folder = f"{base_nm}/{_san(gname)}"
+            if cid in CG_CAT:
+                # 剧情 CG：按「活动剧情CG/活动 第16话/组名」分层，别出现「角色-2」
+                folder = f"{CG_CAT[cid]}/{_san(unit_title(unit) if unit else gname)}" \
+                         f"/{_san(gname)}"
+            else:
+                base_nm = nameutil.safe(names.get(cid) or nameutil.of(cid))
+                # 只有真的两个角色同名时才退回 id 区分（正常情况直接用名字）
+                if len(ids) > 1 and \
+                        sum(1 for c in ids if nameutil.of(c) == nameutil.of(cid)) > 1:
+                    base_nm += f"_{cid}"
+                folder = f"{base_nm}/{_san(gname)}"
             for f in files:
                 if job is not None and job.cancelled:
                     break

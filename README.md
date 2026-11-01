@@ -53,7 +53,7 @@
 > **国内下载慢？** GitHub Release 落到 `objects.githubusercontent.com`，实测本机直连
 > 只有 **0.7 MB/s**（而且还时不时握手失败），套一层反代能快一个数量级。
 > 把原链接**整个粘在反代域名后面**就行，例如：
-> `https://gh-proxy.org/https://github.com/allindusk/escahoffline/releases/download/v1.0.4/ESCAH-Offline-v1.0.4-win64-portable.zip`
+> `https://gh-proxy.org/https://github.com/allindusk/escahoffline/releases/download/v1.0.5/ESCAH-Offline-v1.0.5-win64-portable.zip`
 >
 > 程序自己取 GitHub 的东西（更新包、更新检查、角色信息）时，固定按这个顺序用线路，
 > **哪条有响应就用哪条、不测速**：

@@ -56,6 +56,12 @@ class Job:
         self.bytes_done = 0.0
         self.items_total = 0
         self.items_done = 0
+        # 阶段百分比映射（都用"百分点"）：
+        # percent = pct_base + 本阶段内部进度(0–100) × pct_span / 100。
+        # 下载 + 解包这类"两段耗时"的任务靠它把解包也画进进度条，
+        # 否则下载一到 100% 就冻在那里十几分钟（用户会当成卡死）。
+        self.pct_base = 0.0
+        self.pct_span = 100.0
         self.detail: dict = {}
         self.created = time.time()
         self.started = 0.0
@@ -84,6 +90,27 @@ class Job:
 
     def set_items(self, n: int) -> None:
         self.items_total = int(n)
+
+    def phase(self, base: float, span: float, total: float | None = None,
+              unit: str = "", keep_bytes: bool = False) -> None:
+        """切到下一个阶段：把本阶段的内部进度映射到 ``base``~``base+span``。
+
+        典型用法是「下载 0–60%、解包 60–100%」：只按下载字节算，下载完成就把
+        进度条顶到 100%，而解包往往比下载还久，用户看到的是"100% 却一直不动"。
+
+        新阶段默认不再按字节算（``keep_bytes=False``）：上一阶段的字节已经满了，
+        留着会让百分比永远顶在 100%；清掉之后前端也不再显示那条 "893 MB / 893 MB"。
+        """
+        self.pct_base = float(base)
+        self.pct_span = float(span)
+        if not keep_bytes:
+            self.bytes_total = 0.0
+        if total is not None:
+            self.set_total(total, unit)
+            # 新阶段从 0 起算：上一阶段的 done 已经"溢出"（10/2），
+            # 不归零会让这个阶段的百分比一上来就是 100%。
+            self.done = 0.0
+        self._sample()
 
     def progress(self, done: float | None = None, add: float = 0.0,
                  message: str | None = None, **detail) -> None:
@@ -201,6 +228,11 @@ class Job:
         """
         if self.state in ("done", "failed", "cancelled") or self.paused:
             return 0.0
+        # 没有字节口径的阶段（job.phase() 会清掉 bytes_total）不报字节速度：
+        # 否则解包阶段会拿"已下总字节 / 已用时间"算出一个假的网速，
+        # 而那时根本没有在下载。
+        if not self.bytes_total:
+            return 0.0
         dt = (self.ended or time.time()) - (self.started or self.created)
         if dt < 1 or self.bytes_done <= 0:
             return 0.0
@@ -221,7 +253,19 @@ class Job:
 
     def snapshot(self) -> dict:
         sp = self.speed()
-        pct = (100.0 * self.done / self.total) if self.total else 0.0
+        # 百分比口径必须和界面上"看得见的数字"一致：
+        # 有字节总量就按字节算（同一条任务条里写着 12.3 / 893 MB），
+        # 否则按项数算（包 / 帧 / 张）。
+        # 以前一律按项数，于是出现「70.9% · 8.40 MB / 893.01 MB」这种
+        # 两个数字互相打脸的进度（8 MB 才 1%）。
+        if self.bytes_total:
+            inner = 100.0 * self.bytes_done / self.bytes_total
+        elif self.total:
+            inner = 100.0 * self.done / self.total
+        else:
+            inner = 0.0
+        inner = min(100.0, max(0.0, inner))
+        pct = self.pct_base + inner * self.pct_span / 100.0
         return {
             "id": self.id, "kind": self.kind, "title": self.title,
             "unit": self.unit, "state": self.state, "message": self.message,
@@ -236,7 +280,6 @@ class Job:
             # 进度条的字节维度：已下大小 / 总大小 / 字节速度
             "bytesDone": self.bytes_done, "bytesTotal": self.bytes_total,
             "bytesSpeed": self.byte_speed(),
-            "bytesTotal": self.bytes_total, "bytesDone": self.bytes_done,
             "itemsTotal": self.items_total, "itemsDone": self.items_done,
             "detail": self.detail,
             "created": self.created, "started": self.started,

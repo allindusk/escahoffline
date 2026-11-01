@@ -1043,10 +1043,24 @@
         if (upListEl) upListEl.refresh();
         updateUpInfo();
         refreshPlan();
+        cmpButtonHint();
       }).catch(() => { });
     }
     updateUpInfo();
     refreshPlan();
+    cmpButtonHint();
+  }
+
+  /** 按钮副标题跟着"到底有没有装过剧情"变：一部都没装就别让人白点一回 */
+  function cmpButtonHint() {
+    const btn = $('#btnCmpDemo');
+    if (!btn || !ST.units.loaded) return;       // 列表还没回来就别乱改文案
+    const st = ST.units.state || {};
+    const n = Object.keys(st).filter(k => st[k] && st[k] !== 'missing').length;
+    const sm = btn.querySelector('small');
+    if (sm) sm.textContent = n ? '左边原图 · 右边高清' : '要先装一部剧情';
+    btn.title = n ? '左边原图，右边超分 2 倍，中间可拖动'
+      : '还没装剧情 —— 点一下会告诉你去哪装';
   }
 
   /* 超分预估：多少张 / 原图多大 / 放大到多少 / 估计要多久
@@ -1263,6 +1277,279 @@
       connectJobs(true);
     } catch (e) { toastMsg(e.message, true); }
   };
+
+  /* ---------------------------------------------------------- 画质对比图
+   * 左边原图、右边超分 2 倍，用的是**同一段剧情的同一个画面**（背景 + 立绘），
+   * 只有分辨率不同 —— 并排一看就知道超分值不值得做，比读说明直观。
+   * 首次点：只对这两张图做超分（几秒～十几秒），做完就存在磁盘上了；
+   * 之后再点直接显示，不再重跑（ready 命中的分支就是这么来的）。
+   */
+  const CMP = {
+    scene: null, jobId: null, timer: null, hintT: null,
+    ratio: 16 / 9, split: 50, healAt: 0,
+  };
+
+  /** 全屏后提示"怎么退出"：每次真正出图时露一下，6 秒后淡出 */
+  function cmpShowHint() {
+    const el = $('#cmpFade');
+    if (!el) return;
+    el.classList.add('on');
+    clearTimeout(CMP.hintT);
+    CMP.hintT = setTimeout(() => el.classList.remove('on'), 6000);
+  }
+
+  /** 竖线位置（0~100%）：上层那张原图按它把右半边裁掉 */
+  function cmpSetSplit(p) {
+    p = Math.max(2, Math.min(98, +p || 50));
+    CMP.split = p;
+    const top = $('#cmpTopA');
+    if (top) top.style.clipPath = 'inset(0 ' + (100 - p) + '% 0 0)';
+    const line = $('#cmpSplit');
+    if (line) line.style.left = p + '%';
+  }
+
+  /** 舞台按图片比例塞进可用区域（不够就留黑边，绝不给拉变形） */
+  function cmpFit() {
+    const mask = $('#cmpMask'), wrap = $('#cmpBody'), stage = $('#cmpStage');
+    if (!mask || !wrap || !stage || mask.hidden) return;
+    const ar = CMP.ratio || 16 / 9;
+    const aw = Math.max(240, wrap.clientWidth - 20);
+    const ah = Math.max(140, wrap.clientHeight - 12);
+    let w = aw, h = aw / ar;
+    if (h > ah) { h = ah; w = ah * ar; }
+    stage.style.width = Math.round(w) + 'px';
+    stage.style.height = Math.round(h) + 'px';
+  }
+
+  /** 两张图铺进上下两层：下层超分、上层原图（按竖线裁） */
+  function cmpPaint(sc) {
+    const put = (layerSel, bgSrc, stSrc, onLoad, onErr) => {
+      const box = $(layerSel);
+      if (!box) return;
+      const bg = box.querySelector('.cmpBg');
+      const st = box.querySelector('.cmpSt');
+      bg.onload = () => onLoad(bg);       // 先挂回调再给 src，缓存命中才不会漏掉
+      bg.onerror = () => {
+        const n = $('#cmpNote');
+        if (n) n.textContent = '这张图读不出来 —— 可能刚在「清理空间」里被删掉了。';
+        if (onErr) onErr();
+      };
+      bg.src = bgSrc;
+      // 立绘缺失不影响看背景，别让一个破图标把画面毁了
+      st.onerror = () => { st.style.display = 'none'; };
+      if (stSrc) { st.style.display = ''; st.src = stSrc; }
+      else { st.style.display = 'none'; }
+    };
+    /* 超分图可能在别处被删了（清理空间 / 我们自己重新生成过）：
+       发现读不出来就把内存里的结论作废、重走一遍"检查→必要时重做"，
+       别让按钮一直拿着一张已经不存在的图秒开。15 秒内只自愈一次，防死循环。 */
+    const heal = () => {
+      const now = Date.now();
+      if (CMP.healAt && now - CMP.healAt < 15000) return;
+      CMP.healAt = now;
+      CMP.scene = null;
+      const n = $('#cmpNote');
+      if (n) n.textContent = '高清图不见了，正在重新生成…';
+      setTimeout(() => { if (!$('#cmpMask').hidden) cmpOpen(); }, 300);
+    };
+    const lab = sc.scale || 2;
+    put('#cmpTopA', sc.back.src, sc.stand.src, bg => {
+      const el = $('#cmpTagL');
+      if (el && bg.naturalWidth) el.textContent = '原图 ' + bg.naturalWidth + '×' + bg.naturalHeight;
+      cmpFit();
+    });
+    put('#cmpLayerB', sc.back.x2, sc.stand.x2, bg => {
+      if (bg.naturalWidth && bg.naturalHeight) CMP.ratio = bg.naturalWidth / bg.naturalHeight;
+      const el = $('#cmpTagR');
+      if (el && bg.naturalWidth) {
+        el.textContent = '超分 ' + lab + ' 倍 ' + bg.naturalWidth + '×' + bg.naturalHeight;
+      }
+      cmpFit();
+    }, heal);
+    // 每次打开都从"看全图"开始，别把上次放大过的状态带过来
+    const stage = $('#cmpStage');
+    if (stage) stage.classList.remove('zoom');
+    const zb = $('#cmpZoom');
+    if (zb) zb.textContent = '看细节（放大 2.4 倍）';
+    $('#cmpWait').hidden = true;
+    $('#cmpSub').textContent = '左边原图，右边超分 ' + lab + ' 倍';
+    cmpSetSplit(CMP.split);
+    const note = $('#cmpNote');
+    if (note) {
+      note.textContent = '取自「' + unitName(sc.unit) + '」第 ' + sc.part + ' 段。'
+        + '两张是同一个画面，只有分辨率不同；播放时程序会优先用高清图，'
+        + '没做过高清的自动用原图，不会黑图。';
+    }
+    cmpFit();
+    cmpShowHint();
+  }
+
+  /** 竖线：点哪跳哪，按住拖动跟随（鼠标 / 触屏都走 pointer 事件） */
+  function cmpBindSplit() {
+    const stage = $('#cmpStage');
+    if (!stage || stage.dataset.dragBound) return;
+    stage.dataset.dragBound = '1';
+    let on = false;
+    const jump = e => {
+      const r = stage.getBoundingClientRect();
+      if (!r.width) return;
+      cmpSetSplit(100 * (e.clientX - r.left) / r.width);
+    };
+    stage.addEventListener('pointerdown', e => {
+      on = true;
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器 */ }
+      jump(e);
+      e.preventDefault();
+    });
+    stage.addEventListener('pointermove', e => { if (on) jump(e); });
+    const stop = e => {
+      on = false;
+      try { stage.releasePointerCapture(e.pointerId); } catch (err) { /* 同上 */ }
+    };
+    stage.addEventListener('pointerup', stop);
+    stage.addEventListener('pointercancel', stop);
+  }
+
+  /** pct < 0 = 这轮不是进度（出错/没装剧情），进度条整个藏起来。
+   *  goText 给了才亮出那个"去剧情安装"的按钮（文案由服务端按原因给）。 */
+  function cmpWait(title, pct, msg, goText) {
+    const box = $('#cmpWait');
+    if (!box) return;
+    box.hidden = false;
+    $('#cmpWaitTitle').textContent = title;
+    const bar = $('.cmpBar');
+    if (bar) bar.hidden = pct < 0;
+    // 0% 时也给一点，否则进度条看着像坏了、像卡住
+    const w = pct > 0 ? Math.min(100, pct) : 8;
+    $('#cmpBarI').style.width = w + '%';
+    $('#cmpWaitMsg').textContent = msg || '';
+    const go = $('#cmpGoPacks');
+    if (go) {
+      go.hidden = !goText;
+      if (goText) go.textContent = goText;
+    }
+  }
+
+  /** 超分进度的人话版本：只报"第几张/共几张"，不把引擎名和参数抖给用户 */
+  function cmpJobLine(job) {
+    const t = +job.total || 0;
+    if (!t) return '';
+    const cur = Math.min(t, (+job.done || 0) + 1);
+    return '正在做第 ' + cur + ' / ' + t + ' 张。';
+  }
+
+  function cmpClose() {
+    const mask = $('#cmpMask');
+    if (mask) mask.hidden = true;
+    // 超分任务留在后台继续跑（关浮层 ≠ 取消），下次点开接着看进度
+  }
+
+  async function cmpPoll() {
+    if (!CMP.jobId) return;
+    clearTimeout(CMP.timer);
+    let d;
+    try { d = await api('jobs'); } catch (e) { CMP.timer = setTimeout(cmpPoll, 2500); return; }
+    const job = (d.jobs || []).find(j => j.id === CMP.jobId);
+    if (!job) { CMP.jobId = null; cmpOpen(); return; }        // 任务被清掉了，重来
+    if (job.state === 'failed') {
+      CMP.jobId = null;
+      cmpWait('这次没能做出来', -1, '超分失败：' + (job.error || '原因不明')
+        + '。到「帮助 / 教程」里可以看看是不是缺了超分引擎。');
+      return;
+    }
+    if (job.state === 'done' || job.state === 'cancelled') {
+      CMP.jobId = null;
+      const sc = await api('upscale/demo').catch(() => null);
+      if (sc && sc.ok && sc.ready) { CMP.scene = sc; cmpPaint(sc); return; }
+      cmpWait('图片没找到', -1,
+        '超分跑完了，但没找到生成的高清图 —— 可能刚在「清理空间」里被删掉了。再点一次按钮试试。');
+      return;
+    }
+    cmpWait('正在对原图进行超分…', job.percent,
+      '只做对比用的这两张（背景 + 立绘），做完就存下来了。'
+      + '第一次要等十几秒，之后点按钮直接显示。' + cmpJobLine(job));
+    CMP.timer = setTimeout(cmpPoll, 1000);
+  }
+
+  async function cmpOpen() {
+    const mask = $('#cmpMask');
+    if (!mask) return;
+    mask.hidden = false;
+    CMP.split = 50;               // 每次打开都从"左原图 / 右超分"对半分开始
+    cmpFit();                     // 先按当前窗口定量一次，等待层底下也有个像样的空舞台
+    clearTimeout(CMP.timer);
+    cmpWait('正在准备对比图…', 0, '第一次要先做这两张的超分，稍等一下。');
+    try {
+      /* **每次都问一次后端**（本地接口，几十毫秒）：用户可能刚在
+         「设置 / 清理空间」里删了原图或高清图，靠内存里"上次是好的"直接秒开，
+         会拿着一张已经不存在的图去显示（浏览器还可能吃内存缓存，连错误都不报）。
+         贵的从来不是这个查询，是超分本身。 */
+      const sc = await api('upscale/demo');
+      if (!sc.ok) {
+        // 没装剧情 / 原图被清理 / 没有可用的段落 —— 三种原因服务端分好了，
+        // 连同"下一步该点哪个按钮"一起给过来，别只丢一行字
+        cmpWait('现在还不能对比', -1, sc.error || '还没有可以对比的图片。',
+          sc.needInstall ? (sc.goText || '去「剧情安装」挑一部') : '');
+        return;
+      }
+      CMP.scene = sc;
+      if (sc.ready) { cmpPaint(sc); return; }
+      const d = await api('upscale/demo', { method: 'POST', body: '{}' });
+      if (!d.job) {
+        // 服务端说"已经没有要做的了"，那就再问一次状态
+        const again = await api('upscale/demo').catch(() => null);
+        if (again && again.ok && again.ready) { CMP.scene = again; cmpPaint(again); return; }
+        cmpWait('还没能生成对比图', -1, '再点一次按钮试试。');
+        return;
+      }
+      CMP.jobId = d.job.id;
+      cmpWait('正在对原图进行超分…', d.job.percent || 0,
+        '只做对比用的这两张（背景 + 立绘），做完就存下来了。第一次要等十几秒。'
+        + cmpJobLine(d.job));
+      cmpPoll();
+      connectJobs(false);        // 底部任务条也显示这件事，关掉浮层也看得见进度
+    } catch (e) {
+      const m = String((e && e.message) || '');
+      // 最常见的两种：程序刚更新过、但本地服务还是旧进程 —— 新接口它根本不认识，
+      // 报的是 HTTP 404 / "unknown api"。这不是功能坏了，重启一次就好。
+      const stale = /unknown api|404|not found|failed to fetch|networkerror/i.test(m);
+      cmpWait(stale ? '本地服务还是旧版本' : '没能打开对比图', -1,
+        stale
+          ? '这个功能要新版本的服务端才认识。请关掉启动窗口（或任务栏里的黑窗），'
+            + '重新双击程序目录里的「启动.bat」，然后再点这个按钮 —— 只需重启这一次。'
+          : m + '　如果是刚更新过程序，请关掉启动窗口后重新双击「启动.bat」。');
+    }
+  }
+
+  if ($('#btnCmpDemo')) $('#btnCmpDemo').onclick = cmpOpen;
+  if ($('#cmpClose')) $('#cmpClose').onclick = cmpClose;
+  if ($('#cmpMask')) {
+    document.addEventListener('keydown', e => {
+      const mask = $('#cmpMask');
+      if (mask.hidden) return;
+      if (e.key === 'Escape') { cmpClose(); return; }
+      // 左右方向键微调竖线：鼠标拖累了还有退路
+      if (e.key === 'ArrowLeft') { cmpSetSplit(CMP.split - 2); e.preventDefault(); }
+      if (e.key === 'ArrowRight') { cmpSetSplit(CMP.split + 2); e.preventDefault(); }
+    });
+    cmpBindSplit();
+    window.addEventListener('resize', cmpFit);
+  }
+  if ($('#cmpGoPacks')) {
+    $('#cmpGoPacks').onclick = () => {
+      cmpClose();
+      goto('packs');
+      toastMsg('勾一个想看的角色装上，装完回「提高CG画质」点「查看效果」就能对比了');
+    };
+  }
+  if ($('#cmpZoom')) {
+    $('#cmpZoom').onclick = () => {
+      const stage = $('#cmpStage');
+      const on = !stage.classList.contains('zoom');
+      stage.classList.toggle('zoom', on);
+      $('#cmpZoom').textContent = on ? '看全图' : '看细节（放大 2.4 倍）';
+    };
+  }
   $('#btnDelOrig').onclick = async () => {
     if (!confirm('删除「已经有超分图」的原图？\n\n只会删有对应超分文件的那部分，删完照样能播放。')) return;
     try {
@@ -1828,14 +2115,43 @@
       ensureTrList().refresh();
       updateTrInfo();
     };
+    /* 「全选已翻译 / 全选未翻译」都**跟着列表当前的筛选走**
+       （分类 / 安装状态 / 搜索词都算），不是无脑全库：
+       用户先把列表filter到"主线 + 未安装以外的"，再点按钮才符合直觉。
+       筛选结果从 ensureTrList().items() 拿 —— 那就是列表现在画着的那批。 */
     $('#trAllTrans').onclick = () => {
       const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
-      have.forEach(function (k) {
-        if (stateOf(k) !== 'missing') ST.trSel.add(k);
+      let hit = 0;
+      ensureTrList().items().forEach(function (k) {
+        if (stateOf(k) === 'missing') return;       // 没装的勾了也导不出
+        if (have.indexOf(k) < 0) return;
+        ST.trSel.add(k);
+        hit++;
       });
       ensureTrList().refresh();
       updateTrInfo();
+      if (!hit) toastMsg('当前筛选里没有已翻译的剧情', true);
+      else toastMsg('已勾选 ' + hit + ' 部有译文的剧情');
     };
+    /* 全选未翻译：同样只看当前筛选；不能只遍历译文清单（那里没有"未翻译"的），
+       得遍历列表当前的 items()。 */
+    const btnNotTrans = $('#trNotTrans');
+    if (btnNotTrans) {
+      btnNotTrans.onclick = () => {
+        const have = (ST.state && ST.state.trans && ST.state.trans.list) || [];
+        let hit = 0;
+        ensureTrList().items().forEach(function (k) {
+          if (stateOf(k) === 'missing') return;
+          if (have.indexOf(k) >= 0) return;
+          ST.trSel.add(k);
+          hit++;
+        });
+        ensureTrList().refresh();
+        updateTrInfo();
+        if (!hit) toastMsg('当前筛选里没有未翻译的剧情', true);
+        else toastMsg('已勾选 ' + hit + ' 部未翻译的剧情');
+      };
+    }
   }
 
   const btnTrExport = $('#btnTrExport');
