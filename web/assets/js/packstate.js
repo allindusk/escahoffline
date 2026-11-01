@@ -110,14 +110,15 @@ window.PACKSTATE = (() => {
   /** 剧情横幅图（media/img/story/*.webp）是否基本齐全。
    *  侧栏每行第一眼画的就是横幅，没有它就别发请求（全新 / 只下了一小撮的
    *  环境里，按"有 1 张就有 384 张"去猜，只会换来满屏 404）。
-   *  判定口径与头像一致：按已下载的横幅包数占总数比例（≥98%）算，
-   *  而不是"磁盘上有没有图" —— 用户清过缓存后图还在、但包没了，照样该显示；
-   *  反过来只下了一部分横幅时比例不够 → 整层不显示，避免个别文件 404。 */
+   *  判定口径与头像一致：按**磁盘上的横幅图数**占总数比例（≥98%）算。
+   *  必须用 bannerImg（图数），不能用品 p.banner（已下载的包数）：
+   *   · 用户清过「资源包缓存」后 n_banner 会归零，但图还在，照样该显示横幅；
+   *   · 包下完没解包完时 p.banner 高、bannerImg 低，用品它会漏出一批 404。 */
   function bannersReady() {
     const p = cache.pub;
     if (!p) return false;
     const total = p.bannerTotal || 0;
-    return total ? (p.banner || 0) >= total * 0.98
+    return total ? (p.bannerImg || 0) >= total * 0.98
                 : (p.bannerImg || 0) > 0;
   }
 
