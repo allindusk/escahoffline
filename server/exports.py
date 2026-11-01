@@ -655,6 +655,116 @@ def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
                          "total": len(spk_cur)}}
 
 
+def import_trans_multi(items: list[dict], mode: str = "merge") -> dict:
+    """批量导入多部剧情的译文（与 export_trans_batch 对称，同步版）。
+
+    ``items`` 是 [{unit, text}]。每部独立调用 import_trans，
+    单部出错只记进 errors，不拖垮整批。
+    """
+    return _run_import(items, mode, None)
+
+
+def import_trans_zip(data: bytes, mode: str = "merge") -> dict:
+    """从 zip 压缩包里挑出所有 .txt，逐部导入（同步版）。
+
+    剧情标识优先取文件头「# 剧情标识 : xxx」，取不到再用文件名（char_415.txt）。
+    遍历是递归的（子目录里的 txt 也算）。与批量导出产物（译文.zip）直接对上。
+    """
+    return _run_import(_extract_zip_items(data), mode, None)
+
+
+def import_trans_multi_job(j, items: list[dict], mode: str = "merge") -> dict:
+    """批量导入（后台任务版）：每导入一部就往进度条推一下。"""
+    return _run_import(items, mode, j)
+
+
+def import_trans_zip_job(j, data: bytes, mode: str = "merge") -> dict:
+    """zip 导入（后台任务版）。先解包再逐部推进度。"""
+    return _run_import(_extract_zip_items(data), mode, j)
+
+
+def _extract_zip_items(data: bytes) -> list[dict]:
+    """从 zip 字节里抽出所有 .txt（去 BOM、自动认剧情标识、去重）。"""
+    import io
+    if not data or data[:2] != b"PK":
+        raise ValueError("不是合法的 zip 文件（应以 PK 开头）")
+    items: list[dict] = []
+    seen: set[str] = set()
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for name in z.namelist():
+            if name.endswith("/"):
+                continue
+            if not name.lower().endswith(".txt"):
+                continue
+            try:
+                raw = z.read(name)
+            except Exception:                                    # noqa: BLE001
+                continue
+            if raw[:3] == b"\xef\xbb\xbf":                       # 去 BOM
+                raw = raw[3:]
+            text = raw.decode("utf-8", "replace")
+            unit = _unit_of_text(text) or os.path.basename(name)[:-4]
+            if not unit or unit in seen:
+                continue
+            seen.add(unit)
+            items.append({"unit": unit, "text": text})
+    if not items:
+        raise FileNotFoundError("压缩包里没有找到任何 .txt 译文文件")
+    return items
+
+
+def _run_import(items: list[dict], mode: str, j=None) -> dict:
+    """逐部导入的核心循环。``j`` 非空时（后台任务）实时推进度。"""
+    out = {"units": [], "added": 0, "updated": 0, "skipped": 0, "bad": 0,
+           "ok": 0, "fail": 0}
+    todo = []
+    for it in items or []:
+        unit = (it.get("unit") or "").strip()
+        text = it.get("text") or ""
+        if not unit or not text:
+            out["units"].append({"unit": unit or "(空)", "ok": False,
+                                 "error": "缺少 unit 或译文内容"})
+            out["fail"] += 1
+        else:
+            todo.append((unit, text))
+    n = len(todo)
+    if j:
+        j.set_total(n or 1); j.set_items(n)        # 进度条按部数走
+        if n == 0:
+            j.progress(done=1, message="没有可导入的内容")
+    for i, (unit, text) in enumerate(todo, 1):
+        try:
+            r = import_trans(unit, text, mode)
+            out["added"] += r.get("added", 0)
+            out["updated"] += r.get("updated", 0)
+            out["skipped"] += r.get("skipped", 0)
+            out["bad"] += r.get("bad", 0)
+            out["units"].append({"unit": unit, "ok": True,
+                                 "added": r.get("added", 0),
+                                 "updated": r.get("updated", 0),
+                                 "skipped": r.get("skipped", 0),
+                                 "bad": r.get("bad", 0),
+                                 "total": r.get("total", 0)})
+            out["ok"] += 1
+            if j:
+                j.progress(add=1, message="已导入 %d/%d：%s" % (i, n, unit))
+        except Exception as e:                                  # noqa: BLE001
+            out["units"].append({"unit": unit, "ok": False,
+                                 "error": str(e)[:200]})
+            out["fail"] += 1
+            if j:
+                j.progress(add=1, message="导入失败 %d/%d：%s" % (i, n, unit))
+    if j:
+        j.detail["result"] = out
+    return out
+
+
+def _unit_of_text(text: str) -> str:
+    """从译文 txt 头里取剧情标识；取不到返回空串。"""
+    m = re.search(r"#\s*剧情标识\s*:\s*(\S+)", text)
+    return m.group(1).strip() if m else ""
+
+
 def _update_trans_index(unit: str, n: int) -> None:
     idx_path = os.path.join(paths.WEB, "assets", "i18n", "index.json")
     idx = paths.load_json(idx_path, {}) or {}

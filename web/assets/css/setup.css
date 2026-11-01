@@ -365,6 +365,15 @@ details.explain li { margin-bottom: 2px; }
   white-space: nowrap; max-width: 100%; }
 /* 译文导入那一排：窄屏时换行而不是把控件挤扁 */
 #sec-trans .optrow { flex-wrap: wrap; }
+/* 批量导入的「多个 txt / 文件夹 / zip」源切换 */
+.tr-src { display: inline-flex; border: 1px solid var(--line);
+  border-radius: 9px; overflow: hidden; }
+.tr-src button { border: 0; border-radius: 0; background: var(--bg2);
+  color: var(--fg2); padding: 8px 14px; cursor: pointer; font-size: 14px;
+  border-right: 1px solid var(--line); }
+.tr-src button:last-child { border-right: 0; }
+.tr-src button:hover { background: var(--bg3); color: var(--fg); }
+.tr-src button.on { background: var(--acc); color: #fff; font-weight: 600; }
 
 /* 行内的「卸载」「填入」按钮见 storylist.css 的 .sl-act（和整行点击分开） */
 

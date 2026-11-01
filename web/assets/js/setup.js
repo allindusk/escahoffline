@@ -785,6 +785,20 @@
       }
     }
 
+    // 批量导入译文：任务跑完把汇总写进导入面板（任务几秒后从底部条消失，
+    // 结论要留在页面上）。进行中底部进度条已经实时显示「已导入 i/n」。
+    const imp = (list || []).find(j => j.kind === 'imptrans' && j.state === 'done'
+      && j.detail && j.detail.result);
+    if (imp && ST._impDone !== imp.id) {
+      ST._impDone = imp.id;
+      trRenderBulk(imp.detail.result);
+    }
+    const impF = (list || []).find(j => j.kind === 'imptrans' && j.state === 'failed');
+    if (impF && ST._impFail !== impF.id) {
+      ST._impFail = impF.id;
+      $('#trResult').textContent = '失败：' + (impF.error || '未知错误');
+    }
+
     // 导出任务「刚跑完」→ 按用户设置自动弹出文件夹。
     // **必须按状态跃迁判断**：以前是"列表里存在任意 done 的 video/cg 任务"就打开，
     // 而去重标记 ST._expShown 只在内存里 —— 每次刷新/重进页面都会把历史上的
@@ -1652,9 +1666,106 @@
         `✅ 新增 ${d.added} · 更新 ${d.updated} · 跳过 ${d.skipped} · 格式错误 ${d.bad}；本部共 ${d.total} 句`;
       toastMsg('导入完成，刷新播放器即可看到');
     } catch (e) {
-      $('#trResult').textContent = '失败：' + e.message;
+      $('#trResult1').textContent = '失败：' + e.message;
     }
   };
+
+  // ---------------------------------------------------------------- 批量导入（txt / 文件夹 / zip）
+  let trSrc = 'multi';
+  let trPending = [];      // [{name, unit, text}]
+  let trZipBlob = null;
+
+  function trCfgInput() {
+    const inp = $('#trInput');
+    inp.value = '';
+    inp.webkitdirectory = (trSrc === 'dir');
+    inp.multiple = (trSrc === 'multi');
+    inp.accept = (trSrc === 'zip') ? '.zip' : '.txt';
+  }
+  function trPick() { trCfgInput(); $('#trInput').click(); }
+
+  function detectUnit(text, fname) {
+    const m = text.match(/#\s*剧情标识\s*:\s*(\S+)/);
+    if (m) return m[1].trim();
+    return (fname || '').replace(/\.txt$/i, '') || '';
+  }
+  function setTrSel(s) { $('#trBulkInfo').textContent = s; }
+
+  async function trOnFiles(files) {
+    trZipBlob = null;
+    if (trSrc === 'zip') {
+      const f = files[0];
+      if (!f) { setTrSel('还没选文件'); return; }
+      if (!/\.zip$/i.test(f.name)) { toastMsg('请选择 .zip 压缩包', true); return; }
+      trZipBlob = f;
+      setTrSel('已选压缩包：' + f.name + '（' + human(f.size) + '）—— 点「导入」解包并导入');
+      return;
+    }
+    const arr = [...files].filter(f => f.name.toLowerCase().endsWith('.txt'));
+    const skip = files.length - arr.length;
+    trPending = [];
+    for (const f of arr) {
+      const text = await f.text();
+      trPending.push({ name: f.name, unit: detectUnit(text, f.name), text });
+    }
+    const noUnit = trPending.filter(p => !p.unit).length;
+    let s = '已选 ' + arr.length + ' 个 txt';
+    if (skip) s += '（跳过 ' + skip + ' 个非 txt）';
+    if (noUnit) s += '；其中 ' + noUnit + ' 个认不出剧情标识（将用文件名）';
+    s += ' —— 点「导入」';
+    setTrSel(s);
+  }
+
+  function trRenderBulk(d) {
+    const units = d.units || [];
+    const okU = units.filter(u => u.ok).length;
+    const failU = units.filter(u => !u.ok).length;
+    let html = '✅ 成功 ' + okU + ' 部 · 失败 ' + failU + ' 部 · ' +
+      '新增 ' + d.added + ' · 更新 ' + d.updated + ' · 跳过 ' + d.skipped + ' · 格式错误 ' + d.bad;
+    const errs = units.filter(u => !u.ok);
+    if (errs.length) {
+      html += '<div style="margin-top:6px;color:#ffb3ba">' +
+        errs.map(u => esc(u.unit) + '：' + esc(u.error || '')).join('<br>') + '</div>';
+    }
+    $('#trResult').innerHTML = html;
+  }
+
+  const trSrcBox = $('#trSrc');
+  if (trSrcBox) {
+    trSrcBox.addEventListener('click', ev => {
+      const btn = ev.target.closest('button[data-src]');
+      if (!btn) return;
+      trSrc = btn.dataset.src;
+      [...trSrcBox.children].forEach(b => b.classList.toggle('on', b === btn));
+      trPending = []; trZipBlob = null;
+      setTrSel('还没选文件');
+    });
+    $('#trPick').onclick = trPick;
+    $('#trInput').onchange = ev => trOnFiles(ev.target.files);
+    $('#btnTrImportBulk').onclick = async () => {
+      const mode = $('#trMode').value;
+      try {
+        if (trSrc === 'zip') {
+          if (!trZipBlob) { toastMsg('先选一个 zip 压缩包', true); return; }
+          $('#trResult').textContent = '正在解压并导入…（进度见底部）';
+          const r = await fetch('api/import/trans/zip?mode=' + encodeURIComponent(mode),
+            { method: 'POST', body: trZipBlob });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          connectJobs(true);            // 进度条走底部任务条
+          toastMsg('已开始导入，进度见底部');
+        } else {
+          if (!trPending.length) { toastMsg('先选 txt 文件', true); return; }
+          $('#trResult').textContent = '正在导入…（进度见底部）';
+          const items = trPending.map(p => ({ unit: p.unit, text: p.text }));
+          await startJob('import/trans/multi', { items, mode },
+            '已开始导入，进度见底部');
+        }
+      } catch (e) {
+        $('#trResult').textContent = '失败：' + e.message;
+      }
+    };
+  }
 
   /* 译文批量导出：剧情选择用 storylist.js（角色 / 主线 / 活动 / 其他 四个分类），
      只有装好的剧情能勾 —— 没装就没有剧本可导。 */

@@ -832,6 +832,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not unit or not text:
                 return self._err("缺少 unit 或译文内容")
             return self._json(exports.import_trans(unit, text, mode))
+        if path == "/api/import/trans/multi":
+            b = self._body()
+            items = b.get("items")
+            if not isinstance(items, list) or not items:
+                return self._err("items 必须是非空数组")
+            mode = (b.get("mode") or "merge").strip()
+            job = jobs.submit(
+                "imptrans", "导入 %d 部译文" % len(items),
+                lambda j: exports.import_trans_multi_job(j, items, mode))
+            return self._json({"job": job.snapshot()})
+        if path == "/api/import/trans/zip":
+            q = self._q()
+            mode = (q.get("mode") or "merge").strip()
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0:
+                return self._err("没有收到压缩包数据")
+            data = self.rfile.read(n)
+            if data[:2] != b"PK":
+                return self._err("收到的不是 zip 文件（应以 PK 开头）")
+            job = jobs.submit(
+                "imptrans", "解压并导入译文压缩包",
+                lambda j: exports.import_trans_zip_job(j, data, mode))
+            return self._json({"job": job.snapshot()})
         if path == "/api/export/trans/batch":
             # 与「批量导入」对称：把多部剧情的 txt 打成一个 zip
             # scope=translated（默认，已有译文）| installed（全部已装剧情原文）

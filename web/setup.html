@@ -356,24 +356,45 @@
         </div>
       </div>
       <div class="panel">
-        <h3>批量导入（有译好的 txt 时用）</h3>
+        <h3>批量导入译文（txt / 文件夹 / zip 压缩包）</h3>
+        <p class="dim" style="max-width:78ch">
+          选<b>多个 txt</b>、选<b>整个文件夹</b>、或选一个 <b>zip 压缩包</b>都能一次导入。
+          每部剧情的编号会<b>自动认</b>（取文件头「剧情标识」那行，认不到就用文件名），
+          不用一个个手填。和「批量导出」打出来的 <code>译文.zip</code> 能直接对上。
+        </p>
+        <div class="optrow" style="flex-wrap:wrap;gap:10px;align-items:center">
+          <div class="tr-src" id="trSrc">
+            <button type="button" data-src="multi" class="on">多个 txt</button>
+            <button type="button" data-src="dir">整个文件夹</button>
+            <button type="button" data-src="zip">zip 压缩包</button>
+          </div>
+          <button type="button" id="trPick">选择文件…</button>
+          <select id="trMode">
+            <option value="merge">合并</option>
+            <option value="replace">覆盖</option>
+          </select>
+          <button type="button" class="primary" id="btnTrImportBulk">导入</button>
+        </div>
+        <input type="file" id="trInput" multiple accept=".txt" hidden>
+        <div id="trBulkInfo" class="dim" style="font-size:14px;margin-top:8px">还没选文件</div>
+        <div id="trResult" class="dim"></div>
+      </div>
+      <div class="panel">
+        <h3>单个 txt（手动指定剧情）</h3>
         <div class="optrow" style="flex-wrap:wrap;gap:10px">
           <input id="trUnit" placeholder="剧情标识（点下方列表的「填入」自动填）"
                  style="flex:1;min-width:250px">
           <label class="tp-file" style="flex:1;min-width:220px">
             <input type="file" id="trFile" accept=".txt">
             <span id="trFileN">选择 txt…</span></label>
-          <select id="trMode">
-            <option value="merge">合并</option>
-            <option value="replace">覆盖</option>
-          </select>
           <button class="primary" id="btnTrImport">导入</button>
         </div>
         <div class="dim" style="font-size:14px;margin-top:6px">
           「剧情标识」是剧情的内部编号（例如 <code>char_415</code>）。
           <b>不用记</b> —— 点下面列表每行右侧的<b>填入</b>，会自动填进这个框。
+          这个入口适合导一份<b>没有文件头</b>、或你想<b>强制指定</b>剧情的单独 txt。
         </div>
-        <div id="trResult" class="dim"></div>
+        <div id="trResult1" class="dim"></div>
       </div>
       <div class="panel">
         <h3>批量导出（备份 / 批量翻译）</h3>
