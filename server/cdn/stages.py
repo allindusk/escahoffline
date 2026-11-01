@@ -356,6 +356,10 @@ def _hex_label(seg: str) -> str:
         return seg
 
 
+#: 占位转场图（与 build_cgmap.py 一致），不属于任何角色的画廊。
+PLACEHOLDER = {"暗転", "黒画面", "黒", "暗転（黒）"}
+
+
 def sync_cgmap(cid: int) -> int:
     """把角色剧本里引用、而 ``cgmap.js`` 里还没有的 CG 组合并进去。
 
@@ -424,15 +428,23 @@ def sync_cgmap(cid: int) -> int:
         if fn in covered:                        # 已经被某组收录 → 不重复加
             continue
         seg = k.split("_")
-        label = ("_".join(_hex_label(s) for s in seg[:-1])
-                 if len(seg) >= 3 else k)
+        # 与出厂生成器（build_cgmap.py）一致：只收**本角色名下**的图。
+        # 段数不足 3（如 83438378_黒画面 这种共享转场图）或第 2 段不是数字
+        # （无归属角色）的键不属于任何角色，跳过；否则会生成「以文件名当组名」
+        # 的幽灵组（黒画面 被 259 个角色剧本引用，每同步一次就污染一个角色）。
+        if len(seg) < 3 or not seg[1].isdigit():
+            continue
+        if any(x in PLACEHOLDER for x in seg):
+            continue
+        label = "_".join(_hex_label(s) for s in seg[:-1])
         by_group.setdefault(label, []).append(fn)
 
     added = 0
     for label in sorted(by_group):
         if (int(cid), label) in have:
             continue
-        groups.append({"c": int(cid), "k": label, "f": by_group[label]})
+        groups.append({"c": int(cid), "k": label, "f": by_group[label],
+                       "n": len(by_group[label])})
         added += 1
     # 注意：**只清理没新增也要写回**，否则自愈结果留在内存里，文件还是脏的
     if added or dropped:
