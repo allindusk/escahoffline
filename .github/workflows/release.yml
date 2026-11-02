@@ -377,20 +377,19 @@ jobs:
             dist/ESCAH-Offline-v${{ steps.ver.outputs.version }}-update.zip
 
       # ---------------- 发布 ----------------
-      # 说明文案放在 docs/release-notes.md（模板，{VERSION} 为占位符）。
+      # 正文文案：docs/release-notes.md 是**模板**（{VERSION} 为占位符），
+      # 但 Release 正文只取「最新那一版的 新增/修复」——控制台「检查更新」是原样
+      # 显示正文的，整份模板贴上去就是几千字一堵墙（2026-11-03 用户要求：只留
+      # 更新版本的更新和修复内容）。裁剪逻辑与运行时同源：server/release_notes.py。
       # 不要写进 YAML 的 PowerShell here-string：那里反引号是转义字符，
       # Markdown 里的 `userdata/` 会被当成 Unicode 转义序列，直接把构建搞挂。
       - name: 准备 Release 说明
         shell: pwsh
         run: |
           $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
-          $tpl = Get-Content docs/release-notes.md -Raw -Encoding UTF8
           $sha = (git rev-parse --short HEAD).Trim()
-          $stamp = (Get-Date).ToUniversalTime().AddHours(8).ToString('yyyy-MM-dd HH:mm')
-          Set-Content dist/notes.md -Value (($tpl -replace '\{VERSION\}', $v).TrimEnd()) -Encoding UTF8
-          Add-Content dist/notes.md -Value "" -Encoding UTF8
-          Add-Content dist/notes.md -Value ("> 本包构建自 main@" + $sha + "（北京时间 " + $stamp + "）") -Encoding UTF8
-          "已生成 dist/notes.md（v$v，构建提交 $sha）"
+          python tools/release_notes_body.py dist/notes.md $v $sha
+          if (-not (Test-Path dist/notes.md)) { throw "生成 dist/notes.md 失败" }
 
       - name: 发布到 Release
         # 手动触发时可以用 publish=false 只留 Artifacts（不想动线上 Release 时用）

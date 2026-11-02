@@ -32,20 +32,42 @@
     const inline = s => esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-    const lines = String(src).split(/\r?\n/);
-    let html = '', inList = false;
-    const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
-    for (const line of lines) {
-      const h = line.match(/^(#{1,4})\s+(.*)$/);
-      if (h) { closeList(); const lv = h[1].length; html += `<h${lv}>${inline(h[2])}</h${lv}>`; continue; }
+    const out = [];
+    let items = [];                 // 正在收集的 <ul> 条目
+    const flushList = () => {
+      if (!items.length) return;
+      out.push('<ul>' + items.map(s => `<li>${inline(s)}</li>`).join('') + '</ul>');
+      items = [];
+    };
+    /* 折行续写：Release 说明是手工折行的（一条 bullet 写在 2–3 行里），
+       以前每行单独成一个 <p>，列表被打断、还带着行首缩进，看起来像一堵乱码。
+       现在续行并回上一条 bullet / 上一段。 */
+    const appendText = t => {
+      if (items.length) { items[items.length - 1] += ' ' + t; return; }
+      const last = out.length - 1;
+      if (last >= 0 && out[last].startsWith('<p>')) {
+        out[last] = out[last].replace(/<\/p>$/, ' ') + inline(t) + '</p>';
+        return;
+      }
+      out.push(`<p>${inline(t)}</p>`);
+    };
+    for (const line of String(src).split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) { flushList(); continue; }
+      const h = t.match(/^(#{1,4})\s+(.*)$/);
+      if (h) {
+        flushList();
+        const lv = h[1].length;
+        out.push(`<h${lv}>${inline(h[2])}</h${lv}>`);
+        continue;
+      }
       const li = line.match(/^\s*[-*]\s+(.*)$/);
-      if (li) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
-      if (!line.trim()) { closeList(); continue; }
-      closeList();
-      html += `<p>${inline(line)}</p>`;
+      if (li) { items.push(li[1]); continue; }
+      if (t.startsWith('>')) continue;      // 引用块是模板自用说明，不给用户看
+      appendText(t);
     }
-    closeList();
-    return html;
+    flushList();
+    return out.join('');
   }
 
   function human(n) {
@@ -2540,11 +2562,16 @@
       const applyBtn = $('#btnApplyUpdate');
       applyBtn.textContent = ready ? '重启并应用' : '下载并应用';
       applyBtn.disabled = !ready && !d.hasUpdate;
-      // 「检查更新」发现新版时，把 Release 说明（更新修复了哪些功能）也显示出来
+      // 「检查更新」发现新版时，把 Release 说明（更新修复了哪些功能）也显示出来。
+      // 只显示"这一版改了什么"（服务端已裁掉历史版本与下载说明），
+      // 想看全文给一条链接，别把几千字塞进这个小框。
       const notesBox = $('#updNotes');
       if (notesBox) {
         if ((ready || d.hasUpdate) && d.notes) {
-          notesBox.innerHTML = renderMd(d.notes);
+          const more = d.html
+            ? `<p style="margin:10px 0 0"><a href="${esc(d.html)}" target="_blank" rel="noopener">在浏览器里打开完整发布说明</a></p>`
+            : '';
+          notesBox.innerHTML = renderMd(d.notes) + more;
           notesBox.style.display = 'block';
         } else {
           notesBox.innerHTML = '';

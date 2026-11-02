@@ -98,6 +98,19 @@ def _ver_tuple(v: str) -> tuple:
     return tuple(out[:4])
 
 
+_HEAD_RE = re.compile(r"^(#{1,4})\s+(.*)$")
+
+
+def _notes_brief(body: str, version: str = "", limit: int = 1800) -> str:
+    """只留「这一版」的更新/修复（实现在 :mod:`server.release_notes`）。
+
+    放在单独模块里是因为构建时也要用同一段逻辑生成 Release 正文
+    （``tools/release_notes_body.py``），不能在 pwsh 里再抄一遍。
+    """
+    from .release_notes import notes_brief
+    return notes_brief(body, version, limit)
+
+
 def check(budget: float = 25.0) -> dict:
     """→ {current, latest, hasUpdate, url, notes, via, error}
 
@@ -151,7 +164,9 @@ def check(budget: float = 25.0) -> dict:
         "latest": tag.lstrip("vV"),
         "hasUpdate": _ver_tuple(tag) > _ver_tuple(out["current"]) or bool(staged),
         "url": url,
-        "notes": (rel.get("body") or "")[:4000],
+        # 只给「这一版改了什么」：整份 Release 正文有几千字（历史版本 + 下载说明），
+        # 塞进「检查更新」的小框就是一堵墙
+        "notes": _notes_brief(rel.get("body") or "", tag),
         "via": via, "published": rel.get("published_at") or "",
         "html": rel.get("html_url") or "",
         # 前端据此把按钮写成"重启并应用"、并跳过二次下载
