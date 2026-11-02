@@ -388,8 +388,11 @@ jobs:
         run: |
           $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
           $sha = (git rev-parse --short HEAD).Trim()
-          python tools/release_notes_body.py dist/notes.md $v $sha
+          # 正文里**只放这一版的新增/修复**，不追构建戳（用户要求：不包含别的内容）；
+          # 构建提交只留在 Actions 日志里备查。
+          python tools/release_notes_body.py dist/notes.md $v
           if (-not (Test-Path dist/notes.md)) { throw "生成 dist/notes.md 失败" }
+          "dist/notes.md 已生成（v$v，构建提交 $sha）"
 
       - name: 发布到 Release
         # 手动触发时可以用 publish=false 只留 Artifacts（不想动线上 Release 时用）
