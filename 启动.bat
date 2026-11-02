@@ -3,8 +3,9 @@ chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
-call :say banner
-echo.
+rem Banner and the "using python" line are printed by server (__main__.py).
+rem Start scripts may lag behind (older updaters skipped them), so printing
+rem from Python keeps every install looking the same.
 
 rem ---- 1) package completeness ------------------------------------------
 rem Three common failures used to surface as just:
@@ -44,9 +45,7 @@ set "PYEXE=python"
 goto have_python
 
 :have_python
-call :say using
-echo   %PYEXE% %PYARGS%
-echo.
+rem server prints the banner / python path; nothing to echo here.
 
 rem ---- 3) deps: only needed for system python ---------------------------
 if defined BUILTIN goto launch
