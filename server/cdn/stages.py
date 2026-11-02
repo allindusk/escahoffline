@@ -347,6 +347,9 @@ def sync_advindex() -> int:
     titles = info["titles"]
     ev_order = info["event_order"]
     rows = []
+    #: 本次判定为「空占位包」的 key（2 段 0 句，官方还没放内容）。合并旧目录时要把
+    #: 它们剔掉，否则上次留在磁盘上的空条目会被原样保留（一行点不开的废条目）。
+    skipped = set()
     for fn in os.listdir(DATA):
         if not select.PAT_ADV_FILE.fullmatch(fn):
             continue
@@ -361,6 +364,7 @@ def sync_advindex() -> int:
         # 空占位包（例如 event_51 / event_52：2 段、0 句，官方还没放内容，
         # 所以也没有 topic_event 横幅）不要进列表 —— 否则就是一行点不开的空条目。
         if _count_lines(d["parts"]) == 0:
+            skipped.add(key)
             continue
         # 封面：章节标题横幅（游戏里标题本身就是图，没有文本资源）
         # 不用 int(n)：序章拆出来的编号是 0 / 0b / 0c，对应 main_0 / main_0b / main_0c.webp
@@ -439,14 +443,39 @@ def sync_advindex() -> int:
         except Exception:                                   # noqa: BLE001
             pass
 
-    rows.sort(key=lambda r: (select.ADV_KINDS.index(r["kind"])
-                             if r["kind"] in select.ADV_KINDS else 9, _ord(r)))
+    # ---- 合并式写回（2026-11-03 修，别改回整份重写） ----
+    # 本机 ``web/data`` 里只有**用户自己装过**的 ``adv_*.js``，而出厂 ``advindex.js``
+    # 是**完整章节目录**（含没装的章节）。安装页的章节名、标题横幅、段数全从这张表取。
+    # 以前这里整份重写 → 用户只要装一部非角色剧情，主线/活动/其他列表就从「全部章节」
+    # 塌成「就装了那一部」（1.0.7 实测：225 条变 1 条，安装页只剩「第1部 第1章」
+    # 这种编号占位名、横幅全空）。现在按 (key, part) 合并：
+    # 本次算得出的条目覆盖同键旧条目，旧目录里其余条目原样保留 —— 只增改、不删。
     p = os.path.join(DATA, "advindex.js")
+    old = []
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            raw = f.read()
+        old = json.loads(raw[raw.index("=") + 1:].strip().rstrip(";")) or []
+        if not isinstance(old, list):
+            old = []
+    except Exception:                                       # noqa: BLE001
+        old = []                                            # 文件不在/坏了 → 就是全量重建
+
+    def _rowkey(r):
+        return (r.get("key"), r.get("part", 0))
+
+    have = {_rowkey(r) for r in rows}
+    kept = [r for r in old
+            if _rowkey(r) not in have and r.get("key") not in skipped]
+    merged = rows + kept
+    merged.sort(key=lambda r: (select.ADV_KINDS.index(r["kind"])
+                               if r["kind"] in select.ADV_KINDS else 9, _ord(r)))
     with open(p, "w", encoding="utf-8") as f:
-        f.write("window.__ADV=" + json.dumps(rows, ensure_ascii=False,
+        f.write("window.__ADV=" + json.dumps(merged, ensure_ascii=False,
                                              separators=(",", ":")) + ";")
-    print(f"  advindex.js：{len(rows)} 部剧情")
-    return len(rows)
+    print(f"  advindex.js：{len(rows)} 部本机剧情 + 保留目录 {len(kept)} 条 "
+          f"= {len(merged)} 条")
+    return len(merged)
 
 
 def _hex_label(seg: str) -> str:
@@ -1248,6 +1277,12 @@ def regen_names(use_wiki: bool = True) -> None:
     217 号变成「ハロウィンノドカ (217)」——9 个角色名后面还带上 "(id)" 后缀，
     连带 ``charmeta.js`` 有 11 个角色查不到元数据（稀有度/实装日期直接消失）。
     所以这里只**采纳新增角色**的名字，已有 id 的名字一律沿用旧表。
+
+    **新表里「消失」的 id 也要保留**（2026-11-03 修）：``gen_names_final.py`` 的数据源
+    是人工维护的 ``char_names_wiki.json`` 快照，新角色实装后它往往还没收录，重生成就会
+    把出厂 ``names.js`` 里已经有的名字整条删掉 —— 实测 415「ハロウィンミヤビ」被删后，
+    左侧列表退回「ID 415」，``charmeta.js`` 也跟着少一条（gen_charmeta 按名字查表）。
+    所以这里和 :func:`regen_charmeta` 一样：**只补不删**。
     """
     arch = ARCHIVE_DIR
     os.makedirs(arch, exist_ok=True)
@@ -1270,15 +1305,22 @@ def regen_names(use_wiki: bool = True) -> None:
     if not prev or not new:
         return
     rejected, merged = [], dict(new)
+    lost = sorted((c for c in prev if c not in new), key=lambda s: int(s))
+    for cid in lost:
+        merged[cid] = prev[cid]                   # 新表没收录的旧 id → 沿用旧名，别删
     for cid, nm in prev.items():
         if cid in merged and merged[cid] != nm:
             rejected.append((cid, nm, merged[cid]))
             merged[cid] = nm                      # 沿用旧名，拒绝这次"改名"
     adopted = sorted((c for c in new if c not in prev), key=lambda s: int(s))
-    if rejected:
+    if rejected or lost:
         _write_js_obj(out, "__NAMES", merged)
+    if rejected:
         sample = "；".join(f"{c}: {o}（新表给 {n}）" for c, o, n in rejected[:3])
         _note(f"名字：拒绝 {len(rejected)} 处改名（沿用旧表），例如 {sample}")
+    if lost:
+        _note(f"名字：{len(lost)} 个角色新表里没有，沿用旧表"
+              f"（{', '.join(lost[:8])}）")
     if adopted:
         _note(f"名字：新增 {len(adopted)} 个角色 → {', '.join(adopted[:8])}")
 
