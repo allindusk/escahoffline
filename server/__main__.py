@@ -25,17 +25,11 @@ def _port_free(port: int, host: str) -> bool:
             return False
 
 
-def _lan_ip() -> str | None:
-    """best-effort 取本机局域网出口 IP（用于打印手机访问地址），失败返回 None。"""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # 不发任何包，仅借默认路由确定出口网卡地址
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except OSError:
-        return None
-    finally:
-        s.close()
+# 局域网 IP 的判定统一用 api 里那一份：它会排除 Clash 等代理的 TUN 网段
+# （198.18.x.x），优先 192.168 / 10 / 172.16-31。
+# 以前这里另写了一份"只借默认路由"的实现，结果启动横幅打印的是 198.18.0.1，
+# 而页面二维码显示 192.168.120.18 —— 两个地方说法不一致（用户 2026-11-02 反馈）。
+_lan_ip = api._lan_ip
 
 
 def main(argv=None) -> int:

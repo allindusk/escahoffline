@@ -1184,6 +1184,28 @@ def _lan_ip() -> str | None:
     return None
 
 
+class _QuietServer(http.server.ThreadingHTTPServer):
+    """客户端断开类异常静音。
+
+    浏览器刷新/关标签/切页会触发 ConnectionAbortedError(10053) 之类的
+    异常，socketserver 默认把它当"服务器错误"整段 traceback 打到控制台，
+    用户看到一堆 Exception occurred during processing of request 会以为
+    程序坏了。这类不是服务端错误，记一行 debug 就够；其它异常照常报。
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError, TimeoutError)):
+            try:
+                applog.debug("连接被客户端中断 %s" % (client_address,),
+                             tag="http")
+            except Exception:                                  # noqa: BLE001
+                pass
+            return
+        super().handle_error(request, client_address)
+
+
 def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     paths.ensure_dirs()
     # data/imgmap.x2.js 被三个页面无条件加载，缺它每次开页面都 404（刷日志 +
@@ -1209,7 +1231,7 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
             pass
     handler = Handler
     try:
-        httpd = http.server.ThreadingHTTPServer((host, port), handler)
+        httpd = _QuietServer((host, port), handler)
     except OSError as e:
         print(f"端口 {port} 不可用（{e}），换一个：python -m server -p 8012")
         return 1
