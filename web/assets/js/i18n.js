@@ -125,13 +125,45 @@ window.I18N = (() => {
    * 纯净环境（没下过译文）里 index.json 也不存在 → 判"没有"，
    * 之后不再逐个去请求 char_<id>.json / _speakers.json，避免一打开就刷 404。 */
   let _langAvail = undefined;            // undefined=未知 / true=有 / false=无
+  let _index = null;                     // index.json 解析结果（含 chars / speakers 覆盖情况）
   function langAvailable() {
     if (lang === SOURCE) { _langAvail = false; return Promise.resolve(false); }
     if (_langAvail !== undefined) return Promise.resolve(_langAvail);
     _langAvail = loadJson('assets/i18n/index.json')
-      .then(d => !!(d && d.chars && Object.keys(d.chars).length))
-      .catch(() => false);
+      .then(d => {
+        _index = d || {};
+        // 只有"实实在在译过几句"才叫有这门语言；几百个 0 条目的空壳会把门撑开，
+        // 导致没译过的剧情也被拿去请求 <unit>.json 而刷 404。
+        const chars = _index.chars || {};
+        return Object.values(chars).some(c => (c['zh-Hans'] || 0) > 0);
+      })
+      .catch(() => { _index = null; return false; });
     return _langAvail;
+  }
+
+  /* 这部剧情到底有没有译文文件：按 index.json 里它自己的条数判断。
+   * 没列进清单 / 条数为 0 就别去请求 <unit>.json——没译过的 char / adv
+   * 直接回退日文即可，省得每打开一部就往控制台刷 404，用户还以为项目坏了。 */
+  function unitTranslated(storyKey) {
+    if (!_index) return false;
+    const lookup = storyKey.startsWith('char_') ? storyKey.slice(5) : storyKey;
+    const e = (_index.chars || {})[lookup];
+    return !!(e && (e['zh-Hans'] || 0) > 0);
+  }
+
+  /* 全站共用发言人译名表有没有：index.json 里没记过任何名字就别请求
+   * _speakers.json（没译过名字时该文件压根不存在，请求必 404）。
+   *
+   * 注意区分「字段不存在」和「记了 0 条」：
+   *   - 字段不存在 = 这份 index.json 是**旧版本**生成的，不知道有没有名字表
+   *     （老用户从 1.0.6 升上来、或从备份恢复译文），此时只能试一次 ——
+   *     不然明明 `_speakers.json` 就在磁盘上，名字却永远显示日文；
+   *   - 字段存在且为 0 = 确实没译过名字 → 不请求，不刷 404。 */
+  function speakersAvailable() {
+    if (!_index) return false;
+    const sp = _index.speakers;
+    if (!sp) return true;                 // 旧 index.json：状态未知，允许试一次
+    return !!((sp[lang] || 0) > 0);
   }
 
   /** 预加载某部剧情的译文。不阻塞调用方：失败也只是没有译文。 */
@@ -142,6 +174,8 @@ window.I18N = (() => {
     if (wanted.get(k)) return await wanted.get(k);
     // 没有这门语言的译文包就别发了：直接回退日文，不给控制台刷 404
     if (!await langAvailable()) return null;
+    // 这部剧情没译过也别发：没译过的 char / adv 直接回退日文，不刷 404
+    if (!unitTranslated(storyKey)) return null;
     const p = loadJson(`assets/i18n/${lang}/${storyKey}.json`)
       .then(d => {
         const m = new Map(Object.entries(d.messages || {}));
@@ -187,17 +221,17 @@ window.I18N = (() => {
   function loadSpeakers() {
     if (lang === SOURCE) return Promise.resolve();
     if (spkReady) return spkReady;
-    // 没有这门语言的译文包就别发请求（避免 _speakers.json 404 刷屏）
+    // 没译文包 / 没译过任何发言人名字就别发请求（_speakers.json 不存在必 404）
     const probe = langAvailable();
     spkReady = probe.then(ok => {
-      if (!ok) { spkReady = null; return; }          // 没译文包，下次再试
+      if (!ok || !speakersAvailable()) return;        // 不请求，spkReady 保持已解析，不再重试
       return loadJson(`assets/i18n/${lang}/_speakers.json`)
         .then(d => {
           for (const [k, v] of Object.entries((d || {}).messages || {})) {
             if (k && v) spk.set(k, v);
           }
         })
-        .catch(() => { spkReady = null; });
+        .catch(() => {});                              // 文件缺失：记空，不再重试（避免刷 404）
     });
     return spkReady;
   }
@@ -218,7 +252,7 @@ window.I18N = (() => {
     next = norm(next);
     if (next === lang) return lang;
     lang = next;
-    spk.clear(); spkReady = null; _langAvail = undefined;  // 名字表/译文包按语言分开，切语言要重取
+    spk.clear(); spkReady = null; _langAvail = undefined; _index = null;  // 名字表/译文包按语言分开，切语言要重取
     try { localStorage.setItem(KEY_STORE, lang); } catch (e) { }
     applyDom();
     if (!silent) emit();

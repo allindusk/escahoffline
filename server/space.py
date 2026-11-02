@@ -2,7 +2,7 @@
 
 为什么单独一个模块
 ------------------
-"空间不够"是这个程序最常见的问题（全量素材 20 GB+，超分再来一套），
+"空间不够"是这个程序最常见的问题（全量素材 25 GB 上下，超分再来一套），
 而用户看到的是几个互不相干的数字：概览页的 bundle 缓存、画质页的 img/img_x2/audio、
 导出目录的文件列表……没人能从中算出"到底什么吃掉了 30 GB、我能删哪个"。
 
@@ -26,7 +26,7 @@ import os
 import shutil
 import time
 
-from . import media, paths
+from . import facts, media, paths
 from .cdn import config as cdn_cfg
 
 # ---------------------------------------------------------------- 分桶
@@ -41,10 +41,11 @@ GROUPS: dict[str, tuple[str, str, str]] = {
     "media_other": ("其他媒体文件", "web/media", "映射表以外的零散文件"),
     "script": ("剧本数据", "web/data",
                "解包出来的剧情脚本与索引，播放必需"),
-    "bundles": ("下载缓存（原始压缩包）", "userdata/char_story · files_img · files_audio",
+    "bundles": ("资源包缓存（原始压缩包）", "userdata/char_story · files_img · files_audio",
                 "下载回来的原始压缩包；装完就用不到，可删"),
     "cdn_cache": ("剧情目录缓存", "userdata/cdn",
-                  "官方目录与增量状态，删了下次要重新下载约 5 MB"),
+                  "官方目录与增量状态，删了下次要重新下载约 "
+                  + facts.size_text(facts.CATALOG_BYTES)),
     "trans": ("翻译库", "userdata/trans", "你导入的翻译稿"),
     "export": ("导出成品", "userdata/export", "导出的视频 / CG 压缩包 / 翻译 txt"),
     "logs": ("日志", "userdata/logs", "排错用，可随便删"),
@@ -428,7 +429,8 @@ def clean_x2(job=None, dry: bool = False) -> dict:
         media.rebuild_x2_overlay(job)
     except Exception as e:                                     # noqa: BLE001
         if job is not None:
-            job.log(f"⚠ 重建超分索引失败：{e}（到「提高CG画质」点一次重建索引）")
+            job.log(f"⚠ 高清图登记失败：{e}"
+                    "（到「提高CG画质」页点一次「重新登记高清图」）")
     res["dry"] = False
     invalidate()
     return res

@@ -26,8 +26,13 @@
 #btnHelp {
   background: #1c2c40; color: #9fd4f5; border: 1px solid #2f4c6d;
   border-radius: 8px; width: 30px; height: 26px;
-  cursor: pointer; font-weight: 700; margin-left: 6px;
+  cursor: pointer; font-weight: 700;
 }
+/* 右侧留白不能写进 #btnHelp 本身：ID 选择器会盖掉 header.js 给第一个右侧
+ * 控件打的 .hdr-first{margin-left:auto} —— 资源管理页去掉顶栏统计后，?
+ * 成了第一个右侧控件，却被这里的 6px 按在左边（紧贴标题）。
+ * 只有「不是第一个」时才需要那 6px。 */
+#btnHelp:not(.hdr-first) { margin-left: 6px; }
 #btnHelp:hover { background: #26405c; color: #d7efff; }
 
 /* ---------------- 译文面板 ---------------- */
@@ -48,30 +53,32 @@
   background: none; border: none; color: #7d92ab; font-size: 19px; cursor: pointer;
 }
 #transPanel .tp-body { padding: 16px 18px; overflow: auto; flex: 1; }
-#transPanel /* 译文格式：左右并排对比（导出 vs 导回） */
-.tp-cmp { display: flex; gap: 10px; margin: 10px 0 12px; }
-.tp-cmp-col { flex: 1 1 0; min-width: 0; background: #0d1622;
-  border: 1px solid #23405c; border-radius: 9px; padding: 9px 11px; }
-.tp-cmp-col.good { border-color: #2c5a3c; background: #0c1a12; }
-.tp-cmp-h { font-size: 14px; color: #7fd3ff; margin-bottom: 7px; font-weight: 600; }
-.tp-cmp-col.good .tp-cmp-h { color: #8fe0a4; }
-.tp-cmp-code { font-family: Consolas, "Courier New", monospace; font-size: 14px;
-  line-height: 1.9; color: #b9cde0; word-break: break-all; }
-/* 块头独立成行：窄栏里 ### 那行较长，跟着后面的 ja: 折行会看不清结构 */
-.tp-cmp-code b { display: block; color: #ffb454; font-size: 14px; }
-.tp-demo2 { color: #8fa8c2; }               /* 原文第二行，示意多行 */
-.tp-empty { color: #5c718a; font-style: italic; }
-.tp-fill { color: #8fe0a4; }
-.tp-cmp-f { margin-top: 7px; font-size: 14px; color: #7d92ab; }
-.tp-cmp-f b { color: #cfe0f2; }
-@media (max-width: 620px) { .tp-cmp { flex-direction: column; } }
-
-.tp-note {
-  font-size: 14px; line-height: 2; color: #a9c0d8;
-  background: #0f1a27; border: 1px solid #1d2f43; border-radius: 10px;
-  padding: 12px 14px; margin: 0 0 14px;
+/* 译文格式的说明/样例不再写在这里：点「看 5 步教程」打开浮窗，
+   正文与资源管理页共用 assets/js/trans_tut.js + trans_tut.css。 */
+#transPanel #tpTut {
+  background: #16324b; border: 1px solid #3d6b93; color: #cfe6ff;
+  border-radius: 9px; padding: 8px 14px; cursor: pointer; font-size: 14.6px;
 }
-#transPanel .tp-note code { color: #8fd6ff; background: #14243a; padding: 1px 4px; border-radius: 3px; }
+#transPanel #tpTut:hover { background: #1d4266; border-color: #4b96d4; }
+#transPanel .tp-hint { font-size: 14px; color: #7d92ab; }
+/* 「导出完成后自动打开文件夹」+「打开导出目录」：与资源管理页同一套行为 */
+#transPanel .tp-chk {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 14px; color: #a9c0d8; cursor: pointer;
+}
+#transPanel .tp-chk input { margin: 0; }
+#transPanel .tp-mini {
+  background: #16283a; border: 1px solid #2f4c6d; color: #9fb6cc;
+  border-radius: 8px; padding: 5px 10px; font-size: 14px; cursor: pointer;
+}
+#transPanel .tp-mini:hover { color: #dbe9f8; border-color: #4b96d4; }
+/* 「上次导出到哪」：必须留得住，不能只靠几秒的提示 */
+#transPanel .tp-last {
+  font-size: 14px; line-height: 1.85; color: #9fb6cc;
+  background: #0f1a27; border: 1px solid #1d2f43; border-radius: 9px;
+  padding: 9px 12px; margin: 0 0 12px; word-break: break-all;
+}
+#transPanel .tp-last b { color: #dbe9f8; }
 #transPanel .tp-row {
   display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
 }
@@ -82,13 +89,23 @@
 #transPanel button.primary:hover { filter: brightness(1.15); }
 #transPanel button.primary:disabled { opacity: .5; cursor: default; }
 #transPanel .tp-stat { font-size: 14px; color: #7d92ab; }
+/* 选文件按钮：和「打开导出目录」这类次要按钮**同一套外观**。
+   原来是 flex:1 + 虚线大框，横向拉满整个面板，看着像输入框，
+   和旁边的按钮完全两个风格（用户 2026-11-02 反馈"很割裂"）。 */
 #transPanel .tp-file {
-  flex: 1; display: flex; align-items: center; gap: 8px;
-  border: 1px dashed #2f4c6d; border-radius: 9px; padding: 9px 12px;
-  font-size: 14px; color: #9fb6cc; cursor: pointer;
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px;
+  background: #16283a; border: 1px solid #2f4c6d; color: #9fb6cc;
+  border-radius: 8px; padding: 7px 13px; font-size: 14px; cursor: pointer;
+  max-width: 100%;
 }
-#transPanel .tp-file:hover { border-color: #4b96d4; color: #cfe6ff; }
+#transPanel .tp-file:hover {
+  background: #1d3450; border-color: #4b96d4; color: #dbe9f8;
+}
 #transPanel .tp-file input { display: none; }
+/* 选了长文件名也不能把这一行撑变形 */
+#transPanel .tp-file span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+}
 #transPanel .tp-mode { font-size: 14px; color: #a9c0d8; display: flex; align-items: center; gap: 4px; }
 #transPanel textarea {
   width: 100%; height: 190px; resize: vertical; background: #0f1a27;

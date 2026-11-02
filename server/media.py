@@ -882,8 +882,10 @@ def rebuild_x2_overlay(job=None) -> dict:
             n += 1
     save_overlay("x2", data)
     if job is not None:
-        msg = f"重建覆盖层：{n} 张超分图"
+        # 用页面上的说法（"高清图 / 登记"），别在这里冒出"覆盖层"这种内部词：
+        # 任务条和操作记录里的这句话会直接被用户看到。
+        msg = f"已登记 {n} 张高清图"
         if fixed:
-            msg += f"（顺手补全 {fixed} 个缺扩展名的旧文件）"
+            msg += f"（另外整理好 {fixed} 个旧文件）"
         job.log(msg)
     return {"count": n, "fixed": fixed}

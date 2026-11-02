@@ -56,12 +56,25 @@ class Job:
         self.bytes_done = 0.0
         self.items_total = 0
         self.items_done = 0
+        # 子进度（下载层的"包 x/y"）：多单元安装时，顶层百分比改由
+        # items 驱动（不会出现"剧情100%→立绘100%→语音100%"反复跳满），
+        # 而每一批 bundle 的进度单独落在 sub 上，界面当作次级信息显示。
+        self.sub_total = 0.0
+        self.sub_done = 0.0
+        self.sub_label = ""
+        # sub_mode：fetch_many / _capture 把"包计数"写进 sub 而不是顶层
+        # total/done（否则每层 fetch 都把顶层进度重置到 100%）。
+        self.sub_mode = False
         # 阶段百分比映射（都用"百分点"）：
         # percent = pct_base + 本阶段内部进度(0–100) × pct_span / 100。
         # 下载 + 解包这类"两段耗时"的任务靠它把解包也画进进度条，
         # 否则下载一到 100% 就冻在那里十几分钟（用户会当成卡死）。
         self.pct_base = 0.0
         self.pct_span = 100.0
+        # 进度条高水位：只许前进，不许倒退。
+        # 多单元安装时「下一部的第一批」会把 sub 归零（0/1），
+        # 不设高水位就会在界面上看到 33% → 66% → 33% 的来回跳。
+        self._pct_hi = 0.0
         self.detail: dict = {}
         self.created = time.time()
         self.started = 0.0
@@ -90,6 +103,18 @@ class Job:
 
     def set_items(self, n: int) -> None:
         self.items_total = int(n)
+
+    def sub_progress(self, done: float, total: float, label: str = "") -> None:
+        """写入"子进度"（当前这批 bundle 的包计数），不影响顶层百分比。
+
+        多单元安装时，顶层百分比由 items 驱动，下载层的每批包进度单独记在这里，
+        界面显示成「包 x/y」之类的次级信息，避免反复冲到 100%。
+        """
+        self.sub_done = float(done)
+        self.sub_total = float(total)
+        if label:
+            self.sub_label = label
+        self._sample()
 
     def phase(self, base: float, span: float, total: float | None = None,
               unit: str = "", keep_bytes: bool = False) -> None:
@@ -241,11 +266,16 @@ class Job:
 
     def eta(self) -> float:
         """剩余秒数。有字节总量时按字节算 —— 按"包个数"算会严重失真
-        （音效包 60 KB、BGM 包 2.8 MB，混在一起时个数速度毫无意义）。"""
-        if self.bytes_total and self.bytes_done and self.bytes_done < self.bytes_total:
+        （音效包 60 KB、BGM 包 2.8 MB，混在一起时个数速度毫无意义）。
+
+        分母取 ``max(已下, 预估总量)``：预估可能偏小（没装过的剧情算不出图片包），
+        用旧值算出来的"剩余"是负数，白白把 ETA 压成 0。
+        """
+        bt = max(self.bytes_total, self.bytes_done)
+        if bt and self.bytes_done and self.bytes_done < bt:
             sp = self.byte_speed()
             if sp > 0:
-                return max(0.0, (self.bytes_total - self.bytes_done) / sp)
+                return max(0.0, (bt - self.bytes_done) / sp)
         sp = self.speed()
         if sp <= 0 or not self.total or self.done >= self.total:
             return 0.0
@@ -254,11 +284,22 @@ class Job:
     def snapshot(self) -> dict:
         sp = self.speed()
         # 百分比口径必须和界面上"看得见的数字"一致：
+        # 多单元安装（items_total>1）时，顶层百分比由「第 i/N 部」驱动，
+        # 这样装 70 部剧情只会从 0 平稳爬到 100%，不会每装一部、每下一批
+        # 都在 100% 处反复跳满（"剧情100%→立绘100%→语音100%"）。
         # 有字节总量就按字节算（同一条任务条里写着 12.3 / 893 MB），
         # 否则按项数算（包 / 帧 / 张）。
         # 以前一律按项数，于是出现「70.9% · 8.40 MB / 893.01 MB」这种
         # 两个数字互相打脸的进度（8 MB 才 1%）。
-        if self.bytes_total:
+        if self.items_total > 1:
+            sub_frac = (self.sub_done / self.sub_total) if self.sub_total else 0.0
+            # 0.95 而不是 1.0：当前这部的下载批"下完了"时，解包还没做完，
+            # 若让 sub_frac 顶到 1，多单元安装会在**倒数第一部还没装完**时
+            # 就把进度条画到 100%（实测 3 部：第 2 部结束时 100%）。
+            sub_frac = min(0.95, max(0.0, sub_frac))
+            inner = 100.0 * (self.items_done + sub_frac) / self.items_total
+            inner = min(100.0, max(0.0, inner))
+        elif self.bytes_total:
             inner = 100.0 * self.bytes_done / self.bytes_total
         elif self.total:
             inner = 100.0 * self.done / self.total
@@ -266,6 +307,15 @@ class Job:
             inner = 0.0
         inner = min(100.0, max(0.0, inner))
         pct = self.pct_base + inner * self.pct_span / 100.0
+        pct = min(100.0, max(0.0, pct))
+        # 进度条只许前进：多单元安装时下一部的第一批会把 sub 归零，
+        # 不设高水位就会看到 66% → 33% 这种倒退（用户以为任务重启了）。
+        self._pct_hi = max(self._pct_hi, pct)
+        pct = self._pct_hi
+        # 字节分母可能估小：预扫只能读到已解包的剧本（没装过的剧情算不出图片包），
+        # 于是会出现「已下 5.63 MB / 总量 0.01 MB」。分母永远不许小于分子。
+        bd = self.bytes_done
+        bt = max(self.bytes_total, bd)
         return {
             "id": self.id, "kind": self.kind, "title": self.title,
             "unit": self.unit, "state": self.state, "message": self.message,
@@ -275,12 +325,15 @@ class Job:
             "ended": self.ended,
             "started": self.started, "created": self.created,
             "total": self.total, "done": self.done,
-            "percent": round(min(100.0, max(0.0, pct)), 2),
+            "percent": round(pct, 2),
             "speed": sp, "eta": self.eta(),
             # 进度条的字节维度：已下大小 / 总大小 / 字节速度
-            "bytesDone": self.bytes_done, "bytesTotal": self.bytes_total,
+            "bytesDone": bd, "bytesTotal": bt,
             "bytesSpeed": self.byte_speed(),
             "itemsTotal": self.items_total, "itemsDone": self.items_done,
+            "subTotal": self.sub_total, "subDone": self.sub_done,
+            "subLabel": self.sub_label,
+            "meta": self.meta,
             "detail": self.detail,
             "created": self.created, "started": self.started,
             "elapsed": (self.ended or time.time()) - (self.started or self.created),

@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>资源管理 · 超昂大战 角色剧情离线阅读器</title>
-<link rel="stylesheet" href="assets/css/setup.css?v=1125a">
+<link rel="stylesheet" href="assets/css/setup.css?v=1130a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 <!-- 剧情列表（②剧情安装 / ③提高CG画质 / ⑤翻译 三页共用），与播放器侧栏同一套观感 -->
 <link rel="stylesheet" href="assets/css/storylist.css?v=1125a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1102a">
+<!-- 「自己动手翻」教程浮窗的样式：与播放器共用同一份 -->
+<link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1103b">
 </head>
 <body>
 <div class="layout">
@@ -28,7 +30,7 @@
     <section id="sec-overview" class="on">
       <h2>第一次用？看这里</h2>
       <p class="lead">
-        <b>程序本身不含游戏素材</b>（全部素材 20 GB 以上，版权也不属于本项目）。
+        <b>程序本身不含游戏素材。</b>
         想看哪部剧情，先把它下载下来 —— 装好之后断网也能看。
       </p>
 
@@ -36,13 +38,15 @@
         <div class="card">
           <h3>① 下载基础数据（必须先做）</h3>
           <p>先下「目录」，程序才知道现在有哪些剧情能装；背景音乐和音效是所有剧情共用的，一起下更省事。</p>
-          <p class="dim">状态：<b id="ovCore">—</b>　目录约 5 MB，公共素材约 775 MB。</p>
+          <!-- 容量 / 耗时一律走 data-fact 占位，数字与单位由 server/facts.py 给
+               （页面里写死过 775 MB，和下面「基础数据」的 835 MB 自相矛盾） -->
+          <p class="dim">状态：<b id="ovCore">—</b>　目录约 <span data-fact="catalog">…</span>，公共素材约 <span data-fact="public">…</span>。</p>
           <button class="primary" id="ovInstallCore">下载基础数据</button>
         </div>
         <div class="card">
           <h3>② 先装一部剧情试试</h3>
           <p>挑一个想看的角色，装它就够了。语音、立绘、CG 会一起下好。</p>
-          <p class="dim">每部约 <b id="ovMin">—</b>，装完约 30–90 秒。</p>
+          <p class="dim">每部约 <b id="ovMin">—</b>，装完约 <span data-fact="secUnit">…</span>。</p>
           <button id="ovInstallMin">去挑一个角色</button>
         </div>
         <div class="card">
@@ -57,12 +61,9 @@
       <div class="statGrid" id="ovStats"></div>
 
       <div class="tip">
-        <b>第一次用建议：</b>先点「下载基础数据」（目录 + 公共素材一次下齐）→
-        再去「剧情安装」勾一个想看的角色 →「开始安装」→ 等 30–90 秒 →
-        回「角色剧情」页点它就能播。全程不用你准备任何文件。
+        <b>第一次用建议：</b>先点「下载基础数据」（目录 + 公共素材一次下齐）→再去「剧情安装」勾一个想看的角色 →「开始安装」→ 等 <span data-fact="secUnit">…</span> →回「角色剧情」页点它就能播。全程不用你准备任何文件。
         <br>
-        <b>下载前提醒：</b><b>最好先关掉代理 / VPN 再下载</b> —— 代理按流量计费，
-        一部剧情 30–60 MB、全部 20 GB，很容易把额度用光；直连反而更快。
+        <b>下载前提醒：</b><b>最好先关掉代理 / VPN 再下载</b> —— 代理按流量计费，一部剧情 <span data-fact="unitEach">…</span>、全部 <span data-fact="allAssets">…</span>，很容易把额度用光；直连反而更快。
       </div>
     </section>
 
@@ -70,8 +71,7 @@
     <section id="sec-packs">
       <h2>剧情安装</h2>
       <p class="lead">
-        勾一部想看的剧情，点「开始安装」，程序会自己把它下载下来装好 ——
-        语音、立绘、CG 一次齐活。你要做的只有勾选和等待。
+        勾一部想看的剧情，点「开始安装」，程序会自己把它下载下来装好 ——语音、立绘、CG 一次齐活。你要做的只有勾选和等待。
       </p>
 
       <div class="optbox">
@@ -88,12 +88,10 @@
         <details class="explain">
           <summary>这个选项是什么意思？一般不用改</summary>
           <p>
-            一部剧情不是一个大文件，而是<b>几十个小文件</b>（剧本、语音、图片分开打包）。
-            程序可以同时下好几个，所以这里选的是<b>同时下几个</b>。
+            一部剧情不是一个大文件，而是<b>几十个小文件</b>（剧本、语音、图片分开打包）。程序可以同时下好几个，所以这里选的是<b>同时下几个</b>。
           </p>
           <p>
-            <b>数字越大越快</b>：默认 32 最快最省时间。
-            如果经常看到失败、或者网络本来就慢，就往小调（16 → 8），稳一点。
+            <b>数字越大越快</b>：默认 32 最快最省时间。如果经常看到失败、或者网络本来就慢，就往小调（16 → 8），稳一点。
           </p>
         </details>
 
@@ -122,8 +120,7 @@
         <button class="primary" id="btnInstall">开始安装</button>
       </div>
       <p class="warn" id="noSrcWarn" hidden>
-        ⚠ 还没有可用的下载地址。到「设置 → 下载源」里换一个镜像，
-        或者稍后重试（官方地址偶尔会抽风）。
+        ⚠ 还没有可用的下载地址。到「设置 → 下载源」里换一个镜像，或者稍后重试（官方地址偶尔会抽风）。
       </p>
     </section>
 
@@ -134,8 +131,7 @@
            比读十行说明有用 -->
       <div class="leadrow">
         <p class="lead">
-          把已经装好的图片<b>放大成高清版</b>，看着更清楚。原图不会被改动，随时能反悔；
-          想删高清图、看占了多少空间，都在「设置 / 清理空间」页。
+          把已经装好的图片<b>放大成高清版</b>，看着更清楚。原图不会被改动，随时能反悔；想删高清图、看占了多少空间，都在「设置 / 清理空间」页。
         </p>
         <button class="cmpbtn" id="btnCmpDemo">
           <span class="cmpbtn-ico">🔍</span>
@@ -150,7 +146,6 @@
         <h3>先选范围（可选）</h3>
         <p class="dim">
           <b>不勾任何一项＝所有已装剧情都做</b>。只想给某个角色、某几章做高清，就在下面勾出来。
-          列表用法和播放器侧栏一样。
         </p>
         <div class="optrow" style="flex-wrap:wrap;gap:10px">
           <button class="small" id="upAll">全选本类</button>
@@ -187,39 +182,25 @@
 
         <div class="optrow">
           <button class="primary" id="btnUpscale">开始超分</button>
-          <button id="btnRebuildX2" title="按磁盘上实际存在的 img_x2 文件重建覆盖层">重建超分索引</button>
         </div>
         <p class="dim">
-          原图<b>一个都不会被改动</b>，高清图是另存的一套，所以随时能反悔。
           播放器会优先用高清图，没做过的自动用原图，不会黑图。
         </p>
 
         <!-- 以下三块原在「剧情安装」页，讲的全是超分本身，统一收到本页 -->
         <div class="optrow" style="margin-top:14px">
           <label class="chk"><input type="checkbox" id="optUpscale"> 装剧情时<b>顺手把这部剧的图也变高清</b></label>
-          <span class="hint">2 倍放大，只处理那次装的剧情，不碰别的；
-            要在这里勾上，回「剧情安装」点开始安装时才生效</span>
+          <span class="hint">2 倍放大，只处理那次装的剧情，不碰别的；要在这里勾上，回「剧情安装」点开始安装时才生效</span>
         </div>
 
         <div class="warn ups-warn">
-          <b>⚠ 超分很吃电脑，请先想清楚要不要开：</b>
-          <ul class="ups-ul">
-            <li><b>很耗时</b>：一部剧情通常几十到一百多张图，<b>要 1–3 分钟</b>（比下载还久）。</li>
-            <li><b>占 CPU</b>：跑的时候<b>电脑会变卡、风扇会响</b>，笔记本掉电也会快一点。</li>
-            <li><b>占硬盘</b>：高清图是额外一套，<b>约占原图 1–2 倍空间</b>。</li>
-            <li><b>随时能取消</b>：已经做完的不会白做，下次接着来；关掉页面也不影响。</li>
-          </ul>
-          <p style="margin:8px 0 0">
-            <b>建议：</b>第一次<b>先不勾</b>，装上剧情看看画面够不够清楚。
-            觉得糊再来本页单独做一次。<b>超分不是装剧情的必要条件。</b>
-          </p>
+          <b>⚠ 超分处理图片期间吃电脑性能，点击开始前确保电脑空闲。</b>
         </div>
 
         <details class="explain">
           <summary>想反悔怎么办？能撤掉吗？</summary>
           <p>
-            <b>原图一直在，没被动过。</b>不想要高清图了，到
-            「设置 / 清理空间 → 超分高清图」删掉就行，删完还是照样播（画质变回原图）。
+            <b>原图一直在，没被动过。</b>不想要高清图了，到「设置 / 清理空间 → 超分高清图」删掉就行，删完还是照样播（画质变回原图）。
           </p>
           <p>
             反过来，如果觉得高清版够好、想省点空间，可以把
@@ -228,32 +209,41 @@
           <p class="dim">
             技术细节：高清图存在 <code>media/img_x2/</code>，并登记在
             <code>data/imgmap.x2.js</code> 里。引擎是 <b>Real-CUGAN</b>
-            （<code>realcugan-ncnn-vulkan</code>，参数 <code>-m models-se -n 2 -s 2</code>），
-            默认放在 <code>tools/realcugan/</code>。没有这个引擎就不能超分。
+            （<code>realcugan-ncnn-vulkan</code>，参数 <code>-m models-se -n 2 -s 2</code>），默认放在 <code>tools/realcugan/</code>。没有这个引擎就不能超分。
           </p>
+        </details>
+
+        <!-- 高清图「做了却没生效」的修复入口。绝大多数人一辈子用不到，
+             所以收进折叠里 —— 摆在「开始超分」旁边只会让人以为每次都得点。 -->
+        <details class="explain" id="fixX2Box">
+          <summary>高清图做了，画面却没变清楚？（修复用，平时不用点）</summary>
+          <p>
+            <b>正常做完超分不需要点这里</b> —— 程序会自动认上新做的图，播放器马上就用上了。只有遇到下面这几种情况才值得点一次：
+          </p>
+          <ul style="margin:6px 0 10px;padding-left:20px;line-height:1.9">
+            <li>从<b>别的电脑、或者自己的备份</b>里拷了高清图过来，程序还不知道有这些图；</li>
+            <li>上次超分<b>中途强退过</b>（断电、任务管理器结束进程），有的图做了却没记上；</li>
+            <li>「设置 / 清理空间」里明明有<b>一堆高清图占着空间</b>，播放器里看到的却还是原来的糊图。</li>
+          </ul>
+          <p>
+            点一下只要 <b data-fact="secRebuild">…</b>：它只是把硬盘上<b>已经做好的高清图数一遍、重新登记给播放器</b>。
+            <b>不会重新超分、不会改动或删除任何图片</b>，硬盘占用一点都不会变。
+          </p>
+          <div class="optrow">
+            <button id="btnRebuildX2">重新登记高清图（约 <span data-fact="secRebuild">…</span>）</button>
+            <span class="hint" id="x2RebuildInfo">还没点过</span>
+          </div>
         </details>
 
       </div>
 
       <div class="panel">
         <h3>图片格式（自动处理，不用管）</h3>
-        <p class="dim" style="max-width:72ch">
-          下载下来的图片会<b>自动压成更小体积的格式</b>，画质几乎看不出差别，
-          但硬盘能省下三到四成。<b>这一步没有开关，也不需要你设置。</b>
+        <p class="dim">
+          下载下来的图片会<b>自动压成更小体积的格式</b>，画质几乎看不出差别，但硬盘能省下三到四成。<b>这一步没有开关，也不需要你设置。</b>
         </p>
       </div>
 
-      <div class="panel">
-        <h3>做完了想省空间？</h3>
-        <p class="dim">
-          高清图、资源包缓存、导出成品都能在<b>「设置 / 清理空间」</b>页删掉 ——
-          那里会先告诉你每一项占多少、删了会怎样。
-        </p>
-        <div class="optrow">
-          <button id="btnGoClean">去「设置 / 清理空间」</button>
-          <span class="hint">删除原图 / 清理缓存 / 看容量占用都在那里</span>
-        </div>
-      </div>
     </section>
 
     <!-- ================= 导出 ================= -->
@@ -266,9 +256,7 @@
           把剧情做成一个 <b>1080p 的 mp4 视频</b>，声音和画面都是对的，<b>不用另装任何软件</b>；勾多段会合成一条。
         </p>
         <p class="dim">
-          速度：<b>每句约 2 秒</b>。一段 100 多句 ≈ <b>3–5 分钟</b>；6 段全导 ≈ <b>15–25 分钟</b>。
-          期间可以关掉这个页面，任务会在后台继续。文件存在程序目录的
-          <code>userdata/export/</code> 里。
+          速度：每句约 <b data-fact="secExportLine">…</b>。一段 100 多句 ≈ <b data-fact="secExportPart">…</b>；6 段全导 ≈ <b data-fact="secExportAll">…</b>。期间可以关掉这个页面，任务会在后台继续。
         </p>
 
         <!-- 逐句定格的固有局限：元素齐全，但"运动过程"没法截出来 -->
@@ -283,7 +271,6 @@
         <div class="optrow">
           <label class="chk sm"><input type="checkbox" id="setOpenExp">
             导出完成后自动打开文件夹</label>
-          <span class="hint">视频 / CG 结束时把文件夹弹到前面（Windows 有时会开在后台，页面上也会显示保存位置）</span>
         </div>
         <div class="warn" id="vidWarn" hidden></div>
 
@@ -318,7 +305,7 @@
       <div class="panel">
         <h3>导出角色 CG</h3>
         <p class="dim">
-          打包成一个 zip，里面按角色分好文件夹。导出后点下面的「打开导出目录」就能找到。
+          打包成一个 zip，里面按角色分好文件夹。
         </p>
         <div class="warn" id="cgWarn" hidden></div>
         <!-- 同一套列表：CG 只有角色侧，所以只显示「角色」一个分类 -->
@@ -338,6 +325,9 @@
 
       <div class="panel">
         <h3>已导出文件</h3>
+        <!-- 上一次导出的结论固定留在这里：底部任务条十几秒就收走、
+             操作记录也会自动折叠，用户回头想找"导到哪去了"得有个地方可看 -->
+        <div id="expLast" class="lastres">还没有导出过。导出完成后，这里会显示文件名和保存位置。</div>
         <div class="optrow">
           <button id="btnOpenExport">打开导出目录</button>
           <button id="btnRefreshExp">刷新列表</button>
@@ -349,10 +339,19 @@
     <!-- ================= 翻译 ================= -->
     <section id="sec-trans">
       <h2>翻译</h2>
-      <p class="lead">
-        剧情原文是日文。这里可以<b>换成中文</b>：导出原文 → 交给 AI 翻译（或自己翻）→ 导回程序。
-        全程只用 txt 文件，不会把节目搞坏。
-      </p>
+      <!-- 教程内容长、平时又用不上，所以做成按钮点开的浮窗（铺在页面上太乱） -->
+      <div class="leadrow">
+        <p class="lead">
+          剧情原文是日文。这里可以<b>翻译成中文</b>：导出原文 → 交给 AI 翻译（或自己翻）→ 导回程序。
+        </p>
+        <button class="cmpbtn" id="btnTutTrans">
+          <span class="cmpbtn-ico">✍</span>
+          <span class="cmpbtn-tx">
+            <b>自己动手翻</b>
+            <small>5 步教程 / 点开看</small>
+          </span>
+        </button>
+      </div>
       <div class="panel">
         <h3>现在有多少中文</h3>
         <div class="statGrid" id="transStats"></div>
@@ -360,59 +359,66 @@
       <div class="panel">
         <h3>在播放器里逐部翻译（推荐）</h3>
         <p class="dim">
-          打开任意剧情 → 点控制条上的「翻译」→ 导出原文 txt → 让 AI 按文件头的说明翻译 →
-          选文件导回 → F5 刷新就能看到中文。
+          打开任意剧情 → 点控制条上的「翻译」→ 导出原文 txt → 让 AI 按文件头的说明翻译 →选文件导回 → F5 刷新就能看到中文。
         </p>
         <div class="optrow">
           <button class="primary" onclick="location.href='index.html'">去播放器</button>
         </div>
       </div>
+
       <div class="panel">
-        <h3>批量导入译文（txt / 文件夹 / zip 压缩包）</h3>
-        <p class="dim" style="max-width:78ch">
-          选<b>多个 txt</b>、选<b>整个文件夹</b>、或选一个 <b>zip 压缩包</b>都能一次导入。
-          每部剧情的编号会<b>自动认</b>（取文件头「剧情标识」那行，认不到就用文件名），
-          不用一个个手填。和「批量导出」打出来的 <code>译文.zip</code> 能直接对上。
+        <h3>导入译文（txt / 文件夹 / zip 压缩包）</h3>
+        <p class="dim">
+          <b>导一部、一次导很多部都行</b>：选<b>多个 txt</b>、选<b>整个文件夹</b>、或选一个 <b>zip 压缩包</b>。<b>是哪部剧情会自动认</b>，不用你一个个填。
         </p>
-        <div class="optrow" style="flex-wrap:wrap;gap:10px;align-items:center">
-          <div class="tr-src" id="trSrc">
-            <button type="button" data-src="multi" class="on">多个 txt</button>
-            <button type="button" data-src="dir">整个文件夹</button>
-            <button type="button" data-src="zip">zip 压缩包</button>
+        <!-- 三步式：① 文件在哪 → ② 选文件 → ③ 导入方式 + 导入。
+             以前「类型 / 选文件 / 合并覆盖 / 导入」四样平铺成一行，用户看不出先后，
+             也不知道那个裸下拉框「合并 / 覆盖」到底在问什么（用户 2026-11-03）。 -->
+        <div class="tr-imp">
+          <div class="tr-step">
+            <div class="tr-lab"><span class="tr-no">①</span>文件在哪</div>
+            <div class="tr-src" id="trSrc">
+              <button type="button" data-src="multi" class="on">
+                <b>txt文件</b><small>支持选单个或多个</small>
+              </button>
+              <button type="button" data-src="dir">
+                <b>整个文件夹</b><small>txt 都放在一个文件夹里</small>
+              </button>
+              <button type="button" data-src="zip">
+                <b>zip 压缩包</b><small>打包好的 zip，不用解压</small>
+              </button>
+            </div>
           </div>
-          <button type="button" id="trPick">选择文件…</button>
-          <select id="trMode">
-            <option value="merge">合并</option>
-            <option value="replace">覆盖</option>
-          </select>
-          <button type="button" class="primary" id="btnTrImportBulk">导入</button>
+
+          <div class="tr-step">
+            <div class="tr-lab"><span class="tr-no">②</span>选文件</div>
+            <button type="button" id="trPick">选择 txt 文件…</button>
+            <span class="hint" id="trBulkInfo">还没选文件</span>
+          </div>
+
+          <div class="tr-step">
+            <div class="tr-lab"><span class="tr-no">③</span>导入方式</div>
+            <div class="tr-mode" id="trModeBox">
+              <button type="button" data-mode="merge" class="on">
+                <b>合并</b><small>原来的译文留着，只补新翻的</small>
+              </button>
+              <button type="button" data-mode="replace">
+                <b>覆盖</b><small>用这次的文件整个换掉</small>
+              </button>
+            </div>
+            <button type="button" class="primary" id="btnTrImportBulk" disabled>导入</button>
+          </div>
         </div>
         <input type="file" id="trInput" multiple accept=".txt" hidden>
-        <div id="trBulkInfo" class="dim" style="font-size:14px;margin-top:8px">还没选文件</div>
         <div id="trResult" class="dim"></div>
-      </div>
-      <div class="panel">
-        <h3>单个 txt（手动指定剧情）</h3>
-        <div class="optrow" style="flex-wrap:wrap;gap:10px">
-          <input id="trUnit" placeholder="剧情标识（点下方列表的「填入」自动填）"
-                 style="flex:1;min-width:250px">
-          <label class="tp-file" style="flex:1;min-width:220px">
-            <input type="file" id="trFile" accept=".txt">
-            <span id="trFileN">选择 txt…</span></label>
-          <button class="primary" id="btnTrImport">导入</button>
-        </div>
-        <div class="dim" style="font-size:14px;margin-top:6px">
-          「剧情标识」是剧情的内部编号（例如 <code>char_415</code>）。
-          <b>不用记</b> —— 点下面列表每行右侧的<b>填入</b>，会自动填进这个框。
-          这个入口适合导一份<b>没有文件头</b>、或你想<b>强制指定</b>剧情的单独 txt。
-        </div>
-        <div id="trResult1" class="dim"></div>
+        <p class="dim" style="margin:10px 0 0">
+          <b>只认本页导出的原文。</b>把开头「剧情标识」那一行删了、或者整份重写过，程序就认不出是哪部剧情 —— 重新导出原文、填好再导一次就行。
+        </p>
       </div>
       <div class="panel">
         <h3>批量导出（备份 / 批量翻译）</h3>
         <p class="dim">
-          把<b>勾选的剧情</b>原文打成一个 zip，方便备份，或者一次全丢给 AI 翻。
-          翻好之后用上面的「批量导入」逐部导回即可。<b>只有装好的剧情能勾。</b>
+          把<b>勾选的剧情</b>原文打成一个 zip，方便备份，或者一次全丢给 AI 翻。翻好之后用上面的「导入译文」导回即可。<b>只有装好的剧情能勾。</b>
         </p>
         <!-- 全选 / 清空 / 导出挤在一行：导出是这一屏的主操作，放最右边（margin-left:auto 顶到行尾），
              省掉原来列表下面那一行，滚动时也不用先滚到底才找得到按钮。 -->
@@ -425,6 +431,14 @@
           <span id="trExpResult" class="dim" style="margin-left:auto"></span>
           <button class="primary" id="btnTrExport">导出所选剧情</button>
         </div>
+        <!-- 导出后的去向：和「④ 导出」页同一个开关（存的是同一个设置），
+             就在按钮下面，导完不用再去别处找文件夹 -->
+        <div class="optrow" style="flex-wrap:wrap;gap:10px;margin-top:8px">
+          <label class="chk sm"><input type="checkbox" id="setOpenExpTr">
+            导出完成后自动打开文件夹</label>
+          <button class="small" id="btnOpenExpTr">打开导出目录</button>
+        </div>
+        <div id="trExpLast" class="lastres">导出后，这里会显示文件名和保存位置。</div>
         <div id="trBar" class="sl-bar" style="border:1px solid var(--line);border-radius:10px 10px 0 0;margin-top:10px"></div>
         <div id="trList" class="sl-list" style="border:1px solid var(--line);border-top:none;border-radius:0 0 10px 10px"></div>
       </div>
@@ -437,9 +451,7 @@
       <div class="panel">
         <h3>① 更新剧情目录（有新剧情时点一次）</h3>
         <p class="dim">
-          点一下，程序会去问官方"有没有新剧情"，大约 <b>10–20 秒</b>。
-          顺便把角色的稀有度、实装日期也刷新一遍。
-          如果公共素材（背景 / 音乐 / 音效）有更新，<b>会自动补下，不用你管</b>。
+          点一下，程序会去问官方"有没有新剧情"，大约 <b data-fact="secCatalog">…</b>。顺便把角色的稀有度、实装日期也刷新一遍。如果公共素材（背景 / 音乐 / 音效）有更新，<b>会自动补下，不用你管</b>。
         </p>
         <div class="optrow">
           <button id="btnRefreshManifest">更新剧情目录</button>
@@ -449,8 +461,7 @@
           <span id="wikiResult" class="dim"></span>
         </div>
         <div id="wikiProxyTip" class="warn" style="display:none;margin-top:8px">
-          连不上服务器（剧情目录已更新，角色资料没更新）。
-          请检查网络，或开一下代理再点「补下载」。
+          连不上服务器（剧情目录已更新，角色资料没更新）。请检查网络，或开一下代理再点「补下载」。
           <button id="btnWikiRetry" class="small">补下载角色资料</button>
         </div>
       </div>
@@ -458,16 +469,14 @@
       <div class="panel">
         <h3>② 更新程序本体</h3>
         <p class="dim">
-          点「检查程序更新」看有没有新版；有新版本再点右边那个按钮，
-          程序会自己换好文件并重启。<b>发现有新版时，下面会列出本次更新修了什么。</b>整个过程中
+          点「检查程序更新」看有没有新版；有新版本再点右边那个按钮，程序会自己换好文件并重启。<b>发现有新版时，下面会列出本次更新修了什么。</b>整个过程中
           <b>你的素材、译文、设置一个都不会丢</b>。
         </p>
         <div class="optrow">
           <label class="chk"><input type="checkbox" id="setAutoCheck">
             每次启动程序后检查更新</label>
           <span class="hint">
-            默认勾选：启动后<b>只查一次</b>有没有新版，有就在页面顶部提示一句
-            （<b>不会自动下载、不会自动重启</b>）。不想让它联网就取消勾选。
+            默认勾选：启动后<b>只查一次</b>有没有新版，有就在页面顶部提示一句（<b>不会自动下载、不会自动重启</b>）。不想让它联网就取消勾选。
           </span>
         </div>
         <div class="optrow" style="margin-top:8px">
@@ -480,14 +489,10 @@
         <details class="explain">
           <summary>更新是从哪下的？（技术细节，不看也不影响使用）</summary>
           <p>
-            剧情目录走官方服务器；角色资料走 GitHub 上的每日自动更新，
-            有几条备用线路，哪条通就用哪条（和「检查程序更新」共用同一张线路表）。
-            只有全部线路都不通时，才会退回直连 Wiki —— 那个站在日本，才需要代理。
-            角色资料更新失败<b>不影响</b>剧情目录。
+            剧情目录走官方服务器；角色资料走 GitHub 上的每日自动更新，有几条备用线路，哪条通就用哪条（和「检查程序更新」共用同一张线路表）。只有全部线路都不通时，才会退回直连 Wiki —— 那个站在日本，才需要代理。角色资料更新失败<b>不影响</b>剧情目录。
           </p>
           <p>
-            程序本体的下载顺序：<b>gh-proxy 主站 → 优选 v4 → 优选 v4/v6 → Fastly</b>，
-            哪条有响应就用哪条（不测速）；四条都不通才用 GitHub 官方直连。
+            程序本体的下载顺序：<b>gh-proxy 主站 → 优选 v4 → 优选 v4/v6 → Fastly</b>，哪条有响应就用哪条（不测速）；四条都不通才用 GitHub 官方直连。
           </p>
         </details>
       </div>
@@ -506,18 +511,15 @@
         <div id="diskDetail"></div>
         <div class="optrow" style="margin-top:12px">
           <button id="btnStats">重新统计</button>
-          <span class="hint">点一下重新算（约 1–3 秒）</span>
+          <span class="hint">点一下重新算（约 <span data-fact="secScan">…</span>）</span>
         </div>
         <details class="explain">
           <summary>这些东西分别是什么？哪些能删？</summary>
           <p>
-            <b>剧情本身不能删</b>：剧本、图片、语音是你装好的剧情本体，删了就得重装。
-            所以下面的清理项<b>都不动它们</b>。
+            <b>剧情本身不能删</b>：剧本、图片、语音是你装好的剧情本体，删了就得重装。所以下面的清理项<b>都不动它们</b>。
           </p>
           <p>
-            <b>其余都能回收</b>：资源包缓存是下载回来的原始压缩包，装完就没用了；
-            导出成品、日志、下载残留删了也不影响任何功能；
-            高清图删掉会自动用回原图（画质变回去而已，能重做）。
+            <b>其余都能回收</b>：资源包缓存是下载回来的原始压缩包，装完就没用了；导出成品、日志、下载残留删了也不影响任何功能；高清图删掉会自动用回原图（画质变回去而已，能重做）。
           </p>
         </details>
       </div>
@@ -525,8 +527,7 @@
       <div class="panel">
         <h3>清理空间</h3>
         <p class="dim">
-          每一项都先告诉你"删了会怎样"。删除不可撤销，但下面这些<b>都不会让你丢剧情</b>，
-          删的只是"用完就没用"的东西。
+          删除不可撤销，但下面这些<b>都不会让你丢剧情</b>。
         </p>
 
         <div class="cleanRow">
@@ -536,8 +537,7 @@
           <button data-clean="bundles">删除</button>
         </div>
         <p class="dim smallnote">
-          这是下载回来的<b>原始压缩包</b>。安装时已经解开成图片 / 语音 / 剧本，
-          所以<b>删掉不影响播放</b>；只有重新安装那部剧情时才会再下一次。
+          这是下载回来的<b>原始压缩包</b>。安装时已经解开成图片 / 语音 / 剧本，所以<b>删掉不影响播放</b>；只有重新安装那部剧情时才会再下一次。
         </p>
 
         <div class="cleanRow">
@@ -548,8 +548,7 @@
           <button id="btnPruneGo" hidden>确认删除</button>
         </div>
         <p class="dim smallnote">
-          卸载过的剧情、或者官方改过名，旧压缩包会留在缓存里没人用。
-          这里只删<b>没有任何已装剧情在用</b>的包；背景 / 音乐 / 音效 / 头像这些公共素材一律保留。
+          卸载过的剧情、或者官方改过名，旧压缩包会留在缓存里没人用。这里只删<b>没有任何已装剧情在用</b>的包；背景 / 音乐 / 音效 / 头像这些公共素材一律保留。
         </p>
 
         <div class="cleanRow">
@@ -570,8 +569,7 @@
           <button data-clean="x2" class="danger">全部删除</button>
         </div>
         <p class="dim smallnote">
-          删掉后<b>立刻用回原图播放</b>，不会黑图、不影响剧情；代价只是画质变回去，
-          想再要高清得重新跑一次（比较慢）。临时腾空间才建议删。
+          删掉后<b>立刻用回原图播放</b>，不会黑图、不影响剧情；代价只是画质变回去，想再要高清得重新跑一次（比较慢）。临时腾空间才建议删。
         </p>
 
         <div class="cleanRow">
@@ -582,8 +580,7 @@
           <button class="smallBtn" id="btnOpenExport2">打开目录</button>
         </div>
         <p class="dim smallnote">
-          <code>userdata/export/</code> 里的视频、CG 压缩包、导出的翻译 txt。
-          你想要的先拷走再清，删了之后要重新导一次。
+          <code>userdata/export/</code> 里的视频、CG 压缩包、导出的翻译 txt。你想要的先拷走再清，删了之后要重新导一次。
         </p>
 
         <div class="cleanRow">
@@ -594,8 +591,7 @@
           <button data-clean="downloads">清残留</button>
         </div>
         <p class="dim smallnote">
-          日志只用于排错，随便删（正在写的那个文件会被占用，跳过即可）；
-          下载残留是中断下载留下的临时文件与视频导出的临时上传文件。
+          日志只用于排错，随便删（正在写的那个文件会被占用，跳过即可）；下载残留是中断下载留下的临时文件与视频导出的临时上传文件。
         </p>
 
         <div id="cleanResult" class="dim" style="margin-top:10px"></div>
@@ -604,8 +600,7 @@
       <div class="panel">
         <h3>卸载某部剧情</h3>
         <p class="dim">
-          只想删掉一两部不看的剧情（而不是清理公共缓存），去「剧情安装」页：
-          每部剧情右侧都有<b>卸载</b>按钮，只删它自己的剧本、语音和立绘，
+          只想删掉一两部不看的剧情（而不是清理公共缓存），去「剧情安装」页：每部剧情右侧都有<b>卸载</b>按钮，只删它自己的剧本、语音和立绘，
           <b>共用素材不会动</b>，别的剧情照常能看。
         </p>
         <div class="optrow">
@@ -616,8 +611,7 @@
       <div class="panel">
         <h3>下载源</h3>
         <p class="dim">
-          默认走<b>官方地址</b>，一般不需要动这里。
-          只有在官方连不上时，才需要在下面换一个镜像地址。
+          默认走<b>官方地址</b>，一般不需要动这里。只有在官方连不上时，才需要在下面换一个镜像地址。
         </p>
         <details class="explain"><summary>要改下载地址点这里</summary>
           <div class="optrow" style="margin-top:8px">
@@ -636,8 +630,7 @@
           <button id="btnOpenLogs">打开日志目录</button>
         </div>
         <p class="dim">
-          <b>数据目录</b>：设置、日志、下载缓存、导出成品都在里面。
-          删掉这个文件夹等于<b>恢复出厂</b>（素材要重装）。<br>
+          <b>数据目录</b>：设置、日志、资源包缓存、导出成品都在里面。删掉这个文件夹等于<b>恢复出厂</b>（素材要重装）。<br>
           <b>资源目录</b>：解出来的图片和语音。<b>别手动删这里</b>，要清就在上面清。
         </p>
       </div>
@@ -649,8 +642,7 @@
           <button id="btnShutdown">停止本地服务</button>
         </div>
         <p class="dim">
-          <b>清空已完成任务</b>：把页面底部进度条里的历史记录清掉（只清显示，
-          已经装好的剧情、导出的文件都不受影响）。看着乱就点一下。<br>
+          <b>清空已完成任务</b>：把页面底部进度条里的历史记录清掉（只清显示，已经装好的剧情、导出的文件都不受影响）。看着乱就点一下。<br>
           <b>停止本地服务</b>：关掉后台程序，本页面会立刻失效。想再用就重新双击
           <code>启动.bat</code>。
         </p>
@@ -664,11 +656,8 @@
           <b>删除整个程序文件夹就等于完全卸载</b>，不会留下任何残留。
         </p>
         <p class="dim">
-          唯一的例外是你自己生成的东西，都在程序文件夹里的 <code>userdata/</code>：
-          已下载的素材、译文、导出成品、日志、设置。<br>
-          想保留就先把 <code>userdata/</code> 整个拷出来；想彻底清净就一起删掉。
-          删之前记得先点上面的「停止本地服务」（或直接关掉那个黑色命令行窗口），
-          否则文件被占用、删不干净。
+          唯一的例外是你自己生成的东西，都在程序文件夹里的 <code>userdata/</code>：已下载的素材、译文、导出成品、日志、设置。<br>
+          想保留就先把 <code>userdata/</code> 整个拷出来；想彻底清净就一起删掉。删之前记得先点上面的「停止本地服务」（或直接关掉那个黑色命令行窗口），否则文件被占用、删不干净。
         </p>
       </div>
     </section>
@@ -679,8 +668,7 @@
       <div class="panel">
         <h3>这个项目是什么</h3>
         <p>
-          把《超昂大战》的角色个人剧情做成<b>能离线翻阅的阅读器</b>：还原原作演出（背景 / 立绘 /
-          CG / 语音 / 音乐），<b>可以导入中文译文</b>，也能导出视频和 CG。
+          把《超昂大战》的角色个人剧情做成<b>能离线翻阅的阅读器</b>：还原原作演出（背景 / 立绘 / CG / 语音 / 音乐），<b>可以导入中文译文</b>，也能导出视频和 CG。
         </p>
         <p class="dim">
           <b>程序是开源的，游戏素材不在里面</b> —— 第一次用要去「剧情安装」页
@@ -690,8 +678,7 @@
       <div class="panel">
         <h3>三步上手</h3>
         <ol class="steps">
-          <li><b>下基础数据</b>：左边「① 概览 / 快速开始」点「下载基础数据」。
-            背景和音乐所有剧情共用，一次下齐最省事。</li>
+          <li><b>下基础数据</b>：左边「① 概览 / 快速开始」点「下载基础数据」。背景和音乐所有剧情共用，一次下齐最省事。</li>
           <li><b>装一部剧情</b>：「② 剧情安装」→ 勾想看的角色或章节 → 点「开始安装」。</li>
           <li><b>开始看</b>：回「角色剧情」→ 左边点角色就播。想要中文，点播放器里的「翻译」。</li>
         </ol>
@@ -703,66 +690,49 @@
           <p>播放器底下那条<b>进度条可以直接点</b>，点哪儿就跳到哪儿。正在播就接着播；
             <b>已经暂停的话只跳过去、不会自己播</b>（等你看清楚再点播放）。</p></details>
         <details class="explain"><summary>快捷键记不住</summary>
-          <p>播放器底下<b>最右边那个「?」</b>点一下，所有快捷键就列出来了
-            （空格暂停、回车下一句、按住 K 快进、F 全屏…），点别处或按 Esc 收起。</p></details>
+          <p>播放器底下<b>最右边那个「?」</b>点一下，所有快捷键就列出来了（空格暂停、回车下一句、按住 K 快进、F 全屏…），点别处或按 Esc 收起。</p></details>
         <details class="explain"><summary>左边列表太占地方</summary>
           <p>列表顶上点「收起」，或者按键盘上的 <b>[</b>，只留画面；再点一次就展开。</p></details>
         <details class="explain"><summary>「其他」里的剧情怎么是一组一组的</summary>
-          <p>「其他」按游戏里的入口分好了组：打 BOSS、広域戦、殲滅戦、周年庆、愚人节、
-            H 场景合集…一共 17 组。点组名就展开，里面的名字跟游戏里一模一样
-            （来襲 その1、忍者 3、祝！3.5周年！！…）。</p></details>
+          <p>「其他」按游戏里的入口分好了组：打 BOSS、広域戦、殲滅戦、周年庆、愚人节、H 场景合集…一共 17 组。点组名就展开，里面的名字跟游戏里一模一样（来襲 その1、忍者 3、祝！3.5周年！！…）。</p></details>
         <details class="explain"><summary>想先看看「变高清」到底能清楚多少</summary>
-          <p>「③ 提高CG画质」页右上角有个<b>「查看效果」</b>：左边是原来的样子，
-            右边是变清楚之后的样子，中间那条竖线可以拖着比，还能全屏看。
-            觉得不值就关掉，<b>不会动你的任何文件</b>。</p></details>
+          <p>「③ 提高CG画质」页右上角有个<b>「查看效果」</b>：左边是原来的样子，右边是变清楚之后的样子，中间那条竖线可以拖着比，还能全屏看。觉得不值就关掉，<b>不会动你的任何文件</b>。</p></details>
+        <details class="explain"><summary>高清图做完了，画面却没变清楚</summary>
+          <p>去「③ 提高CG画质」页最下面那个折叠项<b>「高清图做了，画面却没变清楚？」</b>，点一次里面的<b>「重新登记高清图」</b>（<span data-fact="secRebuild">…</span>）。它只是把已经做好的高清图重新数一遍、登记给播放器，<b>不会重新超分、也不动任何图片</b>。一般是把文件从别处拷过来、或者上次超分中途强退过，才需要这么修一下。</p></details>
         <details class="explain"><summary>CG 页怎么只有角色的图，剧情的图在哪</summary>
-          <p>CG 页搜索框下面有一排小按钮：<b>角色 / 主线 / 活动 / 其他</b>，点一下就换一类。
-            换到剧情那几类以后，左边列的是「哪一部剧情」；右上角的「⬇ 导出 CG」
-            也能把这一批打包下来。</p></details>
+          <p>CG 页搜索框下面有一排小按钮：<b>角色 / 主线 / 活动 / 其他</b>，点一下就换一类。换到剧情那几类以后，左边列的是「哪一部剧情」；右上角的「⬇ 导出 CG」也能把这一批打包下来。</p></details>
         <details class="explain"><summary>想让手机 / 另一台电脑也能看</summary>
-          <p>播放器右上角有 <b>「局域网访问」</b>，点一下会出一个二维码：手机连<b>同一个 WiFi</b>
-            扫一下就能看。扫不开的话，多半是电脑的安全软件把外面连进来的请求挡住了 ——
-            启动时那个黑窗口里有一行提示，照着做一次就好。</p></details>
+          <p>播放器右上角有 <b>「局域网二维码」</b>，点一下会出一个二维码：手机连<b>同一个 WiFi</b> 扫一下就能看；<b>另一台电脑</b>把弹出来的那行地址输进浏览器也行。扫不开的话，多半是电脑的安全软件把外面连进来的请求挡住了 ——启动时那个黑窗口里有一行提示，照着做一次就好。</p></details>
         <details class="explain"><summary>想批量翻译，怎么一次挑出没翻过的</summary>
-          <p>「⑤ 翻译」页那排按钮里点<b>「全选未翻译」</b>（可以先把列表缩到你要的那一类），
-            再点这一行最右边的<b>「导出所选剧情」</b>。翻好之后用上面的「批量导入」放回来。</p></details>
+          <p>「⑤ 翻译」页那排按钮里点<b>「全选未翻译」</b>（可以先把列表缩到你要的那一类），再点这一行最右边的<b>「导出所选剧情」</b>。翻好之后用上面的「批量导入」放回来。</p></details>
       </div>
       <div class="panel">
         <h3>常见问题</h3>
         <details class="explain"><summary>点角色提示"资源还没有下载"</summary>
-          <p>这部剧还没装。回「剧情安装」，勾上它（可以按名字搜），点「开始安装」。
-            装好之后它会自动出现在播放器里。</p></details>
+          <p>这部剧还没装。回「剧情安装」，勾上它（可以按名字搜），点「开始安装」。装好之后它会自动出现在播放器里。</p></details>
         <details class="explain"><summary>有画面但没声音 / 没有背景音乐</summary>
           <p>先看「基础数据」里的<b>公共素材</b>下过没有：背景和音乐是所有剧情共用的，
-            <b>不下就只有你装过的那几部剧情自带的音效</b>。
-            如果下过了还是没声音，用鼠标点一下画面再播（浏览器会拦自动播放）。</p></details>
+            <b>不下就只有你装过的那几部剧情自带的音效</b>。如果下过了还是没声音，用鼠标点一下画面再播（浏览器会拦自动播放）。</p></details>
         <details class="explain"><summary>立绘缺脸 / 显示不完整</summary>
-          <p>约一成的特殊立绘，在游戏原作里本身就是分开画的（缺了脸部那一层）。
-            播放器设置里勾上「显示不完整立绘」就能看到底图。</p></details>
+          <p>约一成的特殊立绘，在游戏原作里本身就是分开画的（缺了脸部那一层）。播放器设置里勾上「显示不完整立绘」就能看到底图。</p></details>
         <details class="explain"><summary>下载到 100% 了却一直在转</summary>
           <p>正常。下完还要在原地「拆开装好」，这一步在进度条上接着往后走，
             <b>不是卡住了</b>，等它走完就行。真的一动不动，就点一下「暂停」再「继续」。</p></details>
         <details class="explain"><summary>下载很慢</summary>
-          <p>把「剧情安装」页的<b>下载速度</b>调大（32 最省时间）；老是失败就调小到 8–16。
-            另外<b>下载前先关掉代理软件</b>——代理按流量计费，一部剧情 30–60 MB。</p></details>
+          <p>把「剧情安装」页的<b>下载速度</b>调大（32 最省时间）；老是失败就调小到 8–16。另外<b>下载前先关掉代理软件</b>——代理按流量计费，一部剧情 <span data-fact="unitEach">…</span>。</p></details>
         <details class="explain"><summary>磁盘满了 / 想清理空间</summary>
-          <p>去「<b>设置 / 清理空间</b>」页，那里把占地方的东西按用途列全了，
-            还会告诉你哪些删了不影响看：下载时留下的<b>临时文件</b>、没用的<b>旧缓存</b>、
-            <b>已经被高清版替换掉的原图</b>、<b>导出的成品</b>、<b>日志</b>。
-            只想删某一部剧情，就在「剧情安装」里点那一行的「卸载」。</p></details>
+          <p>去「<b>设置 / 清理空间</b>」页，那里把占地方的东西按用途列全了，还会告诉你哪些删了不影响看：下载时留下的<b>临时文件</b>、没用的<b>旧缓存</b>、
+            <b>已经被高清版替换掉的原图</b>、<b>导出的成品</b>、<b>日志</b>。只想删某一部剧情，就在「剧情安装」里点那一行的「卸载」。</p></details>
         <details class="explain"><summary>想让新手引导再讲一遍</summary>
-          <p>点页面右上角的 <b>「?」</b>（播放器里按 <b>H</b> 也行），引导会从头再放一次。
-            这个「帮助」页往下就是常见问题，遇到怪现象先来这里翻一翻。</p></details>
+          <p>点页面右上角的 <b>「?」</b>（播放器里按 <b>H</b> 也行），引导会从头再放一次。这个「帮助」页往下就是常见问题，遇到怪现象先来这里翻一翻。</p></details>
       </div>
       <div class="panel">
         <h3>关于本站</h3>
         <p>
-          <b>ESCAH 离线阅读器</b>是<b>个人业余作品</b>：非官方、非商业，
-          由个人利用业余时间<b>借助 AI 搭建</b>。
+          <b>ESCAH 离线阅读器</b>是<b>个人业余作品</b>：非官方、非商业，由个人利用业余时间<b>借助 AI 搭建</b>。
         </p>
         <p class="dim">
-          更新看个人时间，不承诺频率，也不承诺长期维护。代码以 <b>GPL-3.0</b> 开源。
-          问题反馈、功能建议、以及权利人要求下架，都请通过仓库 Issues 联系。
+          更新看个人时间，不承诺频率，也不承诺长期维护。代码以 <b>GPL-3.0</b> 开源。问题反馈、功能建议、以及权利人要求下架，都请通过仓库 Issues 联系。
         </p>
         <div class="optrow">
           <a class="alink" href="https://github.com/allindusk/escahoffline"
@@ -789,9 +759,7 @@
       <div class="panel">
         <h3>版权与免责</h3>
         <p class="dim">
-          本项目只提供<b>播放器与工具</b>，不含任何游戏素材，与游戏官方没有任何关系。
-          素材请自行合法获取，<b>请勿传播、请勿商用、请勿公开高调宣传</b>。
-          完整说明见「使用条款与完整声明」。
+          本项目只提供<b>播放器与工具</b>，不含任何游戏素材，与游戏官方没有任何关系。素材请自行合法获取，<b>请勿传播、请勿商用、请勿公开高调宣传</b>。完整说明见「使用条款与完整声明」。
         </p>
       </div>
     </section>
@@ -862,15 +830,20 @@
 <script src="data/names.js"></script>
 <script src="data/charmeta.js"></script>
 <script src="data/advindex.js"></script>
-<script src="assets/js/common.js?v=1125a"></script>
+<script src="assets/js/common.js?v=1103a"></script>
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
 <script src="assets/js/storylist.js?v=1125a"></script>
-<script src="assets/js/header.js?v=1101a"></script>
+<script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1101a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
+<!-- 「自己动手翻」教程（唯一文案，播放器也用这一份） -->
+<script src="assets/js/trans_tut.js?v=1133b"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
-<script src="assets/js/setup.js?v=1105a"></script>
-<script src="assets/js/mobile.js?v=1102a"></script>
+<!-- 容量 / 耗时的唯一来源（server/facts.py → api/facts）：必须比 setup.js 先加载，
+     setup.js 里拼的提示文案直接用 FACT.t(...) -->
+<script src="assets/js/facts.js?v=1131a"></script>
+<script src="assets/js/setup.js?v=1138a"></script>
+<script src="assets/js/mobile.js?v=1103a"></script>
 </body>
 </html>

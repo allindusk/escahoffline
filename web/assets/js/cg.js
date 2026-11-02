@@ -460,12 +460,21 @@ function paintLB() {
   });
 }
 
+/* 上一张 / 下一张：走到本组第一张再按「上一张」就跳到上一组的**最后一张**，
+   走到本组最后一张再按「下一张」就跳到下一组的**第一张**。
+   这样不用先按 ↑↓ 切组，一路点下去就是全库连续翻（用户 2026-11-03 要求）。
+   全库最前 / 最后再按就停住，不循环——免得翻到末尾以为没反应。 */
 function moveImg(d) {
-  if (lb.g < 0) return;
-  const g = GROUPS[visible[lb.g]];
-  const n = lb.i + d;
-  if (n < 0 || n >= g.f.length) return;
-  lb.i = n;
+  if (lb.g < 0 || !d) return;
+  let gi = lb.g;
+  let ii = lb.i + d;
+  while (ii < 0 || ii >= GROUPS[visible[gi]].f.length) {
+    gi += d > 0 ? 1 : -1;
+    if (gi < 0 || gi >= visible.length) return;
+    ii = d > 0 ? 0 : GROUPS[visible[gi]].f.length - 1;
+  }
+  lb.g = gi;
+  lb.i = ii;
   paintLB();
 }
 
@@ -478,6 +487,130 @@ function moveGroup(d) {
   paintLB();
 }
 
+/* ---------- 全屏浏览 ----------
+ * 为什么要有：手机竖屏时 CG 是竖长图，浏览器地址栏 + 顶栏 + 圆点条吃掉一大截，
+ * 图缩在中间看不清细节（用户 2026-11-03 要求加全屏）。
+ * 两条路径共用 #lb.fs 这一套样式：
+ *   · 支持 Fullscreen API（Chrome / Android / 桌面）→ 真全屏，地址栏一起收起来；
+ *   · iOS Safari 没有元素级全屏 → 退化成"伪全屏"：顶栏与圆点条浮到图上，
+ *     图片吃满屏幕，按钮仍在左右下角。
+ * 真全屏失败（用户拒绝 / 被策略拦）也只是停在伪全屏，不会什么都不发生。
+ */
+let lbFakeFs = false;
+const lbEl = () => $('#lb');
+const lbIsFs = () => document.fullscreenElement === lbEl() || lbFakeFs;
+
+function updateFsBtn() {
+  const b = $('#lbFs');
+  if (!b) return;
+  const on = lbIsFs();
+  b.textContent = on ? '⛶ 退出全屏' : '⛶ 全屏';
+  b.title = on ? '退出全屏 (F)' : '全屏浏览 (F)';
+}
+
+function applyFsClass() {
+  const b = lbEl();
+  if (b) b.classList.toggle('fs', lbIsFs());
+  updateFsBtn();
+  showRotTip();
+}
+
+/* 进全屏就转横屏、出全屏就转回竖屏（用户 2026-11-03 要的逻辑）。
+   只能锁**当前全屏的那个元素**，所以必须在真全屏生效后调；
+   iOS / 桌面锁不了 → 静默失败，改用下面的转屏提示。 */
+function syncOrientation() {
+  if (!window.ESC || !ESC.orient) return;
+  if (document.fullscreenElement === lbEl()) ESC.orient.lockLandscape();
+  else ESC.orient.unlock();
+}
+
+/* 锁不了方向（iOS Safari）时，全屏下给一条「把手机横过来」的提示：
+   能锁的设备已经自动横屏了，此时 orientation 是 landscape，CSS 自然不显示它。 */
+function showRotTip() {
+  const tip = $('#lbRotTip');
+  if (!tip) return;
+  const portrait = window.innerHeight > window.innerWidth;
+  const cantLock = !(window.ESC && ESC.orient && ESC.orient.canLock());
+  tip.classList.toggle('on', lbIsFs() && portrait && cantLock);
+}
+
+function toggleLBFull() {
+  const b = lbEl();
+  if (!b || lb.g < 0) return;
+  if (lbIsFs()) {
+    lbFakeFs = false;
+    if (document.fullscreenElement) {
+      try { document.exitFullscreen().catch(() => { }); } catch (e) { /* 忽略 */ }
+    }
+    if (window.ESC && ESC.orient) ESC.orient.unlock();     // 退出即回竖屏
+    applyFsClass();
+    return;
+  }
+  lbFakeFs = true;                       // 先按伪全屏生效，真全屏成功后再同步
+  applyFsClass();
+  try {
+    if (b.requestFullscreen) {
+      const p = b.requestFullscreen();
+      if (p && p.then) p.then(() => syncOrientation()).catch(() => { });
+    }
+  } catch (e) { /* 不支持就停在伪全屏 */ }
+}
+
+/* 按 Esc / 系统手势退出真全屏时，别把 .fs 留在身上（否则再进一次灯箱就是全屏态） */
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) lbFakeFs = false;
+  applyFsClass();
+  syncOrientation();
+});
+/* 转屏 / 改窗口尺寸时重算一次提示 */
+window.addEventListener('resize', showRotTip);
+window.addEventListener('orientationchange', showRotTip);
+
+/* ---------- 手机左右滑动切图 ----------
+ * 普通灯箱和全屏都能滑（用户 2026-11-03 要求）。
+ * 滑动**不做跟手动画**：不移动图片，只记手势，松手时按阈值直接切到上一张 / 下一张，
+ * 效果和点 ◀ ▶ 按钮完全一样（用户 2026-11-03 明确要求："直接切换，不要动态效果"）。
+ * 以纵向为主的移动直接放弃（免得以后加双指缩放时打架）。
+ * 滑动松手后浏览器还会补一个 click —— 必须吞掉，否则落在 #lbBody 空白区会
+ * 被当成"点空白处关闭灯箱"。
+ */
+let lbSwiped = false;
+
+function bindSwipe() {
+  const box = $('#lbBody');
+  if (!box) return;
+  let on = false, sx = 0, sy = 0, dx = 0, t0 = 0;
+
+  box.addEventListener('touchstart', e => {
+    if (lb.g < 0 || e.touches.length !== 1) { on = false; return; }
+    const t = e.touches[0];
+    on = true; sx = t.clientX; sy = t.clientY; dx = 0; t0 = Date.now();
+  }, { passive: true });
+
+  box.addEventListener('touchmove', e => {
+    if (!on) return;
+    const t = e.touches[0];
+    dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    if (Math.abs(dy) > Math.abs(dx) * 1.4) on = false;   // 竖着划：不管
+  }, { passive: true });
+
+  const end = () => {
+    if (!on) return;
+    on = false;
+    const fast = Date.now() - t0 < 900;
+    if (Math.abs(dx) > 10) {
+      lbSwiped = true;                       // 这次松手会带来一个 click，吞掉它
+      setTimeout(() => { lbSwiped = false; }, 400);
+    }
+    if (Math.abs(dx) > 46 && fast) moveImg(dx < 0 ? 1 : -1);
+    dx = 0;
+  };
+  box.addEventListener('touchend', end, { passive: true });
+  box.addEventListener('touchcancel', end, { passive: true });
+}
+bindSwipe();
+
 function closeLB() {
   const img = $('#lbImg');
   /* 直接 src='' 会触发 onerror 级联：把剩余候选全试一遍（全 404）后
@@ -489,7 +622,15 @@ function closeLB() {
     img.removeAttribute('src');
     img.style.visibility = '';
   }
-  $('#lb').classList.remove('on');
+  // 关灯箱时一并退出全屏，否则会留在一个全屏的黑色页面上
+  lbFakeFs = false;
+  $('#lb').classList.remove('on', 'fs');
+  if (document.fullscreenElement) {
+    try { document.exitFullscreen().catch(() => { }); } catch (e) { /* 忽略 */ }
+  }
+  if (window.ESC && ESC.orient) ESC.orient.unlock();   // 手机回到竖屏
+  updateFsBtn();
+  showRotTip();
   lb.g = -1;
 }
 
@@ -538,9 +679,14 @@ function updateExportBtn() {
 
 /* ---------- 事件绑定 ---------- */
 $('#lbClose').onclick = closeLB;
+$('#lbFs').onclick = e => { e.stopPropagation(); toggleLBFull(); };
 $('#lbPrev').onclick = e => { e.stopPropagation(); moveImg(-1); };
 $('#lbNext').onclick = e => { e.stopPropagation(); moveImg(1); };
-$('#lb').onclick = e => { if (e.target.id === 'lb' || e.target.id === 'lbBody') closeLB(); };
+/* 点空白处关灯箱；刚滑过的那一下不算（滑动会补一个 click，见 bindSwipe） */
+$('#lb').onclick = e => {
+  if (lbSwiped) return;
+  if (e.target.id === 'lb' || e.target.id === 'lbBody') closeLB();
+};
 
 let qt = null;
 $('#q').oninput = e => {
@@ -619,6 +765,7 @@ applySize(initSz);
 document.addEventListener('keydown', e => {
   if (lb.g >= 0) {
     if (e.key === 'Escape') { closeLB(); e.preventDefault(); return; }
+    if (e.key === 'f' || e.key === 'F') { toggleLBFull(); e.preventDefault(); return; }
     if (e.key === 'ArrowRight') { moveImg(1); e.preventDefault(); return; }
     if (e.key === 'ArrowLeft') { moveImg(-1); e.preventDefault(); return; }
     if (e.key === 'ArrowDown') { moveGroup(1); e.preventDefault(); return; }

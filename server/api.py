@@ -22,8 +22,8 @@ import time
 import traceback
 import urllib.parse
 
-from . import (exports, jobs, log as applog, media, mirrors, packs, paths, proc,
-               space, updater, videxport)
+from . import (exports, facts, jobs, log as applog, media, mirrors, packs, paths,
+               proc, space, updater, videxport)
 from .cdn import install as cdn_install
 from .cdn import manifest as cdn_manifest
 from .cdn import stages as cdn_stages
@@ -81,39 +81,127 @@ def run_install(job, units: list[str], workers: int = 32,
                 engine: str = "cugan") -> dict:
     """串行安装多个剧情单元（每个单元内部并发下载 bundle）。
 
-    进度条语义：``total/done`` 交给下载层（用户最关心"下了多少包"），
-    单元计数走 ``items_total/items_done`` + ``message``，两者不打架。
+    进度条语义（修过的一个坑，见 2026-11-02）
+    ---------------------------------------
+    以前每装一部、每下一批 bundle，下载层都会把顶层 ``total/done`` 重置到
+    那一批的大小，于是装 70 部剧情时进度条反复冲到 100%
+    （「剧情100% → 立绘100% → 语音100%」×70），用户根本看不出装到哪一部了。
+
+    现在：顶层百分比由 ``items``（第 i/N 部）驱动，从 0 平稳爬到 100%；
+    每一批 bundle 的包计数单独落到 ``job.sub``，界面显示成「包 x/y」的次级信息。
+    操作记录里还会汇总「多少部剧情的 剧情/语音/立绘 已就绪」。
+
+    重复补齐保护：装之前先按磁盘实际状态判定，避免用户手滑重复点「补齐」后
+    把已经装好的剧情再重跑 20 分钟——
+
+    * ``ready``        剧本 + 语音都在，跳过（再装也是同样结果，纯浪费时间）
+    * ``soft-missing`` 只有剧本、没语音目录（源里压根没这语音包），重跑 100%
+                      还是软缺，跳过并说明原因
+    * ``partial``      剧本异常小（上次解包中断），真正重装修好它
+    * ``missing``      没装过，全新安装
+
+    想强制重拉某个软缺单元（比如相信官方后来补了语音）：先「卸载」再「安装」。
     """
     job.set_items(len(units))
+    multi = len(units) > 1
+    # 多单元安装：顶层进度交给"第 i/N 部"驱动，下载层（每一批 bundle）的包计数
+    # 落到 job.sub，避免出现「剧情100%→立绘100%→语音100%」反复跳满。
+    # 单部安装仍走老逻辑（顶层就是那一部自己的下载进度）。
+    job.sub_mode = multi
+    if multi:
+        job.set_total(len(units), "部")
+    # 预先算好全部 bundle 的总字节，给字节进度一个稳定分母
+    # （不然后面每批都改分母，会出现「done 28 / total 2」这种自相矛盾的进度）。
+    if multi:
+        try:
+            mf = cdn_install.index_manifest()
+            job.bytes_total = sum(cdn_install._unit_bytes(mf, u) for u in units)
+        except Exception:                                      # noqa: BLE001
+            job.bytes_total = 0
     job.log(f"共 {len(units)} 部剧情，下载并发 {workers}")
-    ok, failed = [], []
+
+    ok, failed, skipped = [], [], []
+    # 操作记录用的分项统计：剧本 / 语音 / 立绘 各就绪了多少部
+    bd = {"story": 0, "voice": 0, "stand": 0,
+          "t_story": 0, "t_voice": 0, "t_stand": 0}
+
+    def _tally(key: str, state: str, miss: list) -> None:
+        """把一部剧情的 剧本/语音/立绘 就绪情况累加进 bd（供操作记录汇总）。
+
+        分母（``t_*``）与分子必须同一口径：adv 剧情也会下立绘包，所以
+        ``t_stand`` 不能再只给 char_ 加 —— 否则「立绘 620/384」这种
+        分子大于分母的汇总会直接写进操作记录。
+        """
+        bd["t_story"] += 1
+        bd["t_voice"] += 1
+        bd["t_stand"] += 1
+        if state in ("missing", "failed"):
+            return                       # 啥都没装成
+        m = " ".join(miss or [])
+        if state != "missing":
+            bd["story"] += 1
+        if "语音缺" not in m and state != "missing":
+            bd["voice"] += 1
+        if "立绘引用缺" not in m and "立绘包未下载" not in m:
+            bd["stand"] += 1
+
     for i, u in enumerate(units, 1):
         if job.cancelled:
             job.state = "cancelled"
             break
-        job.log(f"[{i}/{len(units)}] 安装 {u}")
-        try:
-            r = cdn_install.install_unit(
-                u, job, workers=workers, voice=voice, image=image,
-                upscale=upscale, upscale_scale=scale, upscale_engine=engine)
-            ok.append(r)
-            job.items_done = i
-            job.log(f"[{u}] 完成（{r.get('seconds', 0)} 秒）")
-        except Exception as e:                                 # noqa: BLE001
-            failed.append({"unit": u, "error": str(e)[:300]})
-            job.items_done = i
-            job.log(f"[{u}] 失败：{e}")
+        job.items_done = i - 1          # 当前这部从 (i-1)/N 起算
+        job.meta["unit"] = u            # 让进度条能显示"当前装到哪部"
+        st = cdn_install.unit_state(u)
+        if st == "ready":
+            skipped.append(u)
+            job.log(f"[{i}/{len(units)}] 跳过 {u}：已就绪")
+            _tally(u, "ready", [])
+        elif st == "soft-missing":
+            skipped.append(u)
+            job.log(f"[{i}/{len(units)}] 跳过 {u}：软缺（语音源缺失，重跑无解）")
+            _tally(u, "soft-missing", ["语音缺"])   # 剧本/立绘在，只缺语音
+        else:
+            job.log(f"[{i}/{len(units)}] 安装 {u}（{st}）")
+            try:
+                r = cdn_install.install_unit(
+                    u, job, workers=workers, voice=voice, image=image,
+                    upscale=upscale, upscale_scale=scale, upscale_engine=engine)
+                ok.append(r)
+                miss = (r.get("check") or {}).get("missing") or []
+                job.log(f"[{u}] 完成（{r.get('seconds', 0)} 秒）")
+                _tally(u, "installed", miss)
+            except Exception as e:                             # noqa: BLE001
+                failed.append({"unit": u, "error": str(e)[:300]})
+                job.log(f"[{u}] 失败：{e}")
+                _tally(u, "failed", [])
+        job.items_done = i
+        job.progress(done=i)
     cdn_install.invalidate_units()
-    if not failed:
-        job.finish(f"完成：{len(ok)} 部剧情")
+    # 取消时别把 items 顶满：进度条会显示 100% 但状态是「已取消」，自相矛盾
+    if not job.cancelled:
+        job.items_done = len(units)
+    job.detail["breakdown"] = bd
+    n_skip = len(skipped)
+    skip_msg = f"，{n_skip} 部已就绪/软缺跳过" if n_skip else ""
+    # 操作记录：把「多少部剧情的 剧情/语音/立绘 已就绪」写进结论
+    bd_msg = (f" · 剧情{bd['story']}/{bd['t_story']}"
+              f" · 语音{bd['voice']}/{bd['t_voice']}"
+              f" · 立绘{bd['stand']}/{bd['t_stand']}")
+    if n_skip and not ok and not failed:
+        # 全是已就绪/软缺：明确告诉用户"没必要重跑"，而不是假装装了一遍。
+        job.finish(f"无需重装：{n_skip} 部都已就绪或软缺（语音源缺失）"
+                   f"—— 想强制重拉请先卸载")
+    elif not failed:
+        job.finish(f"完成：{len(ok)} 部剧情{bd_msg}{skip_msg}")
     elif ok:
-        job.finish(f"部分完成：{len(ok)} 成功 / {len(failed)} 失败")
+        job.finish(f"部分完成：{len(ok)} 成功 / {len(failed)} 失败{bd_msg}{skip_msg}")
     else:
         # 一部都没装上：必须标失败。以前这里什么都不做，runner 兜底调 finish()，
         # 于是"全部失败"在界面上显示为"完成"。
         job.fail("全部失败：" + (failed[0]["error"] if failed else ""))
     job.detail["failed"] = failed
-    return {"installed": ok, "failed": failed}
+    job.detail["skipped"] = skipped
+    return {"installed": ok, "failed": failed, "skipped": skipped}
 
 
 # ---------------------------------------------------------------- 依赖安装
@@ -381,7 +469,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".wasm": "application/wasm",
     }
 
+    #: 浏览器 / DevTools 自己的探测请求，**不是本站缺资源**。直接回 204 静默
+    #: 跳过，否则每开一次页面控制台和日志里就刷一串 404（用户看到会以为坏了）：
+    #:   /favicon.ico              页面没声明图标时浏览器必扫
+    #:   /.well-known/appspecific/  Chrome DevTools 找自定义配置文件
+    #:   *.css.map / *.js.map      开着 DevTools 时按文件名猜源映射
+    NOISE_EXACT = ("/favicon.ico", "/apple-touch-icon.png",
+                   "/apple-touch-icon-precomposed.png")
+    NOISE_PREFIX = ("/.well-known/",)
+    NOISE_SUFFIX = (".map",)
+
+    @classmethod
+    def is_noise(cls, path: str) -> bool:
+        return (path in cls.NOISE_EXACT
+                or path.startswith(cls.NOISE_PREFIX)
+                or path.endswith(cls.NOISE_SUFFIX))
+
     # ---------------- 基础设施
+    def _no_content(self):
+        """空 204：无实体、不报警。send_response 会调 log_message，204 自动静音。"""
+        self._status = 204
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def end_headers(self):
         self.send_header("Cache-Control",
                          "no-store, no-cache, must-revalidate, max-age=0")
@@ -533,6 +644,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 r = self._api_get(path)
                 self._log_req("GET", t0)
                 return r
+            # 浏览器/DevTools 噪声（favicon、源映射、well-known）：204 静默，
+            # 不留 404 记录，免得用户以为后台出问题。
+            if self.is_noise(path):
+                return self._no_content()
             return super().do_GET()
         except (BrokenPipeError, ConnectionResetError,
                 ConnectionAbortedError):
@@ -549,6 +664,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception:                                    # noqa: BLE001
                 pass
             self._log_req("GET", t0)
+
+    def do_HEAD(self):
+        # 少数探测工具用 HEAD 扫 favicon/源映射，同样给 204 而不是 404
+        if self.is_noise(urllib.parse.urlparse(self.path).path):
+            return self._no_content()
+        return super().do_HEAD()
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
@@ -588,6 +709,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         q = self._q()
         if path == "/api/state":
             return self._json(self.state_payload())
+        if path == "/api/facts":
+            # 容量 / 耗时的唯一来源（server/facts.py）。页面里不写死数字，
+            # 一律用 data-fact 占位 + assets/js/facts.js 拉这份成品文案。
+            return self._json(facts.payload())
         if path == "/api/manifest":
             return self._json(packs.manifest())
         if path == "/api/links":
@@ -633,7 +758,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/update/check":
             return self._json(updater.check())
         if path == "/api/exports":
-            return self._json({"items": exports.list_exports()})
+            # dir 一起给：导出完成后要在页面上写"保存在哪"，
+            # 光给文件名用户还是不知道去哪找。
+            return self._json({"items": exports.list_exports(),
+                               "dir": paths.EXPORT})
         if path == "/api/engine":
             return self._json({"pillow": media.have_pillow(),
                                "engine": media.find_engine()})
@@ -947,6 +1075,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "imptrans", "解压并导入译文压缩包",
                 lambda j: exports.import_trans_zip_job(j, data, mode))
             return self._json({"job": job.snapshot()})
+        if path == "/api/export/trans/save":
+            # 单部剧情原文直接存进导出目录（播放器「翻译」面板用）。
+            # 以前的 GET /api/export/trans 是让浏览器下载，文件落在系统「下载」里，
+            # 用户找不到；和资源管理页的导出必须是同一个目录。
+            b = self._body()
+            unit = (b.get("unit") or "").strip()
+            if not unit:
+                return self._err("没有剧情标识")
+            try:
+                return self._json(exports.export_trans_file(unit))
+            except FileNotFoundError as e:
+                return self._err(str(e))
         if path == "/api/export/trans/batch":
             # 与「批量导入」对称：把多部剧情的 txt 打成一个 zip
             # scope=translated（默认，已有译文）| installed（全部已装剧情原文）
@@ -1037,7 +1177,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 把路径回给前端 → 页面直接显示"已打开 XXX"，用户不用猜
             return self._json({"ok": True, "path": target})
         if path == "/api/rebuild-x2":
-            job = jobs.submit("rebuild", "重建超分覆盖层",
+            # 标题用页面上的说法（"重新登记高清图"）：任务条与操作记录里
+            # 冒出"重建超分覆盖层"这种词，用户对不上自己点的是哪个按钮。
+            job = jobs.submit("rebuild", "重新登记高清图",
                               lambda j: media.rebuild_x2_overlay(j))
             return self._json({"job": job.snapshot()})
         if path == "/api/clientlog":

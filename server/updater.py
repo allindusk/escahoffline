@@ -37,7 +37,7 @@ import threading
 import time
 import zipfile
 
-from . import mirrors, net, paths
+from . import facts, mirrors, net, paths
 
 #: 允许被更新覆盖的路径前缀（相对项目根）
 WHITELIST = (
@@ -404,7 +404,9 @@ class ManualDownload(RuntimeError):
             "自动下载失败：" + (reason or "所有内置线路都不通")
             + "\n\n请手动下载：\n"
             f"  1. 打开 {self.page or 'https://github.com/<你的仓库>/releases'}\n"
-            f"  2. 下载 {self.file_name}（更新包约 3–5 MB；也可以用全量包）\n"
+            f"  2. 下载 {self.file_name}（更新包约 "
+            + facts.size_text(facts.UPDATE_PKG_BYTES[1])
+            + "；也可以用全量包）\n"
             "  3. 解压后覆盖到程序目录（userdata/ 与素材不会被覆盖），"
             "再双击 启动.bat")
 

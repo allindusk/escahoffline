@@ -19,6 +19,17 @@
 (() => {
   const $ = s => document.querySelector(s);
 
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  const human = n => {
+    n = +n || 0;
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n.toFixed(0) : n.toFixed(i > 1 ? 2 : 1)) + ' ' + u[i];
+  };
+
   function toast(msg) {
     if (window.PLAYER_API) return PLAYER_API.toast(msg);
     const el = $('#toast');
@@ -40,43 +51,32 @@
         <button id="tpClose" title="关闭 Esc">✕</button>
       </div>
       <div class="tp-body">
-        <!-- 左右对比：左边是"导出后你会看到的"，右边是"翻好后应该变成的"。
-             光写规则很多人看不懂，直接并排给样例最省事。 -->
-        <div class="tp-cmp">
-          <div class="tp-cmp-col">
-            <div class="tp-cmp-h">① 导出后长这样</div>
-            <div class="tp-cmp-code">
-              <b>### 001-p01-m003 【トキサダ】 (2行)</b>
-              <span class="tp-demo">ja: おはよう、今日もいい天気ね。</span><br>
-              <span class="tp-demo2">ja: 　散歩でもしない？</span><br>
-              <span class="tp-empty">（没有 zh: 行 = 还没翻）</span>
-            </div>
-            <div class="tp-cmp-f">块头里的编号 / 说话人 / 行数，<b>都别动</b></div>
-          </div>
-          <div class="tp-cmp-col good">
-            <div class="tp-cmp-h">② 填上译文导回来</div>
-            <div class="tp-cmp-code">
-              <b>### 001-p01-m003 【トキサダ】 (2行)</b>
-              <span class="tp-fill">zh: 早上好，今天天气也不错呢。</span><br>
-              <span class="tp-fill">zh: 　要不要去散个步？</span>
-            </div>
-            <div class="tp-cmp-f">原文几行，译文就写几行 <b>zh:</b>（不能多过）</div>
-          </div>
+        <!-- 教程正文**不在这里**：点按钮打开浮窗，用的是与资源管理页
+             完全同一份（assets/js/trans_tut.js）。以前这边另写一套说明，
+             改一次文案要改两处，必然走样。 -->
+        <div class="tp-row">
+          <button id="tpTut" type="button">✍ 自己动手翻 · 看 5 步教程</button>
+          <span class="tp-hint">导出原文 → 在 zh: 后面填中文 → 导回来</span>
         </div>
-        <p class="tp-note">
-          一句台词 = 一个 <code>###</code> 块，译文写在 <code>zh:</code> 后面，存成 <b>UTF-8</b>。
-          不想翻的块留空就行；只写译文不带 <code>ja:</code> 也认。文件末尾的
-          <code>### spk:</code> 块是<b>发言人译名</b>（对话框上方的名字），全站共用。
-        </p>
         <div class="tp-row">
           <button id="tpExport" class="primary">⬇ 导出原文（.txt）</button>
           <span id="tpStat" class="tp-stat"></span>
         </div>
+        <!-- 导出位置与资源管理页的导出**同一个目录**，开关也共用同一个设置
+             （localStorage 的 escah_open_exp，两边改哪边都同步） -->
         <div class="tp-row">
+          <label class="tp-chk"><input type="checkbox" id="tpAutoOpen"> 导出完成后自动打开文件夹</label>
+          <button id="tpOpenExp" type="button" class="tp-mini">打开导出目录</button>
+        </div>
+        <div id="tpExpLast" class="tp-last">导出后，这里会显示文件名和保存位置。</div>
+        <div class="tp-row">
+          <!-- 选文件和「打开导出目录」这类次要按钮同一套外观：
+               原来是虚线全宽大框，和旁边的按钮完全两个风格，很割裂 -->
           <label class="tp-file">
             <input type="file" id="tpFile" accept=".txt,text/plain">
-            <span id="tpFileName">选择译好的 txt…</span>
+            <span id="tpFileName">📄 选择译好的 txt…</span>
           </label>
+          <span class="tp-hint">选中后会自动填进下面的框，看一眼再点「导入并应用」</span>
         </div>
         <textarea id="tpText" placeholder="也可以直接把译文粘贴到这里（### 块式，块内写 ja: / zh:）"></textarea>
         <div class="tp-row">
@@ -113,40 +113,81 @@
     p.dataset.unit = unit || '';
     refreshStat(unit);
 
-    // 用当前显示的那句台词做样例，比写死的假名更直观。
-    // 只取第一行：样例里是两行 ja，把整句塞进去会折叠成一行看不清结构。
-    const demo = (($('#msgText') || {}).textContent || '').trim().split('\n')[0];
-    if (demo) {
-      p.querySelectorAll('.tp-demo').forEach(el => { el.textContent = 'ja: ' + demo; });
+    // 教程浮窗：正文在 assets/js/trans_tut.js（与资源管理页共用同一份）
+    const tut = p.querySelector('#tpTut');
+    if (tut && window.TRANS_TUT) {
+      tut.onclick = () => TRANS_TUT.open();
+    } else if (tut) {
+      tut.style.display = 'none';          // 脚本没加载就别留个点不动的按钮
     }
+
+    /* 导出原文：直接写进**导出目录**（userdata/export，与资源管理页的导出同一个地方），
+       不再让浏览器下载 —— 下载会落到系统「下载」文件夹，用户回头根本找不到。 */
+    const OPEN_EXP_KEY = 'escah_open_exp';        // 与资源管理页共用同一个设置
+    const readAuto = () => {
+      try { return localStorage.getItem(OPEN_EXP_KEY) === '1'; } catch (e) { return false; }
+    };
+    const autoBox = p.querySelector('#tpAutoOpen');
+    if (autoBox) {
+      autoBox.checked = readAuto();
+      autoBox.onchange = () => {
+        try {
+          localStorage.setItem(OPEN_EXP_KEY, autoBox.checked ? '1' : '0');
+        } catch (e) { /* 无痕模式读不到设置，忽略 */ }
+        toast(autoBox.checked ? '导出完成后会自动打开文件夹' : '已关闭自动打开文件夹');
+      };
+    }
+    const openExpDir = async () => {
+      try {
+        const r = await fetch('api/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ which: 'export' }),
+        });
+        const d = await r.json().catch(() => ({}));
+        toast('导出目录：' + (d.path || ''));
+      } catch (e) {
+        alert('打不开导出目录（本地服务未运行？）');
+      }
+    };
+    const openExpBtn = p.querySelector('#tpOpenExp');
+    if (openExpBtn) openExpBtn.onclick = openExpDir;
 
     $('#tpExport').onclick = async () => {
       if (!unit) { toast('先选一部剧情'); return; }
+      const btn = $('#tpExport');
+      btn.disabled = true;
+      btn.textContent = '正在导出…';
       try {
-        const r = await fetch('api/export/trans?unit=' + encodeURIComponent(unit));
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          alert(e.error || ('导出失败：HTTP ' + r.status));
-          return;
+        const r = await fetch('api/export/trans/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ unit }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+        // 结论留在面板上：提示几秒就没了，回头要找"导到哪去了"得有个地方看
+        const box = p.querySelector('#tpExpLast');
+        if (box) {
+          box.innerHTML = '上次导出：<b>' + esc(d.name) + '</b>（' + human(d.bytes) + '）'
+            + '<br>保存在 <b>' + esc(d.dir || '') + '</b>';
         }
-        const text = await r.text();
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = unit + '.txt';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
         $('#tpText').value = '';
-        toast('已导出，可交给 AI 翻译');
+        toast('已导出到导出目录，可交给 AI 翻译');
+        if (readAuto()) openExpDir();
       } catch (e) {
-        alert('本地服务未运行，无法导出。请用「启动.bat」打开后重试。');
+        alert('导出失败：' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⬇ 导出原文（.txt）';
       }
     };
 
     $('#tpFile').onchange = async ev => {
       const f = ev.target.files && ev.target.files[0];
       if (!f) return;
-      $('#tpFileName').textContent = f.name;
+      // 带上图标：选了文件后"这是一份文件"的观感还在，也还看得出能再点一下换文件
+      $('#tpFileName').textContent = '📄 ' + f.name;
       $('#tpText').value = await f.text();
     };
 
@@ -198,6 +239,8 @@
   if (btn) btn.onclick = openPanel;
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
+    // 教程浮窗盖在面板上面时，Esc 只关教程（别连面板一起关掉）
+    if (window.TRANS_TUT && TRANS_TUT.isOpen()) return;
     const p = $('#transPanel');
     if (p && p.classList.contains('on')) { p.classList.remove('on'); e.stopPropagation(); }
   }, true);

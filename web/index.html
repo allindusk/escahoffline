@@ -4,9 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1106a">
-<link rel="stylesheet" href="assets/css/extras.css?v=1101a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1102a">
+<link rel="stylesheet" href="assets/css/player.css?v=1103b">
+<link rel="stylesheet" href="assets/css/extras.css?v=1134a">
+<!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
+<link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1103b">
 </head>
 <body>
 <!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
@@ -262,16 +264,17 @@
   <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
-<script src="assets/js/common.js?v=1122a"></script>
-<script src="assets/js/header.js?v=1101a"></script>
+<script src="assets/js/common.js?v=1103a"></script>
+<script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/i18n.js?v=1102a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
-<script src="assets/js/player.js?v=1105a"></script>
-<script src="assets/js/transui.js?v=1120a"></script>
+<script src="assets/js/player.js?v=1103c"></script>
+<script src="assets/js/trans_tut.js?v=1133b"></script>
+<script src="assets/js/transui.js?v=1136a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
-<script src="assets/js/mobile.js?v=1102a"></script>
+<script src="assets/js/mobile.js?v=1103a"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
 const TOUR_STEPS = [
@@ -312,7 +315,7 @@ const TOUR_STEPS = [
     text: '点 ⚙ 可以调字号、行距、对话框的样子、立绘大小、音量和说话速度。'
       + '改完立刻生效，下次打开还记得。' },
   { el: '#btnLan', title: '⑫ 手机上也想看',
-    text: '点右上角「局域网访问」会出一个<b>二维码</b>，手机连同一个 WiFi 扫一下，'
+    text: '点右上角「局域网二维码」会出一个<b>二维码</b>，手机连同一个 WiFi 扫一下，'
       + '就能在手机上看。扫不开的话，按启动窗口里的提示放行一次就行。' },
 ];
 

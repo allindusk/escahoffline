@@ -99,24 +99,29 @@
    * 右下角记录操作与提示；有新消息自动展开、5 秒后自动收起；
    * 不想看就点标题栏或「收起」手动折叠。
    */
-  const ACT = { rows: [], max: 150, hideTimer: null, auto: true };
+  const ACT = { rows: [], max: 150, hideTimer: null, auto: true, unread: 0 };
   const apPanel = $('#actPanel');
   const apBody = $('#apBody');
   const apToggle = $('#apToggle');
 
-  function actExpand() {
+  /** delay：多久后自动收起；0 = 不自动收（错误这类必须让人看见的结论） */
+  function actExpand(delay) {
     if (!apPanel) return;
     apPanel.classList.remove('collapsed');
     apPanel.classList.remove('has-new');     // 展开即视为已读
+    ACT.unread = 0;
     if (apToggle) apToggle.textContent = '收起';
     clearTimeout(ACT.hideTimer);
     // 只有开了「自动收起」才计时；关掉就一直留着，等用户自己收
-    if (ACT.auto) ACT.hideTimer = setTimeout(actCollapse, 5000);
+    const wait = (delay === undefined) ? 5000 : delay;
+    if (ACT.auto && wait > 0) ACT.hideTimer = setTimeout(actCollapse, wait);
   }
 
   function actCollapse() {
     if (!apPanel) return;
     apPanel.classList.add('collapsed');
+    // 收起来时里面还有没展开看过的记录 → 标题旁点个圆点，否则完全看不出来
+    if (ACT.unread) apPanel.classList.add('has-new');
     if (apToggle) apToggle.textContent = '展开';
     clearTimeout(ACT.hideTimer);
   }
@@ -140,14 +145,17 @@
       .map(function (n) { return String(n).padStart(2, '0'); }).join(':');
     ACT.rows.push({ at: at, text: String(text), lv: level || 'info' });
     if (ACT.rows.length > ACT.max) ACT.rows = ACT.rows.slice(-ACT.max);
+    ACT.unread++;
     renderAct();
     /* 窄屏（手机）一展开就横着盖住大半屏幕。默认保持收起成右下角小框，
        只在标题旁打个点提示有新记录，想看再点开（用户 2026-11-02 要求）。
-       桌面行为不变：仍然自动展开、5 秒后自动收起。 */
+       桌面：自动展开，并且给够时间看 —— 出错不自动收（5 秒一闪就没了等于没提示），
+       完成类留 12 秒。 */
+    const keep = level === 'err' ? 0 : (level === 'ok' ? 12000 : 6000);
     if (window.matchMedia('(max-width: 860px)').matches) {
       if (apPanel) apPanel.classList.add('has-new');
     } else {
-      actExpand();
+      actExpand(keep);
     }
   }
 
@@ -208,6 +216,9 @@
 
   // ---------------------------------------------------------------- 数据
   async function loadAll() {
+    // 先把容量 / 耗时文案取回来：下面的渲染与确认弹窗直接用 FACT.t(...)，
+    // 没等它就会拼出"约 部剧情""约 MB"这种空数字
+    if (window.FACT) await FACT.ready();
     const [state, manifest, links, pub] = await Promise.all([
       api('state'), api('manifest'), api('links').catch(() => null),
       api('cdn/public').catch(() => null),   // 公共素材进度（背景/BGM/音效各下了多少）
@@ -227,12 +238,8 @@
   const installed = () => (ST.state && ST.state.installed) || {};
 
   function renderAll() {
+    // 顶栏只留版本号：已装部数 / 资源包缓存在下面「当前状态」里，顶栏不再重复
     $('#hdrSub').textContent = 'v' + ((ST.state && ST.state.version) || '?');
-    const cov = (ST.state && ST.state.coverage) || {};
-    $('#hdrStat').textContent =
-      `已装 ${cov.units || 0}/${cov.unitsTotal || 0} 部剧情`
-      + (cov.bundleCache && cov.bundleCache.bytes
-        ? ` · 下载缓存 ${human(cov.bundleCache.bytes)}` : '');
     renderOverview();
     renderPacks();
     renderQuality();
@@ -249,13 +256,18 @@
   const done = Object.values(us).filter(v => v !== 'missing').length;
   const total = (ST.units.char.length + ST.units.adv.length) || 0;
 
-  $('#ovMin').textContent = '30–60 MB / 部';
+  // 容量一律问 FACT（= server/facts.py），这里不再写死数字与单位：
+  // 以前"每部 45 MB、全部约 X GB"算在 JS 里，改一次得改五处
+  // HTML 前缀已经写了"每部约"，这里只给区间（不要再带" / 部"）
+  $('#ovMin').textContent = FACT.t('unitEach');
   $('#ovCore').textContent = cdn.manifestReady ? '已就绪' : '需联网刷新';
-  $('#ovAll').textContent = total ? '约 ' + Math.round(total * 45 / 1024) + ' GB' : '—';
+  // 注意 HTML 里已经写了"约 <b id=ovAll>"，这里不要再加"约" ——
+  // 之前两边各写一次，页面上就成了「约 约 24.7 GB」
+  $('#ovAll').textContent = total ? FACT.unitsSize(total) : '—';
 
   const cards = [
     ['已安装剧情', `${done}`, `/ ${total || '?'} 部`],
-    ['下载缓存', human((cov.bundleCache || {}).bytes),
+    ['资源包缓存', human((cov.bundleCache || {}).bytes),
       `${(cov.bundleCache || {}).files || 0} 个包`],
     ['剩余磁盘', human((ST.state && ST.state.free) || 0), ''],
     ['翻译', `${(ST.state.trans && ST.state.trans.messages) || 0}<small>句</small>`,
@@ -285,7 +297,7 @@
       .filter(k => (ST.units.state[k] || 'missing') === 'missing');
     if (!keys.length) { toastMsg('所有剧情都已安装'); return; }
     if (!confirm('将安装全部 ' + keys.length + ' 部剧情，约 ' +
-      Math.round(keys.length * 45 / 1024) + ' GB。\n\n建议先装一两个试试再全量。确定吗？')) return;
+      FACT.unitsSize(keys.length) + '。\n\n建议先装一两个试试再全量。确定吗？')) return;
     // 注意：**不能**替换 Set 对象 —— storylist 组件握着这个 Set 的引用，
     // 换成新对象后勾选状态就和组件脱钩了（列表看着没勾上）。
     ST.sel.clear();
@@ -343,6 +355,38 @@
 
   const stateOf = key => ST.units.state[key] || 'missing';
 
+  // 软缺（装好了，但官方源没有语音包）的文案按剧情类别区分：
+  //  · 其他剧情：本来就没有语音轨 → 「无语音」
+  //  · 活动剧情：官方没放出语音资源包，离线只能占位 → 「官方未提供资源包，占位符」
+  function softMissingLabel(key) {
+    const m = /^adv_([a-z]+)/.exec(key);
+    const kind = m ? m[1] : '';
+    if (kind === 'event') return '官方未提供资源包，占位符';
+    return '无语音';
+  }
+
+  // 「其他」分类按入口分组（与播放页侧栏 #sidebar 同一份入口清单 data/othereps.js）。
+  let _otherEps = null;
+  function ensureOtherEps() {
+    if (_otherEps || window.__OTHER_EPS) { _otherEps = window.__OTHER_EPS || _otherEps; return Promise.resolve(); }
+    // 与播放页一致的按需加载：清单没随更新包下来就拉一次，缺失则静默降级
+    return fetch('data/othereps.js?v=1118a').then(r => r.ok ? r.text() : null)
+      .then(t => { if (t) { try { (0, eval)(t); } catch (e) {} } _otherEps = window.__OTHER_EPS || null; })
+      .catch(() => {});
+  }
+  function otherEpsMaps() {
+    const eps = _otherEps || window.__OTHER_EPS || [];
+    const keyNo = {}, noName = {}, title = {};
+    eps.forEach(function (g) {
+      noName[g.no] = g.name;
+      g.eps.forEach(function (e) {
+        if (!(e.k in keyNo)) keyNo[e.k] = g.no;
+        if (!(e.k in title)) title[e.k] = e.t;   // 每部单元取第一话标题作为行名
+      });
+    });
+    return { keyNo: keyNo, noName: noName, title: title, groups: eps };
+  }
+
   /** 某个分类（char / main / event / other）下的全部剧情单元 */
   function packUnits(src) {
     return src === 'char' ? ST.units.char : ST.units.adv;
@@ -370,7 +414,8 @@
 
   /* ---------------------------------------------------------------- 基础数据
    * 就是"基础包"：浏览剧情**必须先有**的东西。现在它只有一个成员 ——
-   * 官方资源清单（5 MB）。索引/目录树/图片映射随程序自带，不需要下载。
+   * 官方资源清单（体积见 facts.CATALOG_BYTES）。索引/目录树/图片映射随程序自带，
+   * 不需要下载。
    * 单独成块而不是混在剧情列表里，是因为它和"哪个角色"无关，属于全局前提。
    */
   function renderBasePack() {
@@ -388,7 +433,9 @@
     // （本地服务是常驻进程，改完 Python 必须重启程序；否则前端会看到缺字段，
     //   以前被 `|| 0` 兜成「横幅 0/0」，看起来像"没有横幅"）
     const pubVer = +(pub.v || 0);
-    const pubStale = pubAny && pubVer < 2;
+    // v3 = 横幅改成"按图数、角色/章节分开"；低于它说明后端还是旧进程，
+    // 缺 bannerChar/bannerStory 字段，别把缺字段当成 0
+    const pubStale = pubAny && pubVer < 3;
     const cnt = (have, total) => (total == null ? '—'
       : (have || 0) + '/' + (total || 0));
     const pubAll = ready && !pubStale && near(pub.back, pub.backTotal)
@@ -398,14 +445,34 @@
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');
 
+    /* 横幅要分两半写：角色是「一包一张图」（384），章节是「一个包里一批
+       标题图」（主线/活动/其他共 172 张）。以前只报包数（384 + 5 = 389），
+       看着就像"横幅一共 389 张"，跟实际对不上（用户 2026-11-02 反馈）。 */
+    const bannerTxt = '横幅 ' + cnt(pub.banner, pub.bannerTotal)
+      + (pub.bannerStoryTotal
+        ? '（角色 ' + (pub.bannerChar || 0)
+          + ' · 章节 ' + (pub.bannerStory || 0) + '）'
+        : '');
+
+    /* 下过就报实数；没下过给一个总量预估 —— 总量与分项都来自 facts.PUBLIC_PARTS，
+       别在这里手抄"205 + 539 + 31 + 20 + 40"（改一处就漏一处）。 */
     const pubLine = pubAny
       ? '背景 ' + cnt(pub.back, pub.backTotal)
       + ' · 音乐 ' + cnt(pub.music, pub.musicTotal)
       + ' · 音效 ' + cnt(pub.sfx, pub.sfxTotal)
       + ' · 头像 ' + cnt(pub.avatar, pub.avatarTotal)
-      + ' · 横幅 ' + cnt(pub.banner, pub.bannerTotal)
+      + ' · ' + bannerTxt
       + (pubStale ? ' · <b style="color:#f0c05a">程序该重启了</b>' : '')
-      : '约 <b>835 MB</b>（背景 205 + 音乐 539 + 音效 31 + 头像 20 + 横幅 40）';
+      : '约 <b>' + FACT.t('public') + '</b>（' + FACT.breakdown() + '）';
+
+    // 「全部安装完」：所有剧情单元（角色 + 主线/活动/其他）既不是「未安装」也不是
+    // 「不完整（解包中断）」。soft-missing（源缺语音）算装好了 —— 上一轮已当「最完整状态」。
+    // 清单未就绪（ST.units 还是空）时 allUnits 长度为 0，不误判成"已全部安装"。
+    const allUnits = (ST.units.char || []).concat(ST.units.adv || []);
+    const allInstalled = allUnits.length > 0 && allUnits.every(function (k) {
+      const s = stateOf(k);
+      return s === 'ready' || s === 'soft-missing';
+    });
 
     box.innerHTML =
       '<div class="bp-head"><b>基础数据（必需）</b>' +
@@ -414,7 +481,8 @@
       // ① 剧情目录
       '<div class="bp-row"><span class="nm">剧情目录</span>' +
       '<span class="dim">' +
-      (ready ? esc(mfTxt || '已下载') : '约 5 MB · 决定"现在有哪些剧情能装"') +
+      (ready ? esc(mfTxt || '已下载')
+        : '约 ' + FACT.t('catalog') + ' · 决定"现在有哪些剧情能装"') +
       '</span>' +
       (ready ? '<span class="st ok">已就绪</span>'
         : '<button class="primary" id="bpGet">下载</button>') +
@@ -422,7 +490,10 @@
 
       // ② 公共素材
       '<div class="bp-row"><span class="nm">公共素材（背景图 / 背景音乐 / 音效 / 头像 / 剧情横幅）</span>' +
-      '<span class="dim" title="官方更新后点「补全」只会下新增的，已有的跳过">' +
+      '<span class="dim" title="背景/音乐/音效/头像按「已导出 / 清单里的包」算；'
+      + '横幅按图片张数算（角色一包一张，主线/活动/其他的章节标题图一个包一批）。'
+      + '少数没被任何剧情引用的背景不会导出成图，所以背景张数会比清单包数少几个。'
+      + '官方更新后点「补全」只会下新增的，已有的跳过">' +
       pubLine + '</span>' +
       // 已就绪后不再给「更新」入口：公共素材的增量补齐已经并进
       // 「更新 → 刷新资源清单」了（那边检测到新增会自动补），
@@ -437,16 +508,19 @@
       // ③ 剧情本体
       '<div class="bp-row"><span class="nm">剧情本体（立绘 / 语音 / 剧本）</span>' +
       '<span class="dim">按剧情单独装，见下方列表</span>' +
-      '<span class="st none">按剧情</span></div>';
+      (allInstalled ? '<span class="st ok">已全部安装</span>'
+        : '<span class="st none">按剧情</span>') + '</div>';
 
     const bp = $('#bpPub');
     if (bp) {
       bp.onclick = () => {
-        if (!confirm('下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅，约 835 MB）？\n\n'
+        if (!confirm('下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅，约 '
+          + FACT.t('public') + '）？\n\n'
           + '· 所有剧情共用，下过之后装任何剧情都不会缺背景、也不会没音乐\n'
           + '· 头像与剧情横幅也在这里：下完侧栏/CG 页才有头像，剧情列表才有标题横幅\n'
           + '· 已有的会跳过，重复点不会重下；官方更新后再点也只补新增的\n'
-          + '· 下载 + 解包合计约 10–20 分钟（取决于网速），期间可关掉页面\n\n开始？')) return;
+          + '· 下载 + 解包合计约 ' + FACT.t('secPublic')
+          + '（取决于网速），期间可关掉页面\n\n开始？')) return;
         startJob('install/base', {}, '开始下载公共素材');
       };
     }
@@ -497,9 +571,10 @@
       box.innerHTML = '<div style="padding:22px">' +
         '<div class="warn" style="margin:0 0 14px">还没有剧情目录。<br>' +
         '目录决定"现在有哪些剧情能装"，官方出新剧情它会变，所以不随程序附带，' +
-        '需要先下载一次（约 5 MB）。</div>' +
+        '需要先下载一次（约 ' + FACT.t('catalog') + '）。</div>' +
         '<button class="primary" id="btnGetManifest">下载剧情目录</button>' +
-        '<div class="dim" style="margin-top:10px">约 10–20 秒。</div></div>';
+        '<div class="dim" style="margin-top:10px">约 ' + FACT.t('secCatalog')
+        + '。</div></div>';
       $('#btnGetManifest').onclick = () => startJob('manifest/refresh', {},
         '开始更新剧情目录');
       updateSelBar();
@@ -532,6 +607,11 @@
   let packList = null;      // ② 剧情安装
   let trListEl = null;      // ⑤ 翻译（命名避开转写用的 trList 变量）
   let upListEl = null;      // ③ 提高CG画质
+  /* ④ 导出视频的列表：**声明必须在这里**，不能挪到它自己的小节去 ——
+     connectJobs() 在 ④ 之前就引用了它，若声明留在后面，一旦哪天变成
+     同步调用就会踩 TDZ（Cannot access 'vidList' before initialization），
+     而现在只是因为轮询回调是异步的才没炸。 */
+  let vidList = null;
 
   function ensurePackList() {
     if (packList) return packList;
@@ -540,19 +620,63 @@
       units: packUnits,
       status: stateOf,
       banners: bannersReady,
-      /* 只有「已装好」的不给再勾。缺语音（soft-missing）/ 不完整（partial）
-         必须能勾 —— 勾上再点「开始安装」就是**补齐**：后端按磁盘上已有文件跳过，
-         只下缺的那些包再重新导出语音，不用整个卸载重装（以前这几行被禁用，
-         用户只能卸载后重下几十 MB）。 */
-      disabled: k => stateOf(k) === 'ready',
+      /* 「其他」分类按入口分组（RAID BOSS / 広域戦 / 記念イベント …）+ 末尾「教程 / 开场」，
+        与播放页侧栏完全一致；行名也用入口清单里的话名，不再显示 "其他剧情 第N话"。
+        char / main / event 不分组（groupOf 返回 ''），保持平铺。 */
+      name: k => otherEpsMaps().title[k] || SL.info(k).name,
+      groupOf: k => {
+        if (!(_otherEps || window.__OTHER_EPS)) return '';   // 入口清单未就绪：先平铺
+        const m = /^adv_([a-z]+)/.exec(k);
+        const kind = m ? m[1] : '';
+        if (kind === 'tutorial' || kind === 'op') return 'tuto';
+        if (kind === 'other') {
+          const no = otherEpsMaps().keyNo[k];
+          return no != null ? 'etc_' + no : 'etc_?';
+        }
+        return '';   // char / main / event 不分组
+      },
+      groupLabel: id => {
+        if (id === 'tuto') return '教程 / 开场';
+        if (id.indexOf('etc_') === 0) {
+          // 横幅里已印着 RAID BOSS / 広域戦，名字里不再重复（和播放页侧栏一致）
+          const nm = otherEpsMaps().noName[id.slice(4)] || '其他剧情';
+          return nm.replace(/^RAID BOSS\s*/, '').replace(/^広域戦\s*/, '広域 ');
+        }
+        return id;
+      },
+      groupOrder: ids => {
+        const order = otherEpsMaps().groups.map(g => 'etc_' + g.no).concat(['tuto']);
+        return order.filter(x => ids.indexOf(x) >= 0);
+      },
+      // 入口横幅也是「公共素材」解包产物：没下过就不发图（否则「其他」一展开一片 404）。
+      // 只用正数入口号：0=投票说明、-1=未归类（新剧情）没有游戏横幅，不显示。
+      groupBanner: id => {
+        if (!bannersReady()) return '';
+        if (id.indexOf('etc_') === 0) {
+          const no = +id.slice(4);
+          if (no > 0) return 'media/img/story/etc_' + no + '.webp';
+        }
+        return '';   // 教程 / 开场 无横幅
+      },
+      groupCollapsible: true,
+      groupDefaultOpen: true,
+      /* 不可勾选 = 已经"装到不能再装"两类：
+         · ready        齐全（剧本+语音都在）
+         · soft-missing 官方源本身就没有这语音包，重跑也补不出来（后端会直接跳过）
+         这两类点「开始安装」都是白跑，所以直接禁勾。
+         只有 partial（解包中断）能勾 —— 重新下载并解包即可修复。 */
+      disabled: k => stateOf(k) === 'ready' || stateOf(k) === 'soft-missing',
       badge: k => {
-        const b = UNIT_BADGE[stateOf(k)] || UNIT_BADGE.missing;
+        const st = stateOf(k);
+        if (st === 'soft-missing') return { cls: 'must', text: softMissingLabel(k) };
+        const b = UNIT_BADGE[st] || UNIT_BADGE.missing;
         return { cls: b[0], text: b[1] };
       },
       rowTitle: k => {
         const st = stateOf(k);
         if (st === 'soft-missing') {
-          return '剧本已装、语音没装（能播但没声音）—— 勾上后点「开始安装」只补语音';
+          return '剧本与立绘已装好、能正常播放，但' + softMissingLabel(k)
+            + '—— 已是最完整状态，无法补齐';
         }
         if (st === 'partial') {
           return '剧本文件异常小（上次解包中断）—— 勾上后点「开始安装」重下并重新解包';
@@ -563,9 +687,12 @@
         const st = stateOf(k);
         if (st === 'missing') return [];
         const out = [{ act: 'rm', label: '卸载', cls: 'rm', title: '删除已解包的资源，释放空间' }];
-        if (st !== 'ready') {
+        // 只给「不完整（解包中断）」补齐：重新下载并解包即可修复。
+        // 「软缺（缺语音）」是官方源里压根没有这语音包，重跑也补不出来，
+        // 后端会直接跳过 —— 这里不再挂补齐按钮，免得看着像"还没装完"。
+        if (st === 'partial') {
           out.unshift({ act: 'fill', label: '补齐', cls: 'ok',
-            title: '只下载缺的语音 / 图片并重新导出，不用整个重装' });
+            title: '只重新下载缺的包并重新解包，不用整个重装' });
         }
         return out;
       },
@@ -579,22 +706,25 @@
         if (!confirm('卸载「' + unitName(k) + '」？\n\n'
           + '会删除：剧本、语音、头像、该角色独占的立绘（通常几十 MB）。\n'
           + '背景 / CG 可能被别的剧情共用，会保留。\n\n'
-          + '下载缓存会保留 —— 以后重装不用重新下载。')) return;
+          + '资源包缓存会保留 —— 以后重装不用重新下载。')) return;
         startJob('uninstall', { units: [k] }, '正在卸载…');
       },
       onChange: () => updateSelBar(),
     });
+    // 「其他」分类要按入口分组，依赖入口清单；清单就绪后重画一次让分组生效
+    ensureOtherEps().then(() => { if (packList) packList.refresh(); });
     return packList;
   }
 
-  /** 勾选统计：fresh = 全新安装，fill = 已装但缺东西（缺语音 / 不完整） */
+  /** 勾选统计：fresh = 全新安装，fill = 已装但可修复（只有 partial 解包中断）。
+   *  soft-missing 不算 fill：官方源缺语音，补不出来，禁勾且不应计入「补齐」。 */
   function selSummary() {
     const fresh = [];
     const fill = [];
     ST.sel.forEach(function (k) {
       const st = stateOf(k);
       if (st === 'missing') fresh.push(k);
-      else if (st !== 'ready') fill.push(k);
+      else if (st === 'partial') fill.push(k);
     });
     return { fresh: fresh.length, fill: fill.length,
              todo: fresh.length + fill.length,
@@ -607,11 +737,11 @@
     if (!bar) return;
     if (s.fresh && s.fill) {
       bar.innerHTML = '将安装 <b>' + s.fresh + '</b> 部 · 补齐 <b>' + s.fill +
-        '</b> 部 · 约 <b>' + Math.round(s.fresh * 45) +
-        ' MB</b>（补齐只下缺的包，通常几 MB）';
+        '</b> 部 · 约 <b>' + FACT.unitsSize(s.fresh) +
+        '</b>（补齐只下缺的包，通常几 MB）';
     } else if (s.fresh) {
       bar.innerHTML = '将安装 <b>' + s.fresh + '</b> 部剧情 · 约 <b>' +
-        Math.round(s.fresh * 45) + ' MB</b>（按每部 45 MB 估算）';
+        FACT.unitsSize(s.fresh) + '</b>（按每部 ' + FACT.t('unitEst') + ' 估算）';
     } else if (s.fill) {
       bar.innerHTML = '将补齐 <b>' + s.fill +
         '</b> 部剧情缺的语音 / 图片（只下缺的包，通常几 MB）';
@@ -694,12 +824,12 @@
     if (!s.todo) return;
     const threads = +$('#optThreads').value;
     const what = [];
-    if (s.fresh) what.push('安装 ' + s.fresh + ' 部（约 ' + Math.round(s.fresh * 45) + ' MB）');
-    if (s.fill) what.push('补齐 ' + s.fill + ' 部（缺语音/不完整，只下缺的包）');
+    if (s.fresh) what.push('安装 ' + s.fresh + ' 部（约 ' + FACT.unitsSize(s.fresh) + '）');
+    if (s.fill) what.push('补齐 ' + s.fill + ' 部（解包中断，只下缺的包重新解包）');
     if (!confirm('即将' + what.join(' + ') + '。\n\n' +
-      '· 每部角色剧情约 30–60 MB（语音 + 背景 + 立绘 + CG）\n' +
+      '· 每部角色剧情约 ' + FACT.t('unitEach') + '（语音 + 背景 + 立绘 + CG）\n' +
       '· 下载速度：同时下 ' + threads + ' 个\n' +
-      '· 单部约 30–90 秒装好\n' +
+      '· 单部约 ' + FACT.t('secUnit') + '装好\n' +
       '· 已经下过的文件会跳过，重复点不会重新下载\n\n开始？')) return;
     runInstall(s.keys, '已开始安装，进度见底部');
   };
@@ -807,6 +937,28 @@
       $('#trResult').textContent = '失败：' + (impF.error || '未知错误');
     }
 
+    // 「重新登记高清图」跑完：共登记了多少张要留在页面上 —— 这个按钮点完
+    // 只有一两秒，底部条一闪就没了，用户会怀疑"到底有没有生效"。
+    // 只认**用户刚点的这一次**（created 在点击之后）：不然页面一打开，
+    // 历史任务里的那条"已登记 N 张"会自己冒出来，像是刚刚才跑过。
+    const rbAsk = ST._rbAskAt || Infinity;
+    const rb = (list || []).find(j => j.kind === 'rebuild' && j.state === 'done'
+      && j.created >= rbAsk);
+    if (rb && ST._rbDone !== rb.id) {
+      ST._rbDone = rb.id;
+      const info = $('#x2RebuildInfo');
+      if (info) info.innerHTML = '<b>' + esc(rb.message || '已完成') + '</b>';
+      _space = null;                       // 「高清化进度」的数字要重算
+      loadStats(true);
+    }
+    const rbF = (list || []).find(j => j.kind === 'rebuild' && j.state === 'failed'
+      && j.created >= rbAsk);
+    if (rbF && ST._rbFail !== rbF.id) {
+      ST._rbFail = rbF.id;
+      const info = $('#x2RebuildInfo');
+      if (info) info.textContent = '没成功：' + (rbF.error || '未知错误');
+    }
+
     // 导出任务「刚跑完」→ 按用户设置自动弹出文件夹。
     // **必须按状态跃迁判断**：以前是"列表里存在任意 done 的 video/cg 任务"就打开，
     // 而去重标记 ST._expShown 只在内存里 —— 每次刷新/重进页面都会把历史上的
@@ -827,20 +979,27 @@
       }
       if (prev === j.state) continue;                        // 状态没变 → 不动
       const ttl = j.title || j.kind || '任务';
+      // 导出类任务的结论由 afterExportDone 统一写（要带上文件名和保存位置），
+      // 这里只报"开始 / 失败"
+      const isExp = (j.kind === 'video' || j.kind === 'cg' || j.kind === 'transzip');
       if (j.state === 'running') notify('开始：' + ttl, 'info');
-      else if (j.state === 'done') notify('完成：' + ttl, 'ok');
+      else if (j.state === 'done') {
+        if (!isExp) {
+          let msg = '完成：' + ttl;
+          // 安装类任务：把「多少部剧情的 剧情/语音/立绘 已就绪」写进操作记录
+          const bd = j.detail && j.detail.breakdown;
+          if (bd) {
+            msg += ` · 剧情${bd.story}/${bd.t_story}`
+                 + ` · 语音${bd.voice}/${bd.t_voice}`
+                 + ` · 立绘${bd.stand}/${bd.t_stand}`;
+          }
+          notify(msg, 'ok');
+        }
+      }
       else if (j.state === 'failed') {
         notify('失败：' + ttl + (j.error ? '：' + j.error : ''), 'err');
       }
-      // 批量导出译文完成 → 刷新「已导出文件」列表（zip 就在那儿）
-      if (j.state === 'done' && j.kind === 'transzip') loadExports();
-      // 导出任务刚跑完 → 按设置自动弹目录（译文 zip 也算导出）
-      if (j.state === 'done'
-          && (j.kind === 'video' || j.kind === 'cg' || j.kind === 'transzip')) {
-        let auto = false;
-        try { auto = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
-        if (auto) openDir('export', '导出目录');
-      }
+      if (j.state === 'done' && isExp) afterExportDone(j);
     }
     // 清掉已经不在列表里的 id，别让这个表无限膨胀
     const alive = new Set(jobsNow.map(j => j && j.id));
@@ -862,7 +1021,7 @@
           '<li>打开 <a href="' + esc(m.page || '#') + '" target="_blank" ' +
           'rel="noopener">' + esc(m.page || 'Releases 页面') + '</a></li>' +
           '<li>下载 <code>' + esc(m.file || '') + '</code>' +
-          '（更新包 3–5 MB；也可下全量包）</li>' +
+          '（更新包 ' + FACT.t('update') + '；也可下全量包）</li>' +
           '<li>解压后覆盖到程序目录 —— <code>userdata/</code>、素材、译文都不会被覆盖 —— ' +
           '再双击 <code>启动.bat</code></li>' +
           '</ol></div>';
@@ -924,14 +1083,37 @@
       }
     }
 
+    // 安装 / 补齐任务「刚到终态」→ 必须重拉单元状态并刷新所有列表。
+    // 否则 stateOf 还停留在装之前的旧值，补齐/卸载按钮永远亮着、还能重复点，
+    // 用户根本看不出"到底装没装上、是不是软缺（源里没语音）"。后端其实装成功了，
+    // 只是前端没刷新而已。每个任务只刷一次（用 id 去重）。
+    const instJob = (list || []).find(
+      j => j.kind === 'install' && (j.state === 'done' || j.state === 'failed'));
+    if (instJob && ST._instJobId !== instJob.id) {
+      ST._instJobId = instJob.id;
+      loadUnits(true).then(() => {
+        if (packList) packList.refresh();
+        if (upListEl) upListEl.refresh();
+        if (trListEl) trListEl.refresh();
+        if (vidList) vidList.refresh();
+        updateSelBar();
+        renderOverview();
+        renderBasePack();   // 装完后「剧情本体」行可能从「按剧情」变「已全部安装」
+      }).catch(() => { });
+    }
+
     if (!list || !list.length) { bar.innerHTML = ''; return; }
     const now = Date.now() / 1000;
-    // 只有"还在跑"的常驻；结束的（done / 取消 / 失败）留 6 秒就收起来。
-    // 以前只过滤 done，导致**取消的任务永远挂在底部条上**不走。
+    // 只有"还在跑"的常驻；结束的也在条上多停一会儿再收：
+    // 以前 done 只留 6 秒，刚看到"完成"两个字就没了，用户根本来不及读。
+    // 现在完成留 15 秒、失败留 40 秒（失败更要看得见）；结果同时写进
+    // 操作记录和页面上的固定位置，不依赖这一条。
+    // 另外以前只过滤 done，导致**取消的任务永远挂在底部条上**不走。
     list = list.filter(j => {
       if (j.state === 'running' || j.state === 'queued') return true;
       const endAt = (j.ended || (j.started || j.created) + (j.elapsed || 0));
-      return now - endAt < 6;
+      const keep = j.state === 'failed' ? 40 : 15;
+      return now - endAt < keep;
     }).slice(0, 3);
     if (!list.length) { bar.innerHTML = ''; return; }
     bar.innerHTML = list.map(j => {
@@ -949,18 +1131,35 @@
         j.state === 'done' ? 'done' : '',
         j.paused ? 'paused' : ''].filter(Boolean).join(' ');
       // 速度只在右侧数值区显示一次（之前这里也拼了一次，导致两处重复、把布局挤乱）
-      const msg = (j.error ? '⚠ ' + j.error : (j.message || ''));
+      // 结束态前面加个符号 + 加亮（见 setup.css .job.done / .failed .jm）：
+      // 以前成功和失败都是一行淡灰字，扫一眼分不出结果
+      const msg = j.error ? ('⚠ ' + j.error)
+        : (j.state === 'done' ? '✓ ' + (j.message || '完成') : (j.message || ''));
       // 进度条要说清四件事：百分比、已下/总量（字节与个数）、速度、剩余
       const bd = j.bytesDone || 0;
       const bt = j.bytesTotal || 0;
       const bsp = j.bytesSpeed || 0;
       const line1 = [pct.toFixed(1) + '%',
         (bt ? `${human(bd)} / ${human(bt)}` : '')].filter(Boolean).join(' · ');
-      const line2 = [
-        (j.total ? `${Math.round(j.done)}/${Math.round(j.total)} ${j.unit || '个'}` : ''),
-        (bsp ? `${human(bsp)}/s` : ''),
-        eta,
-      ].filter(Boolean).join(' · ');
+      // 次级行：多单元安装优先显示「第 i/N 部」+ 当前这批「包 x/y」，
+      // 这样装 70 部剧情时进度条只从 0 平稳爬到 100%，不再反复冲到 100%。
+      const parts = [];
+      if (j.itemsTotal && j.itemsTotal > 1) {
+        parts.push(`第 ${j.itemsDone || 0}/${j.itemsTotal} 部`);
+      }
+      if (j.meta && j.meta.unit) {
+        parts.push(esc(j.meta.unit));
+      }
+      if (j.subTotal && j.subTotal > 0) {
+        parts.push(`包 ${Math.round(j.subDone)}/${Math.round(j.subTotal)}`);
+      }
+      // 单单元 / 公共素材：退回原来的「个数 x/y」显示
+      if ((!j.itemsTotal || j.itemsTotal <= 1) && j.total) {
+        parts.push(`${Math.round(j.done)}/${Math.round(j.total)} ${j.unit || '个'}`);
+      }
+      if (bsp) parts.push(`${human(bsp)}/s`);
+      if (eta) parts.push(`剩 ${secs(eta)}`);
+      const line2 = parts.filter(Boolean).join(' · ');
       return `<div class="job${cls ? ' ' + cls : ''}">
         <span class="jt">${esc(j.title)}</span>
         <span class="jm" title="${esc(msg)}">${esc(msg)}</span>
@@ -1022,7 +1221,9 @@
       banners: bannersReady,
       disabled: k => stateOf(k) === 'missing',   // 没装的没图可超分
       badge: k => {
-        const b = UNIT_BADGE[stateOf(k)] || UNIT_BADGE.missing;
+        const st = stateOf(k);
+        if (st === 'soft-missing') return { cls: 'must', text: softMissingLabel(k) };
+        const b = UNIT_BADGE[st] || UNIT_BADGE.missing;
         return { cls: b[0], text: b[1] };
       },
       onChange: () => { updateUpInfo(); refreshPlan(); },
@@ -1156,7 +1357,8 @@
     _statsAt = Date.now();
     const disk = $('#diskStats');
     if (!disk) return;
-    disk.innerHTML = '<div class="dim">统计中…（首次约 1–3 秒）</div>';
+    disk.innerHTML = '<div class="dim">统计中…（首次约 '
+      + FACT.t('secScan') + '）</div>';
     const detail = $('#diskDetail');
     if (detail) detail.innerHTML = '';
     try {
@@ -1278,13 +1480,33 @@
       connectJobs(true);
     } catch (e) { toastMsg(e.message, true); }
   };
-  $('#btnRebuildX2').onclick = async () => {
-    try {
-      await api('rebuild-x2', { method: 'POST', body: '{}' });
-      toastMsg('正在重建超分覆盖层');
-      connectJobs(true);
-    } catch (e) { toastMsg(e.message, true); }
-  };
+  /* 「重新登记高清图」（旧名：重建超分索引）
+   * 用户看不懂"索引"是什么，也不知道什么时候该点。所以：先讲清"它不做什么"
+   * （不重新超分、不改图、不删图、不占时间/空间），再讲"什么时候才值得点"，
+   * 点之前还要确认一次 —— 免得有人以为这是超分的第二步、每次都要点。
+   */
+  const btnRebuildX2 = $('#btnRebuildX2');
+  if (btnRebuildX2) {
+    btnRebuildX2.onclick = async () => {
+      if (!confirm('重新登记高清图？\n\n'
+        + '· 只是把硬盘上已经做好的高清图数一遍，重新登记给播放器用\n'
+        + '· 不会重新做超分，不会改动或删除任何图片，硬盘占用不变\n'
+        + '· 大约 ' + FACT.t('secRebuild') + '，随时能关页面\n\n'
+        + '平时不用点它。只有「高清图明明做了、播放器里看着还是糊」或者'
+        + '「从别的电脑拷了高清图过来」的时候才用。继续？')) return;
+      const info = $('#x2RebuildInfo');
+      if (info) info.textContent = '正在登记…';
+      ST._rbAskAt = Date.now() / 1000 - 2;    // 只认这一次的结果（留 2 秒时钟余量）
+      try {
+        await api('rebuild-x2', { method: 'POST', body: '{}' });
+        toastMsg('正在登记高清图，约 ' + FACT.t('secRebuild'));
+        connectJobs(true);
+      } catch (e) {
+        if (info) info.textContent = '没成功：' + e.message;
+        toastMsg(e.message, true);
+      }
+    };
+  }
 
   /* ---------------------------------------------------------- 画质对比图
    * 左边原图、右边超分 2 倍，用的是**同一段剧情的同一个画面**（背景 + 立绘），
@@ -1595,7 +1817,7 @@
    * 而用户点之前唯一的信息来源就是这几行字。
    */
   const CLEAN_CONFIRM = {
-    bundles: () => '删除全部下载缓存（原始压缩包）？\n\n'
+    bundles: () => '删除全部资源包缓存（原始压缩包）？\n\n'
       + '这些是下载回来的原始压缩包，解包成图片 / 语音 / 剧本之后就再也用不到了。\n'
       + '删掉不影响已完成解包的剧情播放，只是以后重新安装、或「补全缺失」'
       + '某部剧情时会重新下载。\n\n确定删除？',
@@ -1633,8 +1855,7 @@
   $$('[data-clean]').forEach(b => {
     b.onclick = () => runClean(b.dataset.clean, b);
   });
-  const goClean = $('#btnGoClean');
-  if (goClean) goClean.onclick = () => goto('settings');
+  // 「去清理空间」那块 panel 已删（说明与页面 lead / 左侧导航重复），入口靠左侧导航
   const goPacks = $('#btnGoPacks');
   if (goPacks) goPacks.onclick = () => goto('packs');
   const openExp2 = $('#btnOpenExport2');
@@ -1654,7 +1875,6 @@
   /* ④ 的剧情选择列表：与 ②③⑤ 共用 storylist.js。
      只列「已安装」的剧情 —— 没装就没有剧本可渲染，列出来也点不动，
      所以状态筛选整个不显示（noStatus）。 */
-  let vidList = null;
   function ensureVidList() {
     if (vidList) return vidList;
     vidList = SL.create({
@@ -1809,7 +2029,8 @@
     if (!confirm('将导出 ' + units.length + ' 条 mp4（每部剧情一条，各含所选 ' +
       parts.length + ' 段，连续段落合并成同一条）。\n\n' +
       '· 离线渲染：逐句定格截图后编码，画面稳定、无掉帧\n' +
-      '· 实测每句约 2 秒 → 单段约 3–5 分钟，6 段全导约 15–25 分钟\n' +
+      '· 实测每句约 ' + FACT.t('secExportLine') + ' → 单段约 '
+      + FACT.t('secExportPart') + '，6 段全导约 ' + FACT.t('secExportAll') + '\n' +
       '· 期间可以关掉这个页面，任务在后台继续\n\n开始？')) return;
     try {
       await api('export/video', {
@@ -1906,19 +2127,60 @@
     } catch (e) { toastMsg(e.message, true); }
   }
   $('#btnOpenExport').onclick = () => openDir('export', '导出目录');
+  const btnOpenExpTr = $('#btnOpenExpTr');
+  if (btnOpenExpTr) btnOpenExpTr.onclick = () => openDir('export', '导出目录');
 
-  // 「导出完成后自动打开文件夹」开关（存 localStorage，三页共用）
-  const setOpenExp = $('#setOpenExp');
-  if (setOpenExp) {
-    try { setOpenExp.checked = localStorage.getItem('escah_open_exp') === '1'; } catch (e) { }
-    setOpenExp.onchange = () => {
-      try {
-        localStorage.setItem('escah_open_exp', setOpenExp.checked ? '1' : '0');
-      } catch (e) { }
-      toastMsg(setOpenExp.checked ? '导出完成后会自动打开文件夹' : '已关闭自动打开文件夹');
-    };
+  /* 「导出完成后自动打开文件夹」：④ 导出页和 ⑤ 翻译页各有一个勾选框，
+     共用同一个设置（localStorage），勾哪个都同步，不会两边不一致。 */
+  const OPEN_EXP_KEY = 'escah_open_exp';
+  const openExpBoxes = $$('#setOpenExp, #setOpenExpTr');
+  function readAutoOpen() {
+    try { return localStorage.getItem(OPEN_EXP_KEY) === '1'; } catch (e) { return false; }
   }
+  function syncOpenExp() {
+    const on = readAutoOpen();
+    openExpBoxes.forEach(cb => { cb.checked = on; });
+  }
+  openExpBoxes.forEach(cb => {
+    cb.onchange = () => {
+      try { localStorage.setItem(OPEN_EXP_KEY, cb.checked ? '1' : '0'); } catch (e) { }
+      syncOpenExp();
+      toastMsg(cb.checked
+        ? '导出完成后会自动打开文件夹'
+        : '已关闭自动打开文件夹（导出位置仍会写在页面上）');
+    };
+  });
+  if (openExpBoxes.length) syncOpenExp();
   $('#btnRefreshExp').onclick = loadExports;
+
+  /** 导出一结束就把结论写死在页面上。
+   *  底部任务条十几秒就收走、操作记录也会自动折叠 —— 用户回头想找
+   *  "刚才那个文件导到哪去了"必须有个不会消失的地方。
+   *  另外：**勾不勾「自动打开文件夹」都要写**，以前不勾就完全查不到位置。 */
+  async function afterExportDone(j) {
+    let d = null;
+    try { d = await api('exports'); } catch (e) { }
+    const items = (d && d.items) || [];
+    // 文件名前缀各不相同（译文 / 视频 / CG），按修改时间取最新的那个
+    const newest = items.slice().sort(function (a, b) {
+      return String(b.at).localeCompare(String(a.at));
+    })[0];
+    const dir = (d && d.dir) || '导出目录';
+    const file = newest
+      ? newest.name + '（' + human(newest.bytes) + (newest.at ? '，' + newest.at : '') + '）'
+      : (j.message || '');
+    const isTr = j.kind === 'transzip';
+    const box = $(isTr ? '#trExpLast' : '#expLast');
+    if (box) {
+      box.dataset.set = '1';        // 标记已写过，别被 loadExports 的"最近文件"覆盖
+      box.innerHTML = '上次导出：<b>' + esc(file) + '</b><br>保存在 <b>' + esc(dir) + '</b>';
+    }
+    const r = $('#trExpResult');
+    if (isTr && r) r.textContent = '';
+    notify('导出完成：' + file + ' → 保存在 ' + dir, 'ok');
+    loadExports();
+    if (readAutoOpen()) openDir('export', '导出目录');
+  }
 
   async function loadExports() {
     try {
@@ -1929,6 +2191,16 @@
           <span class="sz">${human(f.bytes)}</span>
           <span class="sz">${esc(f.at)}</span></div>`).join('')
         || '<div class="dim">还没有导出过文件</div>';
+      // 刚打开页面时，把"上一次导出的文件 + 保存位置"也摆出来（不留空提示）；
+      // 已经由 afterExportDone 写过的不覆盖，避免越写越旧。
+      const last = $('#expLast');
+      const first = (d.items || [])[0];
+      if (last && first && !last.dataset.set) {
+        last.dataset.set = '1';
+        last.innerHTML = '最近导出的文件：<b>' + esc(first.name) + '</b>（'
+          + human(first.bytes) + '，' + esc(first.at) + '）'
+          + (d.dir ? '<br>保存在 <b>' + esc(d.dir) + '</b>' : '');
+      }
     } catch (e) { }
   }
 
@@ -1942,33 +2214,25 @@
     ].map(([k, v, s]) => `<div class="stat"><div class="k">${esc(k)}</div>
       <div class="v">${v}</div><div class="k">${esc(s)}</div></div>`).join('');
   }
-  $('#trFile').onchange = async ev => {
-    const f = ev.target.files[0];
-    if (f) $('#trFileN').textContent = f.name;
-  };
-  $('#btnTrImport').onclick = async () => {
-    const unit = ($('#trUnit').value || '').trim();
-    const f = $('#trFile').files[0];
-    if (!unit) { toastMsg('先填剧情标识 —— 可以用下方列表每行的「填入」', true); return; }
-    if (!f) { toastMsg('选一个 txt 文件', true); return; }
-    const text = await f.text();
-    try {
-      const d = await api('import/trans', {
-        method: 'POST',
-        body: JSON.stringify({ unit, text, mode: $('#trMode').value }),
-      });
-      $('#trResult').innerHTML =
-        `✅ 新增 ${d.added} · 更新 ${d.updated} · 跳过 ${d.skipped} · 格式错误 ${d.bad}；本部共 ${d.total} 句`;
-      toastMsg('导入完成，刷新播放器即可看到');
-    } catch (e) {
-      $('#trResult1').textContent = '失败：' + e.message;
-    }
-  };
+
+  /* 「自己动手翻」教程：正文、浮窗、开合都在 assets/js/trans_tut.js 里，
+     播放器的「翻译」面板用同一份 —— 这里只负责把按钮绑上去，
+     别再往本文件写教程文案（以前两处各一份，改一次要改两处）。 */
+  if (window.TRANS_TUT) TRANS_TUT.bind('#btnTutTrans');
 
   // ---------------------------------------------------------------- 批量导入（txt / 文件夹 / zip）
   let trSrc = 'multi';
+  let trMode = 'merge';    // merge 合并 / replace 覆盖
   let trPending = [];      // [{name, unit, text}]
   let trZipBlob = null;
+
+  /* 三步式界面里，「选择文件」按钮的文案跟着 ① 的类型走，
+     免得用户点了「整个文件夹」还去猜接下来要选什么（用户 2026-11-03）。 */
+  const TR_PICK_TX = {
+    multi: '选择 txt 文件…',
+    dir: '选择文件夹…',
+    zip: '选择 zip 压缩包…',
+  };
 
   function trCfgInput() {
     const inp = $('#trInput');
@@ -1976,13 +2240,31 @@
     inp.webkitdirectory = (trSrc === 'dir');
     inp.multiple = (trSrc === 'multi');
     inp.accept = (trSrc === 'zip') ? '.zip' : '.txt';
+    const pick = $('#trPick');
+    if (pick) pick.textContent = TR_PICK_TX[trSrc] || '选择文件…';
   }
+
+  /* 没选到东西时「导入」按不动 —— 以前点了只会弹一句 toast，白点一次 */
+  function syncTrImportBtn() {
+    const btn = $('#btnTrImportBulk');
+    if (!btn) return;
+    btn.disabled = trSrc === 'zip' ? !trZipBlob : !trPending.length;
+  }
+
   function trPick() { trCfgInput(); $('#trInput').click(); }
 
-  function detectUnit(text, fname) {
-    const m = text.match(/#\s*剧情标识\s*:\s*(\S+)/);
-    if (m) return m[1].trim();
-    return (fname || '').replace(/\.txt$/i, '') || '';
+  /* 认剧情标识：**只认本页导出时写的那一行** `# 剧情标识 : char_415`。
+   * 认不出来就明确告诉用户"重新导出原文再翻"，不再退化成拿整个文件名当标识 ——
+   * 那样 `char_415_トキサダ.txt` 会变成 unit「char_415_トキサダ」，导入必然失败，
+   * 报的还是"没有剧情数据：data/xxx.js"这种用户看不懂的错（用户 2026-11-02）。 */
+  function detectUnit(text) {
+    const m = String(text || '').match(/#\s*剧情标识\s*:\s*((?:char|adv)_\d+)/i);
+    return m ? m[1] : '';
+  }
+  /** 文件名里带合法编号（导出时就是 char_415_角色名.txt）也可以认 */
+  function unitFromName(fname) {
+    const m = String(fname || '').match(/(?:^|[^\w])((?:char|adv)_\d+)/i);
+    return m ? m[1] : '';
   }
   function setTrSel(s) { $('#trBulkInfo').textContent = s; }
 
@@ -1994,21 +2276,40 @@
       if (!/\.zip$/i.test(f.name)) { toastMsg('请选择 .zip 压缩包', true); return; }
       trZipBlob = f;
       setTrSel('已选压缩包：' + f.name + '（' + human(f.size) + '）—— 点「导入」解包并导入');
+      syncTrImportBtn();
       return;
     }
     const arr = [...files].filter(f => f.name.toLowerCase().endsWith('.txt'));
     const skip = files.length - arr.length;
     trPending = [];
+    const bad = [];
     for (const f of arr) {
       const text = await f.text();
-      trPending.push({ name: f.name, unit: detectUnit(text, f.name), text });
+      const unit = detectUnit(text) || unitFromName(f.name);
+      if (!unit) { bad.push(f.name); continue; }      // 认不出就不导，别硬塞
+      trPending.push({ name: f.name, unit, text });
     }
-    const noUnit = trPending.filter(p => !p.unit).length;
+    const res = $('#trResult');
+    if (bad.length) {
+      // 提示必须说清"怎么办"：这不是"格式错误"，是"这不是本页导出的原文"
+      if (res) {
+        res.innerHTML = '<div class="warn" style="margin:0 0 8px;line-height:1.9">'
+          + '<b>有 ' + bad.length + ' 个 txt 认不出是哪部剧情，已跳过</b>：'
+          + esc(bad.slice(0, 3).join('、')) + (bad.length > 3 ? ' 等' : '') + '<br>'
+          + '它们开头缺少「<code># 剧情标识 : char_xxx</code>」这一行，或者被改成了别的样子。<br>'
+          + '<b>请重新点「导出所选剧情」拿到原文，在导出的文件里填译文</b>，再导回来。'
+          + '</div>';
+      }
+      toastMsg('有 ' + bad.length + ' 个文件认不出是哪部剧情，已跳过', true);
+    } else if (res) {
+      res.innerHTML = '';                             // 上次的提示别留在页面上
+    }
     let s = '已选 ' + arr.length + ' 个 txt';
     if (skip) s += '（跳过 ' + skip + ' 个非 txt）';
-    if (noUnit) s += '；其中 ' + noUnit + ' 个认不出剧情标识（将用文件名）';
-    s += ' —— 点「导入」';
+    if (bad.length) s += '；其中 ' + bad.length + ' 个认不出是哪部剧情，会被跳过';
+    s += trPending.length ? ' —— 点「导入」' : ' —— 没有可导入的文件';
     setTrSel(s);
+    syncTrImportBtn();
   }
 
   function trRenderBulk(d) {
@@ -2034,11 +2335,28 @@
       [...trSrcBox.children].forEach(b => b.classList.toggle('on', b === btn));
       trPending = []; trZipBlob = null;
       setTrSel('还没选文件');
+      trCfgInput();          // 顺手把「选择文件」按钮的文案换成对应的说法
+      syncTrImportBtn();     // 换了类型，之前选的文件就不算数了
+      const res = $('#trResult');
+      if (res) res.innerHTML = '';
     });
+
+    /* ③ 导入方式：合并 / 覆盖。原来是个裸下拉框，用户不知道在问什么，
+       现在点选即生效，每个选项自带一句后果说明。 */
+    const trModeBox = $('#trModeBox');
+    if (trModeBox) {
+      trModeBox.addEventListener('click', ev => {
+        const btn = ev.target.closest('button[data-mode]');
+        if (!btn) return;
+        trMode = btn.dataset.mode === 'replace' ? 'replace' : 'merge';
+        [...trModeBox.children].forEach(b => b.classList.toggle('on', b === btn));
+      });
+    }
+
     $('#trPick').onclick = trPick;
     $('#trInput').onchange = ev => trOnFiles(ev.target.files);
     $('#btnTrImportBulk').onclick = async () => {
-      const mode = $('#trMode').value;
+      const mode = trMode;
       try {
         if (trSrc === 'zip') {
           if (!trZipBlob) { toastMsg('先选一个 zip 压缩包', true); return; }
@@ -2050,7 +2368,10 @@
           connectJobs(true);            // 进度条走底部任务条
           toastMsg('已开始导入，进度见底部');
         } else {
-          if (!trPending.length) { toastMsg('先选 txt 文件', true); return; }
+          if (!trPending.length) {
+            toastMsg('没有可导入的文件 —— 请先「导出所选剧情」拿到原文，填好译文再导回来', true);
+            return;
+          }
           $('#trResult').textContent = '正在导入…（进度见底部）';
           const items = trPending.map(p => ({ unit: p.unit, text: p.text }));
           await startJob('import/trans/multi', { items, mode },
@@ -2090,14 +2411,8 @@
       banners: bannersReady,
       disabled: k => stateOf(k) === 'missing',
       badge: transBadge,
-      // 上面「批量导入」要填剧情标识，从列表点一下比手打可靠
-      actions: () => [{ act: 'fill', label: '填入', title: '把这个剧情标识填到上面的导入框' }],
-      onAction: (k, act) => {
-        if (act !== 'fill') return;
-        const inp = $('#trUnit');
-        if (inp) inp.value = k;
-        toastMsg('已填入：' + unitName(k));
-      },
+      /* 这里**不给每行放「填入」按钮**（用户 2026-11-02 反馈：用不上、白占位置）。
+         正常情况下导出的文件里就带着「剧情标识」，导入时自动认，不需要人工指定。 */
       onChange: () => updateTrInfo(),
       empty: () => '还没有已安装的剧情 —— 先到「剧情安装」装一部',
     });

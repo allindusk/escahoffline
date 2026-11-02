@@ -32,7 +32,7 @@ from .. import proc
 
 from . import select
 from .config import (ARCHIVE_DIR, AUDIO, DATA, FILES_AUDIO, FILES_IMG,
-                     FILES_STORY, IMG, IMG_X2, ROOT, SCRIPTS, WEB, WS,
+                     FILES_STORY, IMG, IMG_X2, ROOT, SCRIPTS, STATE_DIR, WEB, WS,
                      add_scripts_to_path)
 from .net import _log, fetch_many
 
@@ -816,6 +816,11 @@ def export_story_topics() -> dict:
     `topic_event_001` 等 Sprite），没有对应的文本资源——所以网页上的剧情列表
     想显示封面只能用这些图。`main` / `main2` / `main3` 是同一分类的资源分包
     （编号 0–23 / 24–44 / 45–61 连续），导出时按 `topic_` 后面的名字归一。
+
+    **顺手把"应该有哪几张"登记下来**（``userdata/cdn/story_banners.json``）：
+    这些图的清单 index 里没有逐张条目（它们是一个包里的 Sprite），
+    不记的话控制台只能拿"包数"充当张数（384 角色包 + 5 章节包 = 389），
+    看着就像"横幅一共 389 张"，实际是 384 + 172 张（2026-11-02 用户反馈）。
     """
     import re
     import UnityPy
@@ -826,13 +831,17 @@ def export_story_topics() -> dict:
     # 统一落成 <剧情 kind>_<no>.webp，与 adv key 对齐（chapter -> main）
     name_map = {"chapter": "main", "event": "event", "etc": "etc"}
     n_new = n_skip = 0
+    produced = set()
+    missing_pkgs = 0
     for bname in STORY_TOPIC_PKGS:
         path = os.path.join(FILES_IMG, bname)
         if not os.path.exists(path):
+            missing_pkgs += 1
             continue
         try:
             env = UnityPy.load(path)
         except Exception:
+            missing_pkgs += 1
             continue
         for obj in env.objects:
             if obj.type.name != "Sprite":
@@ -848,16 +857,41 @@ def export_story_topics() -> dict:
                     continue
                 base = name_map.get(m.group(1), m.group(1))
                 num = f"{int(m.group(2))}{m.group(3)}"
-                dst = os.path.join(out_dir, f"{base}_{num}.webp")
+                fname = f"{base}_{num}.webp"
+                dst = os.path.join(out_dir, fname)
                 if os.path.exists(dst):
                     n_skip += 1
+                    produced.add(fname)
                     continue
                 sp.image.save(dst, "WEBP", quality=88, method=4)
                 n_new += 1
+                # 只有真落盘了才登记"应有这张"：先 add 后 save 的话，
+                # 某张写盘失败（磁盘满 / 权限 / 编码异常）仍会被算进总数，
+                # 控制台的「横幅 555/556」就永远差一张又查不出原因。
+                produced.add(fname)
             except Exception:
                 continue
-    print(f"  剧情封面：新增 {n_new} 跳过 {n_skip}")
-    return {"new": n_new, "skip": n_skip}
+    # 只在这 5 个包**都在**时才登记清单：少一个就写，会把"应有张数"算少，
+    # 界面于是显示成"横幅已齐"，反而掩盖了没下全的事实。
+    if produced and not missing_pkgs:
+        _write_story_banner_inventory(produced)
+    print(f"  剧情封面：新增 {n_new} 跳过 {n_skip} 应有 {len(produced)}")
+    return {"new": n_new, "skip": n_skip, "total": len(produced),
+            "missingPkgs": missing_pkgs}
+
+
+#: 章节横幅"应有张数"的登记文件（导出时写；随仓库还有一份种子见
+#: ``public_status._banner_inventory``）。
+STORY_BANNER_INV = os.path.join(STATE_DIR, "story_banners.json")
+
+
+def _write_story_banner_inventory(names) -> None:
+    try:
+        os.makedirs(os.path.dirname(STORY_BANNER_INV), exist_ok=True)
+        with open(STORY_BANNER_INV, "w", encoding="utf-8") as f:
+            json.dump({"names": sorted(names)}, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
 
 
 def export_char_banners(only=None) -> dict:
@@ -963,8 +997,16 @@ def _say(msg: str, tag: str = "stand") -> None:
 
     装剧情是后台任务（GUI 用户看不到控制台），出问题时只有 app.log 可查，
     所以「关键决策 / 异常」必须落盘，不能只 print。
+
+    print 单独兜一层 UnicodeEncodeError：这里会打「立绘尺寸一致 ✓」「⚠ 落点可疑」
+    这类非 GBK 字符，控制台/管道编码是 GBK 时 print 会抛异常，而这个异常会
+    顺着 compose_stands() 冒到 install_unit()，把**整部剧情判成安装失败**
+    （2026-11-02 74 部全灭）。控制台打不出来不该拖垮业务，日志里一条不少。
     """
-    print(msg)
+    try:
+        print(msg)
+    except (UnicodeEncodeError, OSError):
+        pass
     try:
         from .. import log as applog
         applog.log(msg, tag=tag)
@@ -1156,6 +1198,39 @@ def regen_maps() -> None:
 # ================================================================ 角色名 / 元数据
 
 
+def _read_js_obj(path: str) -> dict:
+    """读 ``window.__XXX={...};`` 这种一眼 JSON 的数据文件（坏了就当空）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+    except Exception:                                          # noqa: BLE001
+        return {}
+
+
+def _write_js_obj(path: str, marker: str, data: dict) -> None:
+    """按生成脚本的排版写回（紧凑、无空格），先写临时文件再替换。"""
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(f"window.{marker}={body};")
+    os.replace(tmp, path)
+
+
+def _note(msg: str, tag: str = "names") -> None:
+    """重建名单/元数据的可观测性：既 print 也写 ``app.log``。
+
+    GUI 用户看不到 stdout，而"这次拒绝了哪些改名""哪些角色元数据是沿用旧版"
+    恰恰是事后排查唯一有用的线索。
+    """
+    print("  " + msg)
+    try:
+        from .. import log as applog
+        applog.log(msg, tag=tag)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def regen_names(use_wiki: bool = True) -> None:
     """先 ``extract_names.py`` 刷新 ``char_names.json``，再生成 ``names.js``。
 
@@ -1165,6 +1240,14 @@ def regen_names(use_wiki: bool = True) -> None:
 
     覆盖前先留一份备份到 ``_archive/``：这两个脚本是"整体重写"，万一哪天上游
     判定逻辑改了，还能立刻回退到旧名单。
+
+    **已有的名字不许被重生成改掉**：这两份源表（剧本抽取的 ``char_names.json``、
+    WIKI 的 ``char_names_wiki.json``）和播放器的角色 id **不同源**，按 id 覆盖会整体
+    错位。2026-11-03 实测：装一部剧情触发本函数后，11 号被改成「カンナ」（剧本里
+    「ルビー」出现 145 次）、13 号被改成「花のチルカ」（剧本里「サファイア」124 次）、
+    217 号变成「ハロウィンノドカ (217)」——9 个角色名后面还带上 "(id)" 后缀，
+    连带 ``charmeta.js`` 有 11 个角色查不到元数据（稀有度/实装日期直接消失）。
+    所以这里只**采纳新增角色**的名字，已有 id 的名字一律沿用旧表。
     """
     arch = ARCHIVE_DIR
     os.makedirs(arch, exist_ok=True)
@@ -1173,6 +1256,7 @@ def regen_names(use_wiki: bool = True) -> None:
         if os.path.exists(p):
             shutil.copy2(p, os.path.join(arch, f + ".prev"))
     out = os.path.join(DATA, "names.js")
+    prev = _read_js_obj(out)
     if os.path.exists(out):
         shutil.copy2(out, os.path.join(arch, "names.js.prev"))
     run_script("extract_names.py", quiet=True)
@@ -1182,13 +1266,48 @@ def regen_names(use_wiki: bool = True) -> None:
     else:
         run_script("gen_names_js.py", quiet=True)
 
+    new = _read_js_obj(out)
+    if not prev or not new:
+        return
+    rejected, merged = [], dict(new)
+    for cid, nm in prev.items():
+        if cid in merged and merged[cid] != nm:
+            rejected.append((cid, nm, merged[cid]))
+            merged[cid] = nm                      # 沿用旧名，拒绝这次"改名"
+    adopted = sorted((c for c in new if c not in prev), key=lambda s: int(s))
+    if rejected:
+        _write_js_obj(out, "__NAMES", merged)
+        sample = "；".join(f"{c}: {o}（新表给 {n}）" for c, o, n in rejected[:3])
+        _note(f"名字：拒绝 {len(rejected)} 处改名（沿用旧表），例如 {sample}")
+    if adopted:
+        _note(f"名字：新增 {len(adopted)} 个角色 → {', '.join(adopted[:8])}")
+
 
 def regen_charmeta() -> None:
-    """稀有度/实装日期/头像。依赖 ``names.js`` 已存在，所以必须排在 names 之后。"""
+    """稀有度/实装日期/头像。依赖 ``names.js`` 已存在，所以必须排在 names 之后。
+
+    **只补不删**：``gen_charmeta.py`` 是"按名字查表"，查不到就整条不写。名字表一旦
+    有一点偏差（见 :func:`regen_names` 的说明），角色就会从 charmeta.js 里消失，
+    界面上稀有度/实装日期/职业全空、按 R/SSR 筛选也筛不到。所以这里把上一版里
+    有、这一版里没有的条目**原样贴回去**。
+    """
     if not os.path.exists(os.path.join(WS, "char_meta.json")):
         print("  跳过 gen_charmeta.py：缺少 char_meta.json")
         return
+    out = os.path.join(DATA, "charmeta.js")
+    prev = _read_js_obj(out)
     run_script("gen_charmeta.py", quiet=True)
+    new = _read_js_obj(out)
+    if not prev or not new:
+        return
+    kept = [c for c in prev if c not in new]
+    if kept:
+        merged = dict(new)
+        for c in kept:
+            merged[c] = prev[c]
+        _write_js_obj(out, "__CHARMETA", merged)
+        _note(f"⚠ 元数据：{len(kept)} 个角色新表里查不到，沿用上一版"
+              f"（{', '.join(sorted(kept, key=int)[:8])}）", tag="charmeta")
 
 
 def _pack_birth(path: str) -> str:

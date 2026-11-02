@@ -28,6 +28,8 @@ import os
 import re
 import time
 
+from .. import facts
+from ..facts import PUBLIC_PARTS
 from . import config, manifest, net, select, stages
 
 #: 从 net 的日志里抠出 "[123/456]" 当进度
@@ -52,8 +54,14 @@ def _capture(job):
                 if m:
                     # 注意：Job.progress() 没有 total 参数（多传会被吃掉进 detail），
                     # 总量必须用 set_total() 单独设，否则进度条永远是 0%
-                    job.set_total(int(m.group(2)), "包")
-                    job.progress(done=int(m.group(1)), message=s[:200])
+                    if getattr(job, "sub_mode", False):
+                        # 多单元安装：顶层进度由 items 驱动，这里把每批 bundle 的
+                        # 包计数写进 sub，避免反复把顶层进度冲到 100%。
+                        job.sub_progress(int(m.group(1)), int(m.group(2)),
+                                        s[:160])
+                    else:
+                        job.set_total(int(m.group(2)), "包")
+                        job.progress(done=int(m.group(1)), message=s[:200])
                 else:
                     job.log(s[:200])
             except Exception:                                  # noqa: BLE001
@@ -193,7 +201,8 @@ def ensure_manifest(job=None, force: bool = False) -> dict:
     if not force and manifest.has_manifest():
         return manifest.load_index()
     if job is not None:
-        job.log("下载并解密官方资源清单（约 3.5 MB，首次才需要）…")
+        # 体积只说在界面上（facts.CATALOG_BYTES），日志里不重复写一遍数字
+        job.log("下载并解密官方资源清单（首次才需要）…")
     try:
         manifest.refresh()
     except Exception as e:                                     # noqa: BLE001
@@ -305,20 +314,10 @@ def unit_status_map() -> dict[str, str]:
     return out
 
 
-#: 公共素材的类别与体积（来自清单实测，2026-10-29）
-#:
-#: **avatar / banner 必须在这里登记**：`/api/install/base` 会用本字典做白名单
-#: 过滤（`parts = [p for p in raw if p in PUBLIC_PARTS]`），以前漏了 avatar，
-#: 前端又没显式传 parts → 头像分支永远不执行 → 用户"下完公共素材还是没头像"
-#: （侧栏与 CG 页都靠 `avatarsReady()`，于是整片首字色块）。
-PUBLIC_PARTS = {
-    "bg": ("背景", "bundle_bgimage_", 205),
-    "bgm": ("BGM 音乐", "bundle_music_", 539),
-    "sfx": ("音效", "bundle_sound_", 31),
-    "avatar": ("角色头像", "bundle_chara_c-panel_", 20),
-    # 剧情横幅：角色剧情入口图 + 主线/活动/其他的章节横幅（播放器当标题用）
-    "banner": ("剧情横幅", "bundle_episodeicons_episode_character_|bundle_image_story_", 40),
-}
+#: 公共素材的类别 / 包名前缀 / 体积登记在 ``server/facts.py``（唯一来源），
+#: 这里只做 re-export：`/api/install/base` 用 ``PUBLIC_PARTS`` 做白名单过滤，
+#: 界面显示的"约 835 MB"也是同一份数据算出来的。
+#: **avatar / banner 必须留在字典里**：漏了 avatar 的后果见 facts.py 的注释。
 
 #: 横幅类包的两种前缀
 BANNER_PREFIXES = ("bundle_episodeicons_episode_character_", "bundle_image_story_")
@@ -350,8 +349,10 @@ def install_base(job=None, workers: int = 48,
     能精确反查到 ``bundle_music_89b98a79_...``（实测 10/10 命中），
     所以**全量下齐之后，所有剧情的 BGM 都能响**——这是"没音乐"的根治办法。
 
-    体积（清单实测）：背景 205 MB + BGM 539 MB + 音效 31 MB + 头像 20 MB ≈ **795 MB**。
-    相对全量素材 20.75 GB 只占 3.8%，但之后装任何剧情都不用再补。
+    体积（清单实测）按类别登记在 ``facts.PUBLIC_PARTS``，合计与分项文案由
+    ``facts.public_bytes()`` / ``facts.public_breakdown()`` 生成 —— 界面上的
+    "约 835 MB"和这里算的是同一份数据。相对全量素材只占几个百分点，
+    但之后装任何剧情都不用再补。
 
     关于头像（avatar）
     ------------------
@@ -679,6 +680,31 @@ def new_public() -> dict:
     return out
 
 
+#: 章节横幅"应有张数"的兜底种子（随仓库分发）。导出横幅时会另写一份到
+#: ``userdata/cdn/story_banners.json``（官方新增章节后由它更新）；种子只用于
+#: "图早就导出过、但没登记"的老用户 —— 否则界面会显示「章节 0/0」。
+_BANNER_INV_SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "data", "story_banners.json")
+
+
+def _banner_inventory() -> set:
+    """章节横幅应该有哪几张（返回文件名集合，如 ``main_1.webp``）。
+
+    优先读导出时写的登记文件，其次读仓库种子；都没有就返回空集
+    （= 还不知道总数，界面上只显示角色横幅那部分）。
+    """
+    for p in (stages.STORY_BANNER_INV, _BANNER_INV_SEED):
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:                                      # noqa: BLE001
+            continue
+        names = d.get("names") if isinstance(d, dict) else d
+        if names:
+            return {str(x) for x in names}
+    return set()
+
+
 def public_status() -> dict:
     """公共素材完成度（按**解包产物**算，不是按 bundle 缓存）。
 
@@ -728,32 +754,49 @@ def public_status() -> dict:
     n_avatar = _count(adir2, (".png", ".webp", ".jpg"))
     avatar_total = len([n2 for n2 in idx if n2.startswith("bundle_chara_c-panel_")]) or 384
 
-    # 剧情横幅：按**包是否已下载**算（导出产物是 384 张角色图 + 若干章节图，
-    # 而分母用"清单里这两类包的数量"，官方新增时会自然变大 → 前端显示成
-    # 553/560 这类，用户点「补全」即可）
-    from .net import bundle_path as _bp
-    banner_names = [n for n in idx if n.startswith(BANNER_PREFIXES)]
-    banner_total = len(banner_names) or 389
-    n_banner = len([n for n in banner_names if os.path.exists(_bp(n))])
-    # 已导出的横幅**图**。列表要不要显示横幅看的是这个，不是 bundle 缓存：
-    # 用户清过「资源包缓存」后上面的 n_banner 会归零，但图还在磁盘上，
-    # 控制台列表照样应该显示横幅（否则会莫名退回纯文字，看着像功能没了）。
+    # 剧情横幅：按**导出的图片张数**算，角色 / 章节分开数。
+    #
+    # 以前按"包是否已下载"算：384 个角色横幅包 + 5 个章节横幅包 = 389，界面就
+    # 写成「横幅 389/389」。可那 5 个章节包里装着主线/活动/其他的**全部**章节
+    # 标题图（一批 Sprite，实测 172 张），所以 389 既不是图数、也不是横幅数
+    # （用户 2026-11-02 反馈：「角色剧情横幅都 384 个，活动主线其他呢」）。
+    # 列表要不要显示横幅看的是 bannerImg（磁盘上有没有图），不是 bundle 缓存 ——
+    # 用户清过缓存后图还在，不该莫名退回纯文字。
+    story_dir = os.path.join(config.IMG, "story")
     try:
-        n_banner_img = _count(os.path.join(config.IMG, "story"),
-                              (".webp", ".png", ".jpg"))
-    except Exception:                                          # noqa: BLE001
-        n_banner_img = 0
+        story_files = {n for n in os.listdir(story_dir)
+                       if n.lower().endswith((".webp", ".png", ".jpg"))}
+    except OSError:
+        story_files = set()
+    char_total = len([n for n in idx
+                      if n.startswith("bundle_episodeicons_episode_character_")]) or 384
+    n_char_banner = len([f for f in story_files if f.startswith("char_")])
+    # 章节横幅的"应有张数"只能读登记文件（图是包里的 Sprite，index 里没有条目）
+    inv = _banner_inventory()
+    story_total = len(inv)
+    n_story_banner = len(story_files & inv) if inv else 0
+    banner_total = char_total + story_total
+    banner_have = (min(n_char_banner, char_total)
+                   + min(n_story_banner, story_total))
+    n_banner_img = len(story_files)
 
     return {"back": n_back, "backTotal": back_total,
             "music": min(n_music, music_total), "musicTotal": music_total,
             "sfx": min(n_sfx, sfx_total), "sfxTotal": sfx_total,
             "avatar": min(n_avatar, avatar_total), "avatarTotal": avatar_total,
-            "banner": min(n_banner, banner_total), "bannerTotal": banner_total,
+            "banner": banner_have, "bannerTotal": banner_total,
+            # 角色横幅（一包一图）与章节横幅（一个包一批图）分开给：界面上
+            # 「横幅 556/556（角色 384 · 章节 172）」里的两个数就是它们。
+            "bannerChar": min(n_char_banner, char_total),
+            "bannerCharTotal": char_total,
+            "bannerStory": min(n_story_banner, story_total),
+            "bannerStoryTotal": story_total,
             "bannerImg": n_banner_img,
             # 结构版本：前端据此判断"后端是不是还没重启/还是旧代码"。
-            # 加 banner 这一批字段时是 2 —— 前端看到 v<2 就不能把缺字段当成 0/0，
+            # 2 = 加了 banner 字段；3 = 横幅改成按图数（角色/章节分开）。
+            # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
-            "v": 2,
+            "v": 3,
             "bytes": 0}
 
 
@@ -1013,6 +1056,92 @@ def install_unit(key: str, job=None, workers: int = 32, voice: bool = True,
                             upscale, upscale_scale, upscale_engine)
 
 
+def _bname(n) -> str:
+    """清单条目 → 包名字符串。
+
+    官方清单（Manifest2Ex）里的条目是 ``{"bundle_name": ..., "size": ...}`` 这种
+    **dict**，而 ``index`` 的 key 是包名字符串。直接拿 dict 当 key 会抛
+    ``TypeError: unhashable type: 'dict'``，而 ``_unit_bytes`` 外面那层
+    ``except: return 0`` 会把它吞成"0 字节"（adv 剧情实测全为 0）。
+    """
+    if isinstance(n, dict):
+        return str(n.get("bundle_name") or "")
+    return str(n or "")
+
+
+def _unit_bytes(mf, key: str) -> int:
+    """预估某部剧情的全部 bundle 字节数（剧情 + 语音 + 头像 + 图片包）。
+
+    多单元安装时要在**开始前**就知道总字节，才能给进度条一个稳定的分母
+    （否则每下一批就改分母，会出现「done 28 / total 2」这种自相矛盾的进度）。
+    只读清单索引，不下载；和 ``_install_char`` / ``_install_adv`` 里实际下的包一致。
+    """
+    try:
+        if key.startswith("char_"):
+            cid = int(key[5:])
+            raw = [mf.scenario(cid)] + list(mf.voices(cid)) \
+                + list(mf.meta_images(cid))
+            # 清单条目可能是 dict（带 bundle_name）或包名字符串，统一成名字
+            names = [nm for nm in (_bname(x) for x in raw) if nm]
+            sz = sum(int((mf.index.get(n) or {}).get("size") or 0)
+                     for n in names if n)
+            try:
+                assets = select.collect_assets(select.load_char(cid))
+            except Exception:                                  # noqa: BLE001
+                return sz
+            need = []
+            for kind in ("back", "cg", "stand"):
+                for s in assets.get(kind) or ():
+                    b = (mf.back_bundle(s) if kind == "back"
+                         else mf.cg_bundle(s) if kind == "cg"
+                         else mf.stand_bundle(s))
+                    if b:
+                        need.append(_bname(b))
+                    mk = select.PAT_STAND_KEY.match(s) if kind == "stand" else None
+                    if mk:
+                        full = mf.stand_full.get(int(mk.group(1)))
+                        if full:
+                            need.append(_bname(full))
+            need = sorted({n for n in need if n})
+            sz += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in need)
+            return sz
+        m = _UNIT_RE.match(key)
+        if not m:
+            return 0
+        kind, no = m.group(1), (int(m.group(2)) if m.group(2) else None)
+        # 与 _install_adv 保持一致：剧本包 + 语音包（语音是它真正下的大头）
+        names = [_bname(mf.adv_scenario(kind, no))]
+        try:
+            names += [_bname(x) for x in
+                      (select.adv_voice_bundles(mf.index, kind, no) or ())]
+        except Exception:                                      # noqa: BLE001
+            pass
+        sz = sum(int((mf.index.get(n) or {}).get("size") or 0)
+                 for n in names if n)
+        try:
+            assets = select.collect_assets(select.load_story(key))
+        except Exception:                                      # noqa: BLE001
+            return sz
+        need = []
+        for k in ("back", "cg", "stand"):
+            for s in assets.get(k) or ():
+                bb = (mf.back_bundle(s) if k == "back"
+                      else mf.cg_bundle(s) if k == "cg"
+                      else mf.stand_bundle(s))
+                if bb:
+                    need.append(_bname(bb))
+                mk = select.PAT_STAND_KEY.match(s) if k == "stand" else None
+                if mk:
+                    full = mf.stand_full.get(int(mk.group(1)))
+                    if full:
+                        need.append(_bname(full))
+        need = sorted({n for n in need if n})
+        sz += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in need)
+        return sz
+    except Exception:                                          # noqa: BLE001
+        return 0
+
+
 def _self_check(job, key: str) -> dict:
     """装完自检：剧本 / 语音 / 图片引用是否齐全。
 
@@ -1224,7 +1353,9 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
     if not b:
         raise CDNError(f"官方清单里找不到 {key} 的剧本包")
     if job is not None:
-        job.log(f"① 剧本包：{b}")
+        # 只打包名：b 是清单条目 dict，直接插值会把
+        # "{'bundle_name': ..., 'crc': ..., 'hash': ...}" 整段写进操作记录
+        job.log(f"① 剧本包：{_bname(b)}")
     stages.fetch(_entries(mf, [b]), workers, f"{key} 剧本", skip=True, pause_event=_pe(job), job=job)
     if not stages.extract_adv(kind, no, force=force):
         raise CDNError(f"{key} 的剧本解析失败")

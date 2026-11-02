@@ -225,4 +225,40 @@
   });
 
   ESC.reportError = reportError;
+
+  /* ------------------------------------------------------------ 全屏时转横屏
+   * 需求（用户 2026-11-03）：平时页面按手机默认（竖屏），点「全屏」自动转横屏看，
+   * 退出全屏再转回竖屏。页面本身**不加任何 orientation 锁**，所以非全屏状态
+   * 永远跟随系统方向（就是竖屏）。
+   *
+   * 能真正改方向的只有 ScreenOrientation.lock()，且有两个硬限制：
+   *   1) 只能锁**当前处于全屏的元素**所在屏幕 → 必须在真全屏成功之后再调；
+   *   2) iOS Safari 完全没有这个 API（也没有元素级 fullscreen），
+   *      桌面浏览器调用一律 reject。
+   * 所以这里全是"尽力而为"：失败静默，不弹错、不影响播放；
+   * 调用方可用 ESC.orient.canLock() 判断要不要提示用户手动横过来。
+   */
+  ESC.orient = {
+    /** 尝试锁横屏（只能在真全屏之后调用） */
+    lockLandscape: function () {
+      try {
+        const so = screen.orientation;
+        if (so && so.lock) {
+          const p = so.lock('landscape');
+          if (p && p.catch) p.catch(function () { /* 非全屏/iOS/桌面：忽略 */ });
+        }
+      } catch (e) { /* 同上 */ }
+    },
+    /** 退出全屏时解锁，让屏幕回到系统默认方向 */
+    unlock: function () {
+      try {
+        const so = screen.orientation;
+        if (so && so.unlock) so.unlock();
+      } catch (e) { /* 同上 */ }
+    },
+    /** 这台设备/浏览器能不能替用户转屏（不能就只能提示手动旋转） */
+    canLock: function () {
+      try { return !!(screen.orientation && screen.orientation.lock); } catch (e) { return false; }
+    },
+  };
 })();

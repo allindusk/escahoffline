@@ -492,6 +492,12 @@ def save_speakers(msgs: dict) -> None:
                     {"lang": "zh-Hans",
                      "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                      "messages": msgs})
+    # 把发言人表的覆盖情况写进 index.json：前端据此决定是否请求 _speakers.json，
+    # 没译过名字时（len==0）就不发请求，避免 404 刷屏。
+    idx_path = os.path.join(paths.WEB, "assets", "i18n", "index.json")
+    idx = paths.load_json(idx_path, {}) or {}
+    idx.setdefault("speakers", {})["zh-Hans"] = len(msgs)
+    paths.save_json(idx_path, idx)
 
 
 def unit_speakers(unit: str) -> list[str]:
@@ -570,6 +576,26 @@ def export_trans(unit: str) -> str:
     while buf and not buf[-1]:
         buf.pop()
     return "\n".join(buf) + "\n"
+
+
+def export_trans_file(unit: str) -> dict:
+    """把单部剧情的原文 txt 直接存进**导出目录**（和批量导出同一个地方）。
+
+    为什么不走浏览器下载：下载会落到系统「下载」文件夹，用户回头根本找不到，
+    而资源管理页的译文导出是落在 ``userdata/export``。两边必须一致
+    （用户 2026-11-02 要求：播放器里的导出改成和资源管理页一样）。
+
+    编码用 utf-8-sig：Windows 记事本打开不带 BOM 的 UTF-8 容易按 GBK 解，
+    另存一次就变乱码，导回来全废。
+    """
+    text = export_trans(unit)
+    base = f"{unit}_{_san(unit_title(unit)) or unit}"
+    dst = _unique_path(base, ".txt")
+    with open(dst, "w", encoding="utf-8-sig", newline="\r\n") as f:
+        f.write(text)
+    return {"path": dst, "name": os.path.basename(dst),
+            "bytes": os.path.getsize(dst), "dir": paths.EXPORT,
+            "unit": unit}
 
 
 def import_trans(unit: str, text: str, mode: str = "merge") -> dict:
@@ -706,6 +732,7 @@ def _extract_zip_items(data: bytes) -> list[dict]:
     if not data or data[:2] != b"PK":
         raise ValueError("不是合法的 zip 文件（应以 PK 开头）")
     items: list[dict] = []
+    bad: list[str] = []
     seen: set[str] = set()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for name in z.namelist():
@@ -720,12 +747,23 @@ def _extract_zip_items(data: bytes) -> list[dict]:
             if raw[:3] == b"\xef\xbb\xbf":                       # 去 BOM
                 raw = raw[3:]
             text = raw.decode("utf-8", "replace")
-            unit = _unit_of_text(text) or os.path.basename(name)[:-4]
-            if not unit or unit in seen:
+            unit = _unit_of_text(text) or _unit_of_name(name)
+            if not unit:
+                # 认不出是哪部剧情 → 跳过并在下面统一提示"重新导出原文"，
+                # 别拿整个文件名当 unit（那样必然导入失败，报错还看不懂）
+                bad.append(os.path.basename(name))
+                continue
+            if unit in seen:
                 continue
             seen.add(unit)
             items.append({"unit": unit, "text": text})
     if not items:
+        if bad:
+            raise FileNotFoundError(
+                "压缩包里有 %d 个 txt 认不出是哪部剧情（%s）—— 它们开头缺少"
+                "「# 剧情标识 : char_xxx」这一行。请回本页「批量导出」重新导出原文，"
+                "在导出的文件里填译文后再导回来。"
+                % (len(bad), "、".join(bad[:3]) + ("…" if len(bad) > 3 else "")))
         raise FileNotFoundError("压缩包里没有找到任何 .txt 译文文件")
     return items
 
@@ -776,19 +814,52 @@ def _run_import(items: list[dict], mode: str, j=None) -> dict:
     return out
 
 
+_UNIT_RE = re.compile(r"^(?:char|adv)_\d+$")
+_UNIT_IN_NAME = re.compile(r"(?:^|[^\w])((?:char|adv)_\d+)", re.I)
+
+
 def _unit_of_text(text: str) -> str:
-    """从译文 txt 头里取剧情标识；取不到返回空串。"""
+    """从译文 txt 头里取剧情标识；取不到（或不是合法编号）返回空串。"""
     m = re.search(r"#\s*剧情标识\s*:\s*(\S+)", text)
-    return m.group(1).strip() if m else ""
+    if not m:
+        return ""
+    u = m.group(1).strip()
+    return u if _UNIT_RE.match(u) else ""
+
+
+def _unit_of_name(name: str) -> str:
+    """文件名兜底：``char_415_角色名.txt`` → ``char_415``。
+
+    只认 `char_*` / `adv_*` 这种合法编号 —— 以前拿整个文件名当 unit，
+    于是手改过名的文件会变成「char_415_トキサダ」这种不存在的剧情，
+    导入必然失败，报的还是"没有剧情数据：data/xxx.js"，用户完全看不懂。
+    """
+    m = _UNIT_IN_NAME.search(os.path.splitext(os.path.basename(name or ""))[0])
+    return m.group(1) if m else ""
+
+
+def _index_key(unit: str) -> str:
+    """单元 → ``index.json`` 里 ``chars`` 的键。
+
+    与前端 ``i18n.js unitTranslated()``、``i18n_store.build_index()`` 必须同口径：
+    角色剧情 ``char_415`` → ``"415"``；主线/活动/其他 ``adv_main_1`` → ``"adv_main_1"``。
+    """
+    u = unit or ""
+    return u[5:] if u.startswith("char_") and u[5:].isdigit() else u
 
 
 def _update_trans_index(unit: str, n: int) -> None:
     idx_path = os.path.join(paths.WEB, "assets", "i18n", "index.json")
     idx = paths.load_json(idx_path, {}) or {}
     idx.setdefault("chars", {})
-    cid = unit[5:] if unit.startswith("char_") else unit
-    idx["chars"].setdefault(cid, {})
-    idx["chars"][cid]["zh-Hans"] = n
+    cid = _index_key(unit)
+    if n > 0:
+        idx["chars"].setdefault(cid, {})
+        idx["chars"][cid]["zh-Hans"] = n
+    else:
+        # 0 条目的空壳会撑开前端的"这门语言有译文"判断，
+        # 于是没译过的剧情也被拿去请求 <unit>.json（404 噪声）。
+        idx["chars"].pop(cid, None)
     paths.save_json(idx_path, idx)
 
 

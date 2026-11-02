@@ -61,6 +61,13 @@
 
   if (!IS_MOBILE) return;                     // 桌面到此为止
 
+  /* 手机上没有 Esc 键，CG 灯箱的「关闭 Esc」会让人以为是两段操作；
+     换成「✕ 关闭」，顺便省 20px 宽度（顶栏要单行才不亏画面高度）。 */
+  if (page === 'cg.html') {
+    const lbc = document.getElementById('lbClose');
+    if (lbc) lbc.textContent = '✕ 关闭';
+  }
+
   /* ------------------------------------------------ 播放器首次进入默认收起
    * 手机上左右侧栏各 250–300px，两个都展开会把舞台挤成一条缝。
    * 只处理"从没设置过"的情况（localStorage 无值）；用户自己开合过的偏好不覆盖。
@@ -145,8 +152,9 @@
     },
     {
       sel: '#btnRebuildX2',
-      name: '重建超分索引',
-      why: '它要扫一遍电脑上的高清图目录并重写索引文件，属于电脑端的维护操作。',
+      name: '重新登记高清图',
+      why: '它要扫一遍电脑上的高清图目录重新登记，属于电脑端的维护操作，' +
+        '手机上点了也不会让手机看到变化。',
     },
     {
       sel: '#btnVidQueue',
@@ -160,7 +168,7 @@
       why: '打包好的压缩包会存在电脑的导出目录里，手机上下载不到。',
     },
     {
-      sel: '#btnOpenExport, #btnOpenUserdata, #btnOpenMedia, #btnOpenLogs',
+      sel: '#btnOpenExport, #btnOpenUserdata, #btnOpenMedia, #btnOpenLogs, #tpOpenExp',
       name: '打开本地目录',
       why: '这个按钮是在电脑上弹出资源管理器窗口，手机上点了你看不到任何变化。',
     },

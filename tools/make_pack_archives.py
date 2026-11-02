@@ -4,7 +4,7 @@
 
 为什么不在 CI 里打
 ------------------
-素材不在仓库里（20 GB + 版权），GitHub 的 Actions 拿不到，也不合适让它代管
+素材不在仓库里（24.7 GB + 版权），GitHub 的 Actions 拿不到，也不合适让它代管
 分发。资源包应该由**你自己**在本地打好，上传到你自己的对象存储 / 网盘，
 再把地址填进 ``userdata/links.json`` 或 ``web/data/packs.links.js``。
 
@@ -13,7 +13,7 @@
 
 用法::
 
-    python tools/make_pack_archives.py                    # 打全部包（20 GB，很久）
+    python tools/make_pack_archives.py                    # 打全部包（24.7 GB，很久）
     python tools/make_pack_archives.py --only core,shared_back,char_1
     python tools/make_pack_archives.py --list             # 只看要怎么分
     python tools/make_pack_archives.py --workers 4        # 并行打包

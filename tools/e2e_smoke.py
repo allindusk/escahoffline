@@ -9,7 +9,7 @@ GitHub Actions 上模拟"新用户下载便携包"的完整链路：
 也可以在本机跑（指向任意一份解压好的便携包目录）：
 
     python tools/e2e_smoke.py --dir D:/tmp/ESCAH-Offline --unit char_2
-    python tools/e2e_smoke.py --dir ... --base      # 连公共素材一起下（775 MB）
+    python tools/e2e_smoke.py --dir ... --base      # 连公共素材一起下（体积见 server/facts.py）
 
 退出码 0 = 全部通过；非 0 = 有失败项（CI 会红）。
 """
@@ -192,7 +192,8 @@ def main() -> int:
 
         # ---------- 3. 公共素材（可选，体积大） ----------
         if args.base:
-            print("\n下载公共素材（背景/BGM/音效，约 775 MB）…")
+            # 体积不在这里写死：界面与提示统一取 server/facts.py 的估值
+            print("\n下载公共素材（背景/BGM/音效）…")
             job = http(port, "/api/install/base",
                        {"parts": ["bg", "bgm", "sfx"]})["job"]
             seen.clear()
@@ -240,6 +241,23 @@ def main() -> int:
             if miss:
                 print(f"    缺 {kind}: {miss[:3]}")
         rep.add(bad == 0, "映射表里的文件都存在", f"缺 {bad} 个")
+
+        # ---------- 5.5 文案不许在源码里手动折行 ----------
+        # 一句话被源码换行拆开时，浏览器把换行渲染成**空格**（"装好 —— 语音"），
+        # 中文句子中间就多一个空格；更麻烦的是拼接处出问题时（曾出现
+        # "约 约 24.7 GB"）静态看两边都对。所以要求文案节点在源码里连成一行。
+        import glob
+        import re as _re
+        fold = []
+        for p in sorted(glob.glob(os.path.join(web, "*.html"))):
+            src = open(p, encoding="utf-8").read()
+            body = _re.sub(r"(?is)<(script|style|pre|textarea)\b.*?</\1>", " ", src)
+            body = _re.sub(r"(?s)<!--.*?-->", " ", body)
+            for seg in _re.split(r"<[^>]+>", body):
+                s = seg.strip()
+                if s and "\n" in s:
+                    fold.append(f"{os.path.basename(p)}: {s.splitlines()[0][:14]}…")
+        rep.add(not fold, "HTML 文案没有手动折行", "; ".join(fold[:2]))
 
         # ---------- 6. 浏览器实测 ----------
         print("\n浏览器实测…")
@@ -387,6 +405,44 @@ def main() -> int:
                             f"{r2['thOk']}/{r2['thTotal']}")
                 else:
                     rep.skip("CG 缩略图加载", "该角色没有可显示的 CG")
+
+        # (b2) 文案拼接检查：只能在**渲染后**的文本里找
+        #      「约 约 24.7 GB」是 HTML 写了一半、JS 又补了一半造成的 —— 两边
+        #      单独看都没错，纯静态检查永远发现不了，所以这里读 innerText 查重复。
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            rep.skip("控制台文案", "playwright 未装")
+        else:
+            try:
+                import re as _re
+                pages = ("setup.html?nodisclaimer=1", "notice.html")
+                text_all = ""
+                with sync_playwright() as pw:
+                    b4 = pw.chromium.launch(channel="msedge")
+                    p4 = b4.new_page()
+                    for u in pages:
+                        p4.goto(f"http://127.0.0.1:{port}/{u}",
+                                wait_until="domcontentloaded", timeout=30000)
+                        p4.wait_for_timeout(2000)
+                        text_all += "\n" + p4.evaluate(
+                            "() => document.body.innerText")
+                    b4.close()
+                dup = []
+                for pat, name in (
+                        (r"约\s*约", "重复「约」"),
+                        (r"(MB|GB|KB)\s*\1", "重复容量单位"),
+                        (r"(秒|分钟)\s*\1", "重复时间单位"),
+                        (r"部\s*部|张\s*张", "重复量词"),
+                        (r"undefined|NaN|\[object", "没替换的变量")):
+                    hit = _re.search(pat, text_all)
+                    if hit:
+                        a = max(0, hit.start() - 24)
+                        dup.append(f"{name}：…{text_all[a:hit.end() + 24]}…"
+                                   .replace("\n", " "))
+                rep.add(not dup, "界面文案无重复拼接", "; ".join(dup[:2]))
+            except Exception as e:                            # noqa: BLE001
+                rep.add(False, "控制台文案", str(e)[:70])
 
         # (c) 超分：默认只测「能否算出计划」，--full 才真的跑
         try:

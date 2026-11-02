@@ -115,15 +115,23 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #empty{grid-column:1/-1;text-align:center;padding:70px 0;color:var(--fg3);font-size:14.6px}
 
 /* ---------- 灯箱 ---------- */
-#lb{position:fixed;inset:0;z-index:200;background:rgba(4,5,9,.97);display:none;
+/* z-index 必须高过 #dlBar（10100）和移动端「☰ 角色列表」悬浮钮（240）：
+   原来写 200，手机上那两样会浮在灯箱上面，正好压住左下角的「上一张」。
+   低于 trans_tut 的 10300，教材浮窗仍能盖在灯箱上。 */
+#lb{position:fixed;inset:0;z-index:10200;background:rgba(4,5,9,.97);display:none;
   flex-direction:column}
 #lb.on{display:flex}
 #lbTop{display:flex;align-items:center;gap:14px;padding:9px 18px;flex-shrink:0;
   font-size:14px;color:var(--fg2);border-bottom:1px solid #1e2430}
 #lbTop b{color:var(--gold);font-weight:600}
-#lbClose{margin-left:auto;background:var(--bg3);border:1px solid var(--line);color:var(--fg);
+/* 右侧两个按钮（全屏 / 关闭）靠到最右边：margin-left:auto 只给靠左的那个，
+   两个都写 auto 会在中间摊出一大段空白 */
+#lbClose{background:var(--bg3);border:1px solid var(--line);color:var(--fg);
   border-radius:6px;padding:4px 13px;cursor:pointer;font-size:14px;font-family:inherit}
 #lbClose:hover{color:var(--gold);border-color:#4a3f78}
+#lbFs{margin-left:auto;background:var(--bg3);border:1px solid var(--line);color:var(--fg);
+  border-radius:6px;padding:4px 13px;cursor:pointer;font-size:14px;font-family:inherit}
+#lbFs:hover{color:var(--gold);border-color:#4a3f78}
 #lbBody{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
   position:relative;padding:10px}
 #lbImg{max-width:100%;max-height:100%;object-fit:contain;display:block;
@@ -142,6 +150,34 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #lbHint{font-size:14px;color:var(--fg3);padding:0 14px 12px;text-align:center}
 #lbHint kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
   padding:1px 5px;font-size:14px}
+
+/* ---------- 全屏浏览（#lb.fs） ----------
+ * 真全屏（Fullscreen API，Chrome/Android/桌面）和 iOS 的伪全屏共用这一套：
+ * 顶栏和圆点条浮到图上、图片吃满屏幕，把原本被页头/内边距吃掉的高度还给图。
+ */
+#lb.fs #lbTop{position:absolute;top:0;left:0;right:0;z-index:3;
+  background:linear-gradient(rgba(0,0,0,.85),rgba(0,0,0,0));border-bottom:none;
+  padding:10px 16px}
+#lb.fs #lbBody{position:absolute;inset:0;padding:0}
+#lb.fs #lbImg{width:100%;height:100%;max-width:none;max-height:none;
+  object-fit:contain;box-shadow:none}
+#lb.fs #lbBottom{position:absolute;bottom:0;left:0;right:0;z-index:3;
+  background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.72));padding:14px 10px 10px;
+  /* 手机上翻页按钮就在左右下角，正好被这条浮起来的圆点栏压住（实测点不动）。
+     整条不接收点击，只让圆点本身可点。 */
+  pointer-events:none}
+#lb.fs #lbBottom .dot{pointer-events:auto}
+#lb.fs #lbHint{display:none}
+
+/* 全屏却仍是竖屏（iOS 没锁方向的 API）时的旋转提示。
+   能自动横屏的设备调完 lock() 就变成 landscape，这里 js 也不会加 .on。 */
+#lbRotTip{display:none}
+#lbRotTip.on{display:inline-flex; position:absolute; z-index:4; top:60px; left:50%;
+  transform:translateX(-50%); align-items:center; gap:6px;
+  padding:8px 15px; border-radius:20px; font-size:14px; line-height:1.4;
+  white-space:nowrap; pointer-events:none;
+  color:#ffe6b8; background:rgba(58,42,18,.95); border:1px solid #6b4a1c;
+  box-shadow:0 6px 20px rgba(0,0,0,.5)}
 
 /* 未下载角色的 CG 缩略图占位（不请求图片，避免 404）
    原来 12px + #5d5175，在深色底上等于看不见，改成虚线徽标 */

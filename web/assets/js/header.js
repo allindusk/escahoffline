@@ -16,14 +16,17 @@
   const EXTRA = {
     'index.html': ['lan', 'lang', 'help'],
     'cg.html': [],
-    'setup.html': ['stat', 'help'],
+    // 资源管理页不再把「已装 x/x · 缓存 xx GB」塞进顶栏：正文首屏的
+    // 「当前状态」已经把同样的数字讲清楚了，顶栏再挂一遍显得挤、还容易误读
+    'setup.html': ['help'],
   };
 
   const CTRL = {
-    lan: '<button id="btnLan" title="局域网访问：本播放器已在局域网内共享。手机或同网段电脑连同一 WiFi 后，用此设备的 IP 地址即可打开本页。点此生成二维码">局域网访问</button>',
+    // 按钮名必须自解释"点一下会出二维码"：原来叫「局域网访问」，用户以为只是
+    // 一个状态标签、不知道能点（2026-11-02 反馈）。
+    lan: '<button id="btnLan" title="点一下生成二维码：手机连同一 WiFi 扫码即可打开；另一台电脑可以直接输入下面显示的地址">局域网二维码</button>',
     lang: '<button id="btnLang" title="切换显示语言（L）">日本語</button>',
     help: '<button id="btnHelp" title="新手教程：一步步告诉你每个按钮干什么（H）">?</button>',
-    stat: '<span id="hdrStat"></span>',
     help2: '<button id="btnHelp2" title="新手教程（H）">?</button>',
   };
 
@@ -67,7 +70,6 @@ header[data-shared] nav a:hover{color:#e6e9f0;background:#243040}
 header[data-shared] nav a.on{color:#0d1016;background:#e0b566;font-weight:600}
 /* 右侧第一个控件负责把后续内容推到右边（由 JS 打标） */
 header[data-shared] .hdr-first{margin-left:auto}
-header[data-shared] #hdrStat{font-size:14px;color:#6b7488}
 /* GitHub 图标：和「？」按钮同尺寸的方形按钮 */
 header[data-shared] #ghLink{flex:none;width:28px;height:26px;display:flex;
   align-items:center;justify-content:center;border-radius:8px;
@@ -83,11 +85,15 @@ header[data-shared] #btnHelp,header[data-shared] #btnHelp2{width:28px;height:26p
   padding:0;display:flex;align-items:center;justify-content:center;
   font-size:15.7px;font-weight:700;line-height:1}
 /* 右侧控件靠 .hdr-first 统一左推，这里不再用 :first-of-type 兜底 */
-/* 局域网访问按钮：与语言切换同套胶囊视觉 */
+/* 局域网二维码按钮：胶囊形，但**保留描边**（跟「中文」「?」一样有轮廓）——
+   以前是 border:transparent，看着像一行灰字标签，用户不知道能点。
+   nowrap：窄屏别把「局域网二维码」折成两行（顶栏高度固定 50px） */
 header[data-shared] #btnLan{padding:4px 12px;border-radius:13px;font-size:14px;
-  cursor:pointer;color:#9aa4b8;background:#1c2230;border:1px solid transparent;
-  min-width:100px;line-height:1.4}
-header[data-shared] #btnLan:hover{color:#e6e9f0;border-color:#3a4a60}
+  cursor:pointer;color:#9aa4b8;background:#1c2230;border:1px solid #2a3040;
+  min-width:100px;line-height:1.4;white-space:nowrap;
+  transition:color .15s,border-color .15s,background .15s}
+header[data-shared] #btnLan:hover{color:#e6e9f0;background:#243040;
+  border-color:#3a4a60}
 `;
 
   function currentPage() {
@@ -101,8 +107,8 @@ header[data-shared] #btnLan:hover{color:#e6e9f0;border-color:#3a4a60}
     const h = document.createElement('header');
     h.setAttribute('data-shared', '1');
 
-    // 让「资源管理」页的统计仍写到 #hdrStat；标题统一成超昂大战
-    const subId = page === 'setup.html' ? 'hdrSub' : 'hdrSub';
+    // 标题统一成超昂大战（各页原来的 cnt/hdCnt/ver 统一成 #hdrSub）
+    const subId = 'hdrSub';
     // 右侧控件：本页特有的在前，GitHub 图标固定放最后（三页都有）
     const right = (EXTRA[page] || []).map(k => CTRL[k]);
     right.push(GH_LINK);

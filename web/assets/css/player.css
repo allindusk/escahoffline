@@ -119,8 +119,15 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 段标签条：**一行不换行**。段数多的时候由 #tabStrip 横向滚动 + 最右边的 ◀ ▶ 翻页，
    绝不换成两行把标题栏撑高（用户 2026-11-02 要求）。统计文字 #meta 放最左边。 */
 #tabs{display:flex;gap:6px;padding:6px 14px;background:var(--bg2);
-  border-bottom:1px solid var(--line);flex-shrink:0;align-items:center;flex-wrap:nowrap}
-#meta{flex:0 0 auto;font-size:14px;color:var(--fg3);white-space:nowrap}
+  border-bottom:1px solid var(--line);flex-shrink:0;align-items:center;flex-wrap:nowrap;
+  min-width:0;overflow:hidden}
+/* 统计文字必须**可收缩 + 省略号**：它是选完剧情才出现的，而且长度随段数/句数/译文
+   进度变化（「6 段 · 910 句 · 321 语音 · 已译 2/899（0%）」实测 281px）。
+   原来写 flex:0 0 auto，它一点不让，窄屏上把 #tabStrip 压成 0 宽、还把 ◀ ▶ 顶出
+   屏幕外（360 宽机型实测文档 scrollWidth 367 → 整页横向滚动条、右侧控件点不到）。
+   现在让位给段标签：宁可把统计数字打省略号，也不能让控件跑出屏幕。 */
+#meta{flex:0 1 auto;min-width:0;font-size:14px;color:var(--fg3);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
 /* 段标签右对齐（用户 2026-11-02）：统计文字在最左、段标签靠右并紧挨翻页按钮。
    margin-left:auto 把整条 strips 推向右；段数多到装不下时它自己收缩并横向滚动。 */
 #tabStrip{display:flex;gap:5px;align-items:center;flex:0 1 auto;min-width:0;

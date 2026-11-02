@@ -164,16 +164,22 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
 
     # 进度上报放在"没有要下的包就返回"之前：全部已存在的阶段（补全时很常见）
     # 也得把跳过的量记进去，否则字节进度会一直停在上一阶段的数字上。
+    # sub_mode：顶层进度由上层（多单元安装）按"第 i/N 部"统一驱动，这里把
+    # 每一批 bundle 的包计数写进 sub，别去重置顶层 total/done（否则会反复冲到 100%）。
+    sub = getattr(job, "sub_mode", False) if job is not None else False
     if job is not None:
         if count_skipped and skipped_bytes:
             job.bytes_done += skipped_bytes
-        # 总量只增不减：公共素材那边是"五类之和"（一次给全），
-        # 单部剧情则是分批 fetch，分母要跟着这批的包数长大，
-        # 否则会出现 "done 28 / total 2" 这种分母比分子还小的进度。
         need_total = done_offset + len(tasks)
-        if job.total < need_total:
-            job.set_total(need_total, "个")
-        job.progress(done=done_offset + stat["skip"])
+        if sub:
+            job.sub_progress(done_offset + stat["skip"], need_total)
+        else:
+            # 总量只增不减：公共素材那边是"五类之和"（一次给全），
+            # 单部剧情则是分批 fetch，分母要跟着这批的包数长大，
+            # 否则会出现 "done 28 / total 2" 这种分母比分子还小的进度。
+            if job.total < need_total:
+                job.set_total(need_total, "个")
+            job.progress(done=done_offset + stat["skip"])
 
     if not left:
         return stat
@@ -194,7 +200,10 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
             n, sz = futs[fut]
             done += 1
             if job is not None:
-                job.progress(done=done_offset + stat["skip"] + done)
+                if sub:
+                    job.sub_progress(done_offset + stat["skip"] + done, need_total)
+                else:
+                    job.progress(done=done_offset + stat["skip"] + done)
             try:
                 _, is_new, nbytes = fut.result()
                 if job is not None:

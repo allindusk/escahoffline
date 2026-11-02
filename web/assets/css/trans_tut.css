@@ -1,0 +1,94 @@
+/* 「自己动手翻」教程浮窗样式 —— 与 assets/js/trans_tut.js 配套，两个页面共用。
+ *
+ * 颜色**全部写死，不用页面变量**：资源管理页（setup.css）和播放器（player.css）
+ * 的 :root 变量并不相同（播放器没有 --acc / --line2），共用文件一旦依赖变量，
+ * 必然有一边变形。
+ */
+
+/* ---------------- 教程正文 ---------------- */
+.tut-intro, .tut-outro {
+  margin: 0 0 10px; font-size: 14px; line-height: 1.85; color: #a5bcd3;
+}
+.tut-outro { margin: 10px 0 0; }
+.tut-intro b, .tut-outro b { color: #dbe8f6; }
+
+/* 一步一块 + 左上角序号。为什么不用 <ol>：默认序号和长句混在一段里，
+   扫起来分不清哪步是哪步。 */
+.tut { display: grid; gap: 10px; counter-reset: tut; }
+.tut .st {
+  position: relative; padding: 10px 14px 10px 46px;
+  background: #0d1520; border: 1px solid #1e2f43; border-radius: 10px;
+  font-size: 14.3px; line-height: 1.85; color: #a5bcd3;
+}
+.tut .st::before {
+  counter-increment: tut; content: counter(tut);
+  position: absolute; left: 12px; top: 11px; width: 23px; height: 23px;
+  border-radius: 50%; background: #3d8fd0; color: #fff;
+  font-size: 14px; font-weight: 700; text-align: center; line-height: 23px;
+}
+.tut .st b { color: #dbe8f6; }
+.tut .st .tut-sub { display: block; margin-top: 4px; color: #7b90a8; }
+.tut code {
+  background: #14243a; color: #8fd6ff; padding: 1px 5px;
+  border-radius: 4px; font-size: 14px;
+}
+/* 样例：等宽字体 + 保留换行，缩进和前缀必须对得上 */
+.tut-code {
+  margin: 8px 0; padding: 10px 12px; border-radius: 8px;
+  background: #0b131d; border: 1px solid #2a4159;
+  color: #b9d7f0; font-size: 14px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-all;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+/* ---------------- 浮窗 ---------------- */
+/* z-index 10300：要压过「版本号 / 免责声明」（#dlBar 10100）
+   和播放器右侧的译文面板（#transPanel 9500） */
+.tutMask {
+  position: fixed; inset: 0; z-index: 10300;
+  background: rgba(3, 6, 11, .84);
+  display: flex; align-items: center; justify-content: center; padding: 22px;
+  /* 遮罩本身也能滚：万一在某台设备上盒子还是比屏幕高，用户至少能滑到按钮，
+     不会再出现"上下被裁、关不掉"（2026-11-03 手机反馈）。 */
+  overflow: auto; -webkit-overflow-scrolling: touch;
+}
+.tutMask[hidden] { display: none; }
+.tutBox {
+  width: min(780px, 100%); max-height: min(88vh, 940px);
+  /* 88vh 在手机上用的是"地址栏隐藏后"的大视口，实际可见区域更矮 →
+     上下各被裁掉一截。用 dvh 跟可见高度对齐（不支持的浏览器保留上面那行）。 */
+  max-height: min(88dvh, 940px);
+  display: flex; flex-direction: column;
+  background: #0c151f; border: 1px solid #2a4159; border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .62); overflow: hidden;
+}
+.tutHead {
+  display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
+  padding: 11px 16px; background: #0e1a26; border-bottom: 1px solid #1e2f43;
+}
+.tutHead b { flex: 1; font-size: 16.2px; color: #dbe8f6; }
+.tutClose {
+  background: #16283a; border: 1px solid #2a4159; color: #a5bcd3;
+  border-radius: 7px; padding: 4px 10px; font-size: 14px; cursor: pointer;
+}
+.tutClose:hover { color: #dbe8f6; border-color: #3d8fd0; }
+/* 只有一个方向滚动（内容长了滚这里，标题栏不会跟着跑掉） */
+.tutBody { padding: 14px 16px 18px; overflow: auto; }
+
+/* 手机：直接铺满整屏（和播放器设置面板一个套路）。
+   窄屏用浮窗形式时，92vh 的盒子夹在 100vh 里，两头都要靠 padding 才能露出边，
+   而手机浏览器的大视口比可见区高 —— 结果就是标题栏被顶到屏幕外、
+   正文最后一段被地址栏挡住（用户 2026-11-03 反馈：上下内容显示不全、越界）。
+   全屏化之后标题栏钉在顶上、正文自己滚，怎么都能滚到底。 */
+@media (max-width: 860px) {
+  .tutMask { padding: 0; align-items: stretch; overflow: hidden; }
+  .tutBox {
+    width: 100%; max-width: none; height: 100%; max-height: none;
+    border: none; border-radius: 0; box-shadow: none;
+  }
+  .tutHead { padding: 10px 12px; }
+  .tutHead b { font-size: 15.5px; }
+  /* 关闭按钮做大一点，手机上别点不中 */
+  .tutClose { padding: 7px 12px; }
+  .tutBody { padding: 12px 12px 28px; }
+}

@@ -124,6 +124,36 @@
 
 .sl-empty { padding: 20px; text-align: center; color: var(--fg3); font-size: 14px; }
 
+/* 「其他」分类按入口分组（与播放页侧栏同一套口径）：可折叠分组头 + 缩进的话列表。
+   两行卡：第一行横幅（827×146 等比铺满），第二行 分组名 + 话数 + 箭头，点一下展开/收起。 */
+.sl-list .og-head {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+  padding: 6px 7px; margin-top: 6px; border-radius: 7px; background: #161c26;
+  border: 1px solid #232b36; cursor: pointer; color: var(--fg2);
+  font-size: 14.6px; user-select: none;
+}
+.sl-list .og-head:hover { background: #1b2330; color: var(--fg); }
+.sl-list .og-head.open { color: var(--gold); border-color: #3a3350; }
+/* 横幅宽度锁成和播放页侧栏一致（侧栏 300px - 列表 4px×2 - 卡 7px×2 ≈ 278px，
+   827×146 等比 → 高约 49px）。安装页列表比侧栏宽得多，不能 width:100% 否则被拉大。 */
+.sl-list .og-head .bnr {
+  display: block; width: 278px; max-width: 100%; border-radius: 6px; overflow: hidden;
+  background: #141a26; line-height: 0; border: 1px solid #2d3446;
+}
+.sl-list .og-head .bnr img {
+  display: block; width: 100%; height: auto; max-width: none; border: 0;
+}
+.sl-list .og-head.open .bnr { border-color: rgba(224, 181, 102, .7); }
+.sl-list .og-head .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sl-list .og-head .nm {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.sl-list .og-head .cnt { color: var(--fg3); font-size: 14px; flex: 0 0 auto; }
+.sl-list .og-head .arw { color: var(--fg3); flex: 0 0 auto; }
+/* 组内话列表缩进，和分组头拉开层级 */
+.sl-list .og-body { padding-left: 14px; }
+
 /* 窄屏：横幅画框缩小，别把信息区挤没 */
 @media (max-width: 720px) {
   .sl-bnr { width: 190px; height: 55px; }

@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色 CG 查看</title>
-<link rel="stylesheet" href="assets/css/cg.css?v=1102a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1102a">
+<link rel="stylesheet" href="assets/css/cg.css?v=1103c">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1103b">
 </head>
 <body>
 <div class="layout">
@@ -60,19 +60,24 @@
     <span id="lbTitle"></span>
     <span id="lbCount" style="color:var(--fg3)"></span>
     <span id="lbGroup" style="color:var(--fg3)"></span>
+    <!-- 全屏浏览：手机上浏览器地址栏会吃掉一大截高度，进全屏才看得清细节 -->
+    <button id="lbFs" title="全屏浏览 (F)">⛶ 全屏</button>
     <button id="lbClose">关闭 Esc</button>
   </div>
   <div id="lbBody">
-    <button id="lbPrev" title="上一张 ←">‹</button>
+    <button id="lbPrev" title="上一张 ←（第一张时跳上一组）">‹</button>
     <img id="lbImg" alt="">
-    <button id="lbNext" title="下一张 →">›</button>
+    <button id="lbNext" title="下一张 →（最后一张时跳下一组）">›</button>
   </div>
   <div id="lbBottom"></div>
   <div id="lbHint">
-    <kbd>←</kbd><kbd>→</kbd> 切换张数 ·
-    <kbd>↑</kbd><kbd>↓</kbd> 切换事件组 ·
+    <kbd>←</kbd><kbd>→</kbd> 上一张 / 下一张（到头自动跳下一组）·
+    <kbd>↑</kbd><kbd>↓</kbd> 直接换组 ·
     <kbd>Esc</kbd> 关闭
   </div>
+  <!-- 全屏但转不了屏时（iOS Safari 没有 ScreenOrientation.lock）的提示；
+       能自动转横屏的设备会真的横过来，这条自然不显示 -->
+  <div id="lbRotTip">↻ 把手机横过来 · 画面更大</div>
 </div>
 
 <script src="data/names.js"></script>
@@ -84,14 +89,14 @@
 <script src="data/imgmap.x2.js"></script>
 <script src="data/imgmap.base.js"
         onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
-<script src="assets/js/common.js?v=1122a"></script>
-<script src="assets/js/header.js?v=1101a"></script>
+<script src="assets/js/common.js?v=1103a"></script>
+<script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
-<script src="assets/js/cg.js?v=1103a"></script>
+<script src="assets/js/cg.js?v=1103e"></script>
 <script src="assets/js/cgexport.js?v=1103a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
-<script src="assets/js/mobile.js?v=1102a"></script>
+<script src="assets/js/mobile.js?v=1103a"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
 </body>
 </html>

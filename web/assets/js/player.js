@@ -226,6 +226,11 @@ function onFsChange() {
   const el = document.getElementById('stageWrap');
   const fs = _fsActive();
   if (el) el.classList.toggle('fs', fs);
+  /* 全屏时尽量把屏幕转成横屏（舞台本来就是 16:9 横版），退出时解锁回到
+     系统默认的竖屏。iOS / 桌面拿不到锁权限，静默失败（见 common.js 的 ESC.orient）。 */
+  if (window.ESC && ESC.orient) {
+    if (fs) ESC.orient.lockLandscape(); else ESC.orient.unlock();
+  }
   fitStage();
   const b = document.getElementById('btnFs');
   if (b) b.textContent = fs ? '⛶ 退出' : '⛶ 全屏';
@@ -2042,6 +2047,12 @@ function renderOtherGroups(box, filter = '', opt = {}) {
   const f = (filter || '').trim().toLowerCase();
   const groups = window.__OTHER_EPS || [];
 
+  /* 「其他」是分组视图，不走增量追加。清掉上一次活动/主线留下的 advAll/advCursor，
+     否则切换瞬间若有 scroll 事件触发 appendAdvChunk，会把别类剧情追加进来
+     （用户反馈：活动 → 其他 偶发两种列表并存）。 */
+  advAll = [];
+  advCursor = 0;
+
   /* 滚动位置：同一过滤条件下重渲染（展开/收起某一组）必须留在原位。
      以前这里直接 `box.scrollTop = 0`，于是"点分组就跳回顶部"——现在走统一保护，
      并以**被点的那个分组头**为锚点：展开/收起后它仍在视野里的同一位置。 */
@@ -2198,6 +2209,10 @@ function renderAdvList(filter = '') {
 function appendAdvChunk() {
   const box = $('#charList');
   if (!box || advCursor >= advAll.length) return;
+  // 安全护栏：「其他」走分组视图（renderOtherGroups 一次渲染完，也不重置
+  // advAll/advCursor），若这里被触发会把上一次活动/主线残留数据追加进去，
+  // 造成两种列表并存。角色分类同样不增量。
+  if (SRC === 'char' || SRC === 'other') return;
   const frag = document.createDocumentFragment();
   advAll.slice(advCursor, advCursor + ADV_BATCH).forEach(a => frag.appendChild(advItem(a)));
   advCursor = Math.min(advCursor + ADV_BATCH, advAll.length);
@@ -2255,10 +2270,11 @@ function advItem(a) {
   return d;
 }
 
-/* 侧栏滚到底部时继续追加（只对剧情列表生效） */
+/* 侧栏滚到底部时继续追加（只对主线/活动增量列表生效；
+   「其他」是分组视图一次渲染完，不增量，否则会误追加上一次活动残留） */
 $('#charList').addEventListener('scroll', () => {
   const box = $('#charList');
-  if (SRC === 'char') return;
+  if (SRC === 'char' || SRC === 'other') return;
   if (box.scrollTop + box.clientHeight >= box.scrollHeight - 160) appendAdvChunk();
 });
 
@@ -2589,9 +2605,10 @@ function buildLanPanel() {
   d.id = 'lanPanel';
   d.dataset.open = '0';
   d.innerHTML =
-    '<div class="lan-title">局域网访问</div>' +
-    '<div class="lan-desc">播放器已在局域网内共享。用手机或同网段的电脑扫描下方二维码，' +
-    '即可直接打开本播放器页面。</div>' +
+    '<div class="lan-title">局域网二维码</div>' +
+    // 别写"用电脑扫码"：电脑上没有扫码这回事，另一台电脑是**输地址**。
+    '<div class="lan-desc">播放器已在局域网内共享。手机连同一个 WiFi，' +
+    '扫下面的二维码就能打开；另一台电脑把下面的地址输进浏览器就行。</div>' +
     '<img class="lan-qr" alt="局域网访问二维码">' +
     '<div class="lan-url"></div>' +
     '<div class="lan-hint">若手机扫不出：确认手机与电脑连同一 WiFi，' +

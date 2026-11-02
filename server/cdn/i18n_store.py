@@ -49,10 +49,26 @@ def lang_dir(lang: str) -> str:
     return os.path.join(I18N, lang)
 
 
+def unit_file(unit) -> str:
+    """单元 → 译文文件名：``415`` / ``char_415`` → ``char_415.json``；
+    ``adv_main_1`` / ``adv_op`` 原样 → ``adv_main_1.json``、``adv_op.json``。
+
+    三方口径必须一致，否则 adv 剧情翻了也白翻：
+      * 前端请求 ``assets/i18n/<lang>/<storyKey>.json``（i18n.js``loadStory``）
+      * 控制台导入写 ``TRANS_DIR/<unit>.json``（exports.import_trans）
+      * 本模块以前硬编码 ``char_{cid}.json``，adv 单元会被写成
+        ``char_adv_main_1.json`` —— 前端永远请求不到。
+    """
+    u = str(unit or "")
+    if u.startswith("char_"):
+        u = u[5:]
+    return f"char_{u}.json" if u.isdigit() else f"{u}.json"
+
+
 def char_message_path(lang: str, cid) -> str:
     if lang == LANG_NATIVE:
         raise ValueError("源语言不需要译文文件（原文就在 char_*.js 里）")
-    return os.path.join(lang_dir(lang), f"char_{cid}.json")
+    return os.path.join(lang_dir(lang), unit_file(cid))
 
 
 def ui_path() -> str:
@@ -93,24 +109,30 @@ def load_ui(lang: str) -> dict:
 # ---------------------------------------------------------------- 写
 
 
+def _unit_key(cid):
+    """``"415"`` → ``415``；adv 单元保留字符串（文件里的 ``char`` 字段同口径）。"""
+    s = str(cid or "")
+    return int(s) if s.isdigit() else s
+
+
 def _read_store(lang: str, cid) -> dict:
     p = char_message_path(lang, cid)
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f:
             return json.load(f)
-    return {"v": STORE_VERSION, "char": int(cid), "lang": lang, "updated": "",
+    return {"v": STORE_VERSION, "char": _unit_key(cid), "lang": lang, "updated": "",
             "source_jp_count": 0, "messages": {}}
 
 
 def save_messages(lang: str, cid, messages: dict, source_jp_count: int = 0) -> str:
-    """写回单个角色的译文文件（与已有译文合并，重复的以本次为准）。"""
+    """写回单个剧情单元的译文文件（与已有译文合并，重复的以本次为准）。"""
     os.makedirs(lang_dir(lang), exist_ok=True)
     store = _read_store(lang, cid)
     merged = dict(store.get("messages") or {})
     merged.update(messages)
     store.update({
         "v": STORE_VERSION,
-        "char": int(cid),
+        "char": _unit_key(cid),
         "lang": lang,
         "updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "source_jp_count": source_jp_count or (store.get("source_jp_count") or 0),
@@ -127,6 +149,8 @@ def prune_missing(lang: str, cid) -> int:
     p = char_message_path(lang, cid)
     if not os.path.exists(p):
         return 0
+    if not str(cid).isdigit():
+        return 0                      # adv 单元的原文不归 load_char 管，不动它
     try:
         d = load_char(cid)
     except Exception:
@@ -178,13 +202,43 @@ def coverage(cid) -> dict:
 
 
 def build_index(langs=LANGUAGES) -> dict:
-    """生成 ``web/i18n/index.json``：前端侧栏用它显示"已汉化 X%"。"""
+    """生成 ``web/i18n/index.json``：前端据此决定是否请求各译文文件。
+
+    除 chars 覆盖情况外，还记录 speakers（全站共用发言人译名表）的条数——
+    前端只在 speakers[lang] > 0 时才请求 ``<lang>/_speakers.json``，
+    没译过名字时该文件不存在，请求必 404。
+    """
     out = {"v": STORE_VERSION, "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
-           "langs": list(langs), "chars": {}}
-    for fn in sorted(os.listdir(DATA)):
-        if not fn.startswith("char_") or not fn.endswith(".js"):
+           "langs": list(langs), "chars": {}, "speakers": {}}
+    for lang in langs:
+        if lang == LANG_NATIVE:
             continue
-        cid = int(fn[5:-3])
+        spk_path = os.path.join(lang_dir(lang), "_speakers.json")
+        if os.path.exists(spk_path):
+            try:
+                spk = json.load(open(spk_path, encoding="utf-8")).get("messages") or {}
+                out["speakers"][lang] = len(spk)
+            except Exception:
+                pass
+    for fn in sorted(os.listdir(DATA)):
+        if not fn.endswith(".js"):
+            continue
+        # 名单必须和前端「哪部剧情可能有译文」对齐：
+        #   char_<id>.js → key "<id>"；adv_<kind>_<no>.js → key "adv_<kind>_<no>"
+        # （前端 i18n.js ``unitTranslated`` 就是 char_ 去前缀、其余原样）。
+        # 以前只扫 char_*.js，于是 adv 剧情即使翻了也不会出现在清单里，
+        # 前端永远请求不到 —— 和控制台导入写出的 chars["adv_main_1"] 口径不一致。
+        unit = fn[:-3]
+        if unit.startswith("char_"):
+            cid = unit[5:]
+            if not cid.isdigit():
+                continue
+            ikey = int(cid)
+        elif unit.startswith("adv_"):
+            cid = unit
+            ikey = unit
+        else:
+            continue
         entry = {}
         for lang in langs:
             if lang == LANG_NATIVE:
@@ -193,7 +247,7 @@ def build_index(langs=LANGUAGES) -> dict:
             if msgs:
                 entry[lang] = len(msgs)
         if entry:
-            out["chars"][cid] = entry
+            out["chars"][ikey] = entry
     os.makedirs(I18N, exist_ok=True)
     with open(index_path(), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)

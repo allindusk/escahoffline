@@ -51,19 +51,14 @@
     flex: none; padding: 4px 10px; white-space: nowrap;
   }
   body > header[data-shared] #btnLan { min-width: 0; padding: 4px 9px; }
-  /* 资源管理页右上角的统计（"已装 611/611 · 缓存 24.68 GB"）很长，
-     默认会把 ? 和 GitHub 挤到第二行、导航再被挤到第三行。
-     让它可收缩 + 省略号，顶栏就只要两行。 */
-  body > header[data-shared] #hdrStat {
-    flex: 1 1 0; min-width: 0; margin-left: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 14px;
-  }
 
   /* ---------- 三页共用：占据剩余高度的主容器 ---------- */
   /* 竖屏用 dvh，地址栏收起/展开时不会把底部控制条顶出屏幕外 */
+  /* html 也一起禁横向滚动：手机上一旦有任何子元素比屏幕宽一点点，
+     整页就能左右拖动、右侧按钮看不见（用户 2026-11-03 反馈）。 */
+  html { overflow-x: hidden; }
   body { display: flex; flex-direction: column; height: 100vh; height: 100dvh;
-    overflow: hidden; }
+    overflow: hidden; max-width: 100%; }
   /* 三页的 .layout 原本是横排（侧栏 + 主区）。窄屏统一改成竖排：
      播放器 / CG 页的侧栏在上面已经 position:fixed 脱离文档流，主区独占；
      资源管理页则变成「顶部横向导航条 + 下面内容」。 */
@@ -139,8 +134,13 @@
   }
 
   /* 段标签条横向滚动，别把翻页按钮挤出去 */
-  #tabs { padding: 4px 8px; gap: 6px; }
-  #tabStrip { overflow-x: auto; scrollbar-width: none;
+  #tabs { padding: 4px 8px; gap: 6px; overflow: hidden; }
+  /* 统计文字（「6 段 · 910 句 · 321 语音 · 已译 2/899」）在手机上先让位：
+     它最长能占到 281px，原先不收缩，把段标签挤成 0 宽、◀ ▶ 顶到屏幕外，
+     整页因此出现横向滚动条（2026-11-03 用户反馈）。这里限宽 + 省略号。 */
+  #meta { flex: 0 1 auto; min-width: 0; max-width: 46vw;
+    overflow: hidden; text-overflow: ellipsis; }
+  #tabStrip { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none;
     -webkit-overflow-scrolling: touch; }
   #tabStrip::-webkit-scrollbar { display: none; }
 
@@ -152,9 +152,45 @@
   #grid { --cardMin: 44vw; padding: 10px 10px 72px; gap: 10px; }
   #bar { flex-wrap: wrap; row-gap: 6px; padding: 6px 10px; }
   #bar .sizes { margin-left: 0; flex-wrap: wrap; }
-  #lbTop, #lbBottom { flex-wrap: wrap; padding: 8px 10px; }
+  /* 灯箱顶栏必须**单行**：换成两行会白吃掉 40px 画面高度。
+     角色名过长时打省略号，组信息（「组 1 / 768」）在手机上先收起来。 */
+  #lbTop {
+    flex-wrap: nowrap; gap: 8px; padding: 8px 10px;
+  }
+  #lbTitle { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #lbCount { flex: 0 0 auto; }
+  #lbGroup { display: none; }
+  #lbFs { margin-left: auto; flex: 0 0 auto; padding: 5px 9px; }
+  #lbClose { margin-left: 0; flex: 0 0 auto; padding: 5px 9px; }
+  /* 底部圆点条在手机上只留一行 */
+  #lbBottom { padding: 8px 10px; }
   /* 手机没有键盘，方向键提示纯占地方 */
   #lbHint { display: none; }
+
+  /* 灯箱的上一张 / 下一张：桌面是"垂直居中贴在左右边"，
+     手机屏幕小，那样正好压在 CG 主体上（用户 2026-11-03 反馈）。
+     挪到画面左右下角做成圆钮，中间的画面完全让出来。 */
+  #lbPrev, #lbNext {
+    top: auto; bottom: 10px; transform: none;
+    width: 48px; height: 48px; border-radius: 50%;
+    font-size: 22px; background: rgba(12, 16, 24, .86);
+  }
+  #lbPrev { left: 10px; }
+  #lbNext { right: 10px; }
+  /* 底部留出按钮的高度，图片不会被压在按钮下面 */
+  #lbBody { padding: 8px 8px 68px; }
+  /* 全屏时按钮仍在下角，圆点条往上提一行，两者不叠在一起 */
+  #lb.fs #lbBody { padding: 0; }
+  #lb.fs #lbBottom { padding: 12px 10px 66px; }
+  /* 全屏时图片铺满整屏，两个按钮压在上面，做成半透明浮层别抢画面。
+     z-index 要高过圆点条（3），否则会被它盖住、点了没反应。 */
+  #lb.fs #lbPrev, #lb.fs #lbNext { opacity: .5; z-index: 4; }
+  #lb.fs #lbPrev:active, #lb.fs #lbNext:active { opacity: 1; }
+  /* 顶栏元素多（标题/张数/组名/全屏/关闭），窄屏把次要的两项收成小字 */
+  #lbTop { gap: 8px; }
+  #lbTop #lbCount, #lbTop #lbGroup { font-size: 14px; }
+  #lbFs, #lbClose { padding: 5px 10px; }
 
   /* ---------- 资源管理：竖排侧栏改成顶部横向滚动 ---- */
   #side {

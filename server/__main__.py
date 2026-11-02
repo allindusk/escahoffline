@@ -37,6 +37,63 @@ def _portable() -> bool:
     return os.path.exists(os.path.join(paths.ROOT, "python", "python.exe"))
 
 
+class _SafeStream:
+    """兜底流：编码不出来的字符换成 "?"，绝不抛 UnicodeEncodeError。"""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def write(self, text):
+        try:
+            return self._inner.write(text)
+        except UnicodeEncodeError:
+            enc = (getattr(self._inner, "encoding", "") or "utf-8")
+            return self._inner.write(text.encode(enc, "replace").decode(enc, "replace"))
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _harden_stdio() -> None:
+    """让 print 永不因编码失败（进程启动第一件事就做）。
+
+    为什么必须做：Windows 下 stdout 一旦被**重定向**（管道 / IDE 终端 / 第三方
+    启动器 / 服务被别的进程拉起），Python 就不再走控制台的 UTF-8 通道，而是用
+    系统 ANSI 代码页（中文 Windows = GBK）。此时 ``print("✓")``、打印带「・」
+    的日文标题会抛 ``UnicodeEncodeError``。
+
+    要命的不是这行字没打出来，而是**异常会顺着调用栈冒上去**：这些 print 混在
+    装剧情 / 超分的后台任务里，装一步炸一次，整个单元就被判成失败。
+    2026-11-02 19:13「安装 74 部剧情」74 部全灭，报的就是
+    ``'gbk' codec can't encode character '\\u2713' in position 9``
+    （来自 ``stages.compose_stands()`` 末尾那句「立绘尺寸一致 ✓」）。
+
+    编码跟着**控制台的活动代码页**走：控制台是 65001（启动脚本都 ``chcp 65001``）
+    就改回 UTF-8，中文/日文/符号全都正常；是 GBK 就保持 GBK，只把编码不出来的
+    ✓ / ⚠ / ・ 降级成 "?"。两种情况下都不再抛异常，也不影响任何业务结果。
+    """
+    cp = 0
+    try:
+        import ctypes
+        cp = int(ctypes.windll.kernel32.GetConsoleOutputCP() or 0)   # type: ignore[attr-defined]
+    except Exception:                                    # noqa: BLE001
+        cp = 0
+    for name in ("stdout", "stderr"):
+        s = getattr(sys, name, None)
+        if s is None:                                    # pythonw：没有控制台
+            continue
+        try:
+            if cp == 65001:                              # 控制台要 UTF-8，别再按 GBK 编
+                s.reconfigure(encoding="utf-8", errors="replace")
+            else:
+                s.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            try:
+                setattr(sys, name, _SafeStream(s))
+            except Exception:                            # noqa: BLE001
+                pass
+
+
 def _say(name: str) -> None:
     """打印 tools/msg/<name>.txt 里的提示文案（缺文件就静默跳过）。"""
     p = os.path.join(paths.ROOT, "tools", "msg", name + ".txt")
@@ -48,6 +105,7 @@ def _say(name: str) -> None:
 
 
 def main(argv=None) -> int:
+    _harden_stdio()          # 必须在任何 print 之前：见 _harden_stdio 的注释
     ap = argparse.ArgumentParser(prog="python -m server",
                                  description="ESCAH 离线阅读器本地服务")
     ap.add_argument("-p", "--port", type=int, default=0,

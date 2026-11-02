@@ -62,9 +62,10 @@ window.SL = (() => {
     const A = window.__ADV || [];
     if (_advMap && _advLen === A.length) return _advMap;
     _advMap = new Map();
-    // 同一个 key 会有多条别名（序章包 adv_op 就挂了「第1/2/3部 序章」+ 一条 kind=op），
-    // 优先取**整包条目**（不带 part 的那条），和播放器 advByKey 的取法一致 ——
-    // 否则后写的 kind=op 会把序章包从「主线」踢到「其他」。
+    // 同一个 key 会有多条别名：序章包 adv_op 就挂了「第1/2/3部 序章」三条
+    // kind:main 别名（已不再有 kind:op 的整包条目）。这里按 key 归并出**一条代表项**
+    // （优先不带 part 的整包条目），供 srcOf / 名字推算等「按包」判断使用；
+    // 列表与计数要「按条」展示序章时，由下面的 keysOf 另外展开。
     A.forEach(function (a) {
       const prev = _advMap.get(a.key);
       if (!prev || (!Number.isInteger(a.part) && Number.isInteger(prev.part))) {
@@ -94,9 +95,11 @@ window.SL = (() => {
   }
 
   /** 一行要显示的信息。名字取不到时用「ID 415」而不是「角色 415」：
-   *  前者是事实（游戏内部编号），后者会被读成"第 415 个角色"。 */
-  function info(key) {
-    key = String(key);
+   *  前者是事实（游戏内部编号），后者会被读成"第 415 个角色"。
+   *  item 既可以是 key 字符串，也可以是 advindex 的别名条目（一个包挂了多条
+   *  同分类别名时，keysOf 会把它们展开成多条，这里直接用它自己的标题/段数）。 */
+  function info(item) {
+    const key = (typeof item === 'string') ? item : ((item && item.key) || '');
     if (key.indexOf('char_') === 0) {
       const id = key.slice(5);
       const nm = (window.__NAMES || {})[id] || '';
@@ -110,15 +113,19 @@ window.SL = (() => {
         order: '',
       };
     }
-    const a = advOf(key);
+    // 别名条目（adv_op 的「第1/2/3部 序章」）：直接用条目自身的标题/段数
+    const alias = !!(item && typeof item === 'object' && item.key
+      && item.key === key && advOf(key) !== item);
+    const a = alias ? item : advOf(key);
     // 标题统一走 common.js 的 ESC.storyTitle：主线章节标题是「编号推算」出来的
     // （官方剧本 JSON 只有 9 个字段、没有 title，标题只能从 `_0` 段台词或封面图
     //  识读补进 server/cdn/data/story_titles.json；现在 225 条里还剩 110 条是空的，
     //  直接拿 a.title 会显示成「第 null 话」），
     // 播放器侧栏、控制台 ②③⑤、导出列表必须显示同一个名字。
+    // 别名条目一定带 title（序章），优先用，避免三条序章显示成同一个名字。
     if (a) {
       return {
-        name: ESC.storyTitle(key),
+        name: (alias && a.title) ? a.title : ESC.storyTitle(key),
         rar: '', date: '', cover: a.cover || '', adv: true,
         parts: a.parts || 0, lines: a.lines || 0,
         order: String((a.order == null ? 999 : a.order)).padStart(4, '0'),
@@ -146,21 +153,44 @@ window.SL = (() => {
       q: '',
     };
     let timer = 0;
+    const groupOpen = new Set();   // 折叠分组展开态（内存态，默认收起/展开见 groupDefaultOpen）
 
     const unitsOf = src => (cfg.units ? cfg.units(src) : []) || [];
-    const statusOf = k => (cfg.status ? cfg.status(k) : 'missing');
+    // 别名条目（adv_op 序章）展开后传入的是对象，安装/状态一律按它真正的包 key 走
+    const pkgKey = k => (typeof k === 'object' && k ? k.key : k);
+    const statusOf = k => (cfg.status ? cfg.status(pkgKey(k)) : 'missing');
     const isHave = k => statusOf(k) !== 'missing';
     const bannersOn = () => (cfg.banners ? !!cfg.banners() : false);
     /** 显示名：页面可以覆盖（CG 导出用 cglist 自己的名字，
      *  负数 id 的「NPC / 非角色 CG」分组在那里才是对的） */
     const nameOf = k => (cfg.name && cfg.name(k)) || info(k).name;
 
+    /* 一个 key 下、归类为某 src 的全部别名条目：advindex 里同一个 key 可能挂多条
+     * kind 相同的别名，例如 adv_op 的「第1/2/3部 序章」。返回这些条目本身，
+     * 供 keysOf 把序章分别列出来（而不是被去重成一条）。 */
+    function advAliasEntries(key, src) {
+      const A = window.__ADV || [];
+      return A.filter(function (e) {
+        return e.key === key && (e.kind === src
+          || (src === 'other' && e.kind !== 'main' && e.kind !== 'event'));
+      });
+    }
+
     /** 某一类的单元（页面给的清单可能把角色/主线/活动/其他混在一起，
-     *  这里按 key 自己归类，保证四个页签各归各的） */
+     *  这里按 key 自己归类，保证四个页签各归各的）。
+     *  一个包挂了多条同分类别名（序章包 adv_op）时，展开成多条，让主线把
+     *  第1/2/3部 序章分别列出来，计数与播放器侧栏一致（主线 64 部）。 */
     function keysOf(src) {
       const all = unitsOf(src);
-      return src === 'char' ? all.filter(k => String(k).indexOf('char_') === 0)
-        : all.filter(k => String(k).indexOf('char_') !== 0 && srcOf(k) === src);
+      if (src === 'char') return all.filter(k => String(k).indexOf('char_') === 0);
+      const out = [];
+      all.forEach(function (k) {
+        if (String(k).indexOf('char_') === 0) return;
+        const aliases = advAliasEntries(k, src);
+        if (aliases.length > 1) aliases.forEach(a => out.push(a));
+        else if (srcOf(k) === src) out.push(k);
+      });
+      return out;
     }
 
     /* ---------------------------------------------------------- 过滤 + 排序 */
@@ -279,8 +309,9 @@ window.SL = (() => {
     }
 
     /* ---------------------------------------------------------- 行 */
-    function rowHtml(key) {
-      const i = info(key);
+    function rowHtml(item) {
+      const key = (typeof item === 'string') ? item : (item && item.key) || '';
+      const i = info(item);
       const on = sel.has(key);
       const dis = cfg.disabled ? !!cfg.disabled(key) : false;
       const badge = cfg.badge ? cfg.badge(key) : null;
@@ -302,7 +333,8 @@ window.SL = (() => {
         sub.push('<span class="sl-badge ' + esc(badge.cls || '') + '">'
           + esc(badge.text) + '</span>');
       }
-      const label = nameOf(key);
+      // 别名条目（adv_op 序章）用自己的标题，否则走页面覆盖名（其他分类的入口清单名）
+      const label = (typeof item === 'object' && item.key) ? i.name : nameOf(key);
       const title = label
         + (i.date ? '\n实装 ' + i.date : '')
         + (i.adv && i.parts ? '\n' + i.parts + ' 段 · ' + i.lines + ' 句' : '')
@@ -348,6 +380,49 @@ window.SL = (() => {
           if (cfg.onAction) cfg.onAction(b.dataset.key, b.dataset.act, ev);
         };
       });
+      list.querySelectorAll('.og-head').forEach(function (h) {
+        h.onclick = function () {
+          const id = h.dataset.gid;
+          if (groupOpen.has(id)) groupOpen.delete(id); else groupOpen.add(id);
+          render();
+        };
+      });
+    }
+
+    /* ---------------------------------------------------------- 分组渲染
+     * 把 keys 按 cfg.groupOf 归到各分组，每组前插一个可折叠的分组头。
+     * 空分组 id（''）直接平铺，便于「非 other 分类」或「入口清单未就绪」时退回普通列表。 */
+    function groupHtml(keys) {
+      const map = new Map();
+      keys.forEach(function (k) {
+        const g = (cfg.groupOf ? cfg.groupOf(k) : '') || '';
+        if (!map.has(g)) map.set(g, []);
+        map.get(g).push(k);
+      });
+      const rawIds = [...map.keys()];
+      let ids = cfg.groupOrder ? cfg.groupOrder(rawIds) : rawIds;
+      // groupOrder 可能漏掉 ''（非分组类）或未登记的 etc_?，这里补回，避免整页空白
+      rawIds.forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+      const forceOpen = !!String(state.q || '').trim() || state.rar.size > 0 || !!state.status;
+      let html = '';
+      ids.forEach(function (id) {
+        const gk = map.get(id);
+        if (!gk || !gk.length) return;
+        if (id === '') { html += gk.map(rowHtml).join(''); return; }   // 无分组：平铺
+        const open = forceOpen
+          || (cfg.groupDefaultOpen === false ? groupOpen.has(id) : !groupOpen.has(id));
+        // 分组横幅（如播放页侧栏「其他」的入口横幅）：cfg.groupBanner(id) 返回图片地址，
+        // 没下过公共素材时返回 ''，分组头就退回纯文字一行。
+        const bnr = cfg.groupBanner ? cfg.groupBanner(id) : '';
+        html += '<div class="og-head' + (open ? ' open' : '') + (bnr ? ' has-bnr' : '') + '" data-gid="' + esc(id) + '">'
+          + (bnr ? '<span class="bnr"><img alt="" loading="lazy" src="' + esc(bnr) + '"'
+            + ' onerror="this.closest(\'.bnr\').style.display=\'none\'"></span>' : '')
+          + '<span class="row"><span class="nm">' + esc(cfg.groupLabel ? cfg.groupLabel(id) : id) + '</span>'
+          + '<span class="cnt">' + gk.length + '</span>'
+          + '<span class="arw">' + (open ? '▾' : '▸') + '</span></span></div>';
+        if (open) html += '<div class="og-body">' + gk.map(rowHtml).join('') + '</div>';
+      });
+      return html;
     }
 
     /* ---------------------------------------------------------- 渲染 */
@@ -368,6 +443,9 @@ window.SL = (() => {
         else if (state.status === 'miss') hint = '这一类都装好了 —— 把筛选切回「全部剧情」查看';
         else if (state.status === 'have') hint = '这一类还没装 —— 把筛选切回「全部剧情」查看';
         list.innerHTML = '<div class="sl-empty">' + esc(hint) + '</div>';
+      } else if (cfg.groupOf) {
+        list.innerHTML = groupHtml(keys);
+        bindList();
       } else {
         list.innerHTML = keys.map(rowHtml).join('');
         bindList();
@@ -402,8 +480,9 @@ window.SL = (() => {
       /** 全选"当前筛选结果"里可勾选的行（不会越界到别的分类） */
       selectAll: function () {
         filtered().forEach(function (k) {
-          if (cfg.disabled && cfg.disabled(k)) return;
-          sel.add(k);
+          const key = pkgKey(k);
+          if (cfg.disabled && cfg.disabled(key)) return;
+          sel.add(key);
         });
         render();
       },

@@ -31,7 +31,6 @@ body {
 /* 导航绝对居中：三页标题字数不同，否则切页时导航会左右跳 */
 /* 和播放器 / CG 页完全一致：12.5px + 5px 12px + 8px 圆角，
    否则切页时导航胶囊会微微"长胖/变瘦" */
-#hdrStat { margin-left: auto; font-size: 14px; color: var(--fg3); }
 #btnHelp2 {
   background: var(--bg3); color: var(--acc2); border: 1px solid var(--line2);
   border-radius: 7px; width: 28px; height: 26px; cursor: pointer; font-weight: 700;
@@ -63,7 +62,11 @@ section.on { display: block; }
 h2 { font-size: 19px; margin: 4px 0 10px; }
 h3 { font-size: 15.7px; margin: 0 0 8px; color: var(--acc2); }
 h3.mt { margin-top: 22px; }
-.lead { color: var(--fg2); margin: 0 0 18px; max-width: 76ch; }
+/* 说明段**不要**用 `NNch` 限宽：`ch` 是"数字 0 的宽度"，中文一个字约等于 2ch，
+   所以 76ch 其实只有 ~38 个汉字/行 —— 一句 50 多字的话会在面板还空着 300 多 px
+   的时候就提前折行，第二行只剩几个字。宽度交给 section 自己的 1080px 上限即可。
+   （用户 2026-11-03 反馈"本来一行能放完的文字被掰成两行"就是这里造成的。） */
+.lead { color: var(--fg2); margin: 0 0 18px; }
 .dim { color: var(--fg3); font-size: 14px; }
 
 /* 外链。本文件原本没有 a 样式（只有 player/cg 的 nav a 有），裸 <a> 会是
@@ -198,10 +201,17 @@ details.explain li { margin-bottom: 2px; }
  */
 .packbar { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .packsrch {
-  display: flex; gap: 8px; padding: 10px 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px;
   background: var(--bg2); border-bottom: 1px solid var(--line);
 }
 .packsrch input { flex: 1; }
+/* 按钮别被那行说明挤成两行（「全选本 / 类」那种断字很难看） */
+.packsrch > button { flex: 0 0 auto; white-space: nowrap; }
+/* 说明文字：占满剩余宽度、始终左对齐，并与左右按钮垂直居中对齐 */
+.packsrch > .hint {
+  flex: 1 1 240px; min-width: 0;
+  text-align: left; align-self: center; line-height: 1.6;
+}
 
 /* 选择条：跟着列表走的普通区块，不再 sticky 悬浮。
    sticky 会一直盖在列表上方，用户上下翻的时候总被它挡住。 */
@@ -238,11 +248,16 @@ details.explain li { margin-bottom: 2px; }
 }
 
 /* ---------------- 底部任务条 ---------------- */
+/* **必须是不透明的**：这条是压在正文上的浮层，一旦半透明，底下滚动的文字
+   会透过来，变成"两层字叠在一起"，进度和状态就看不清了。
+   容器本身也给底色：行与行之间那 2px 缝、以及左右两侧不会漏出页面内容。
+   （没有任务时容器高度为 0，不会挡住任何东西） */
 #jobbar {
   /* 底部留 52px 给右下角的「版本号 + 免责声明」，否则两块会叠在一起 */
   position: fixed; left: 0; right: 0; bottom: 52px; z-index: 9000;
   display: flex; flex-direction: column; gap: 2px;
   pointer-events: none;
+  background: #0b131d;
 }
 
 /* ---------------- 右下角操作记录浮窗 ----------------
@@ -251,7 +266,8 @@ details.explain li { margin-bottom: 2px; }
 #actPanel {
   position: fixed; right: 16px; bottom: 54px; width: 392px; z-index: 9400;
   display: flex; flex-direction: column; max-height: 42vh;
-  background: rgba(11, 19, 29, .97); border: 1px solid var(--line2);
+  /* 实色（原来是 rgba .97）：这层里全是文字，半透明会跟页面内容叠字 */
+  background: #0b131d; border: 1px solid var(--line2);
   border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
   font-size: 14px; overflow: hidden;
 }
@@ -263,6 +279,10 @@ details.explain li { margin-bottom: 2px; }
 }
 #actPanel.collapsed .apHead { border-bottom: 0; }
 .apTitle { flex: 1; color: var(--fg); font-weight: 600; }
+/* 收起后里面还有记录：标题旁点一个圆点，否则"有新消息"完全看不出来 */
+#actPanel.has-new .apTitle::after {
+  content: ' •'; color: var(--warn, #e0a33a); font-weight: 700;
+}
 .apBtn {
   background: #16283a; border: 1px solid var(--line2); color: var(--fg3);
   border-radius: 6px; padding: 2px 8px; font-size: 14px; cursor: pointer;
@@ -288,7 +308,7 @@ details.explain li { margin-bottom: 2px; }
 .job {
   pointer-events: auto;
   display: flex; align-items: center; gap: 14px;
-  padding: 12px 20px; background: rgba(13, 21, 32, .98);
+  padding: 12px 20px; background: #0d1520;      /* 实色，别再半透明 */
   border-top: 1px solid var(--line2); font-size: 15.1px;
   box-shadow: 0 -8px 24px rgba(0, 0, 0, .4);
 }
@@ -314,6 +334,10 @@ details.explain li { margin-bottom: 2px; }
   background: linear-gradient(90deg, #35a065, #63d992); }
 .job.failed .jp i { animation: none;
   background: linear-gradient(90deg, #a0394a, #d96570); }
+/* 结束态的那行字要说清楚：以前完成 / 失败都还是一行淡灰，
+  还有几秒就整条消失，等于没提示 */
+.job.done .jm { color: #9fe3bb; font-weight: 600; }
+.job.failed .jm { color: #ffb3ba; font-weight: 600; }
 
 /* 数值区两行：第一行百分比 + 已下/总大小，第二行个数 + 速度 + 剩余 */
 .job .jv { min-width: 240px; flex: none; display: flex; flex-direction: column;
@@ -349,6 +373,16 @@ details.explain li { margin-bottom: 2px; }
 
 /* 超分警示块：要够显眼，用户才会真的掂量"要不要开" */
 .ups-warn { margin: 8px 0 12px; line-height: 1.85; }
+
+/* 「上次导出」这种必须留得住的结论：不是一闪而过的提示，
+   别用淡灰小字，也别跟正文糊在一起 */
+.lastres {
+  margin: 2px 0 10px; padding: 9px 12px; border-radius: 9px;
+  background: #0f1a26; border: 1px solid var(--line2);
+  color: var(--fg2); font-size: 14px; line-height: 1.8;
+  word-break: break-all;
+}
+.lastres b { color: var(--fg); }
 .ups-warn .ups-ul { margin: 8px 0 4px; padding-left: 20px; }
 .ups-warn .ups-ul li { margin-bottom: 5px; color: #ffe6c2; }
 .ups-warn p { color: #ffd9a3; }
@@ -359,23 +393,41 @@ details.explain li { margin-bottom: 2px; }
   color: #cfe0f2; }
 .up-plan b { color: #9fe0ff; }
 
-/* 文件选择框：长文件名不能撑破布局，也不能被直接截断成看不见 */
-.tp-file { min-width: 200px; max-width: 100%; }
-.tp-file span { display: block; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; max-width: 100%; }
 /* 译文导入那一排：窄屏时换行而不是把控件挤扁 */
 #sec-trans .optrow { flex-wrap: wrap; }
-/* 批量导入的「多个 txt / 文件夹 / zip」源切换 */
-.tr-src { display: inline-flex; border: 1px solid var(--line);
-  border-radius: 9px; overflow: hidden; }
-.tr-src button { border: 0; border-radius: 0; background: var(--bg2);
-  color: var(--fg2); padding: 8px 14px; cursor: pointer; font-size: 14px;
-  border-right: 1px solid var(--line); }
-.tr-src button:last-child { border-right: 0; }
-.tr-src button:hover { background: var(--bg3); color: var(--fg); }
-.tr-src button.on { background: var(--acc); color: #fff; font-weight: 600; }
 
-/* 行内的「卸载」「填入」按钮见 storylist.css 的 .sl-act（和整行点击分开） */
+/* ---------- 译文导入：① 文件在哪 → ② 选文件 → ③ 导入方式 ----------
+   一屏三步，每步左侧有编号和标题，右边才是控件；窄屏时控件换行到标题下面，
+   不会像原来那样「类型 / 选文件 / 合并覆盖 / 导入」四样挤成一条看不清顺序的带子。 */
+.tr-imp { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 6px; }
+.tr-step { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tr-lab { display: flex; align-items: center; gap: 6px; min-width: 92px;
+  color: var(--fg2); font-size: 14px; font-weight: 600; }
+.tr-no { color: var(--acc2); font-size: 15px; line-height: 1; }
+
+/* 两组都是「点一下就换」的分段按钮：选中项整块高亮，选项里自带一行说明 */
+.tr-src, .tr-mode { display: inline-flex; border: 1px solid var(--line);
+  border-radius: 9px; overflow: hidden; }
+.tr-src button, .tr-mode button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  border: 0; border-radius: 0; border-right: 1px solid var(--line);
+  background: var(--bg2); color: var(--fg2); padding: 6px 13px;
+  cursor: pointer; font-family: inherit; font-size: 14px;
+  line-height: 1.45; text-align: left;
+}
+.tr-src button:last-child, .tr-mode button:last-child { border-right: 0; }
+.tr-src button:hover, .tr-mode button:hover { background: var(--bg3); color: var(--fg); }
+.tr-src button.on, .tr-mode button.on { background: var(--acc); color: #fff; }
+.tr-src button b, .tr-mode button b { font-size: 14px; font-weight: 600; }
+.tr-src button small, .tr-mode button small { font-size: 14px; opacity: .72; }
+.tr-src button.on small, .tr-mode button.on small { opacity: .92; }
+/* 导入结果：空着的时候不占位，有结果才拉开一点距离 */
+#trResult:not(:empty) { margin-top: 10px; }
+
+/* 教程浮窗（「自己动手翻」）的样式在 assets/css/trans_tut.css ——
+   与播放器共用同一份，改文案/样式只改那两个文件。 */
+
+/* 行内的「卸载」按钮见 storylist.css 的 .sl-act（和整行点击分开） */
 
 /* 基础数据（必需）区块 */
 .basepack { border: 1px solid #3c4a2a; background: #16200f; border-radius: 12px;
