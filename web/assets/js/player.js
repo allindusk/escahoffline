@@ -2622,7 +2622,15 @@ function toggleLanPanel() {
     const port = info.port || location.port;
     const url = 'http://' + ip + ':' + port + location.pathname;
     p.querySelector('.lan-url').textContent = url;
-    p.querySelector('.lan-qr').src = '/api/lan_qr?text=' + encodeURIComponent(url);
+    const qr = p.querySelector('.lan-qr');
+    qr.style.display = '';
+    qr.onerror = () => {
+      // 服务端缺二维码库时别留一个裂图，直接把地址留着让用户手输
+      qr.style.display = 'none';
+      const u = p.querySelector('.lan-url');
+      if (u) u.textContent = url + '（二维码生成失败，请手动输入上面的地址）';
+    };
+    qr.src = '/api/lan_qr?text=' + encodeURIComponent(url);
   }).catch(() => {
     p.querySelector('.lan-url').textContent =
       '获取局域网地址失败（请确认服务以 --host 0.0.0.0 启动）';

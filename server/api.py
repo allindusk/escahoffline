@@ -431,8 +431,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _qr(self, text: str):
-        """把文字编码成 PNG 二维码返回（前端用于局域网扫码访问）。"""
+        """把文字编码成 PNG 二维码返回（前端用于局域网扫码访问）。
+
+        **优先用项目自带的依赖**，而不是系统 site-packages：全量包（便携版）
+        里的 Python 连 pip 都没有（实测 `python.exe -m pip` 报 No module
+        named pip），如果优先看系统，用户电脑上装没装、装的是哪个版本都会
+        影响结果；以内置那份为准，行为和打包时验证过的完全一致。
+        内置缺失时才退回系统。
+        """
         import io
+        import sys
+        vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "_vendor")
+        if vendor not in sys.path:
+            sys.path.insert(0, vendor)       # 插到最前，保证优先命中内置那份
         try:
             import qrcode
         except Exception as e:                              # noqa: BLE001

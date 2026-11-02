@@ -282,7 +282,7 @@ jobs:
           # 缺任何一个用户都会卡在"安装剧情"这一步。
           New-Item -ItemType Directory -Force -Path "$dst/python/Lib/site-packages" | Out-Null
           python -m pip install --quiet --upgrade --target "$dst/python/Lib/site-packages" `
-            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av
+            --only-binary=:all: UnityPy lz4 Pillow numpy cryptography playwright av qrcode
 
           # 便携版的启动脚本 = **仓库根目录那一份**（pack_app 已经把 *.bat 拷进来了）。
           #
@@ -317,7 +317,7 @@ jobs:
           "启动.bat 已就位：$batLen 字节（优先内置 Python，提示文案齐全）"
 
           # 验证内置解释器 + 全部依赖都能跑（这是便携版唯一的验收点）
-          & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy, playwright; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__)"
+          & "$dst/python/python.exe" -c "import sys, UnityPy, lz4, PIL, numpy, playwright, qrcode; print('embedded python', sys.version.split()[0], '| UnityPy', UnityPy.__version__, '| Pillow', PIL.__version__, '| numpy', numpy.__version__, '| qrcode ok')"
           if ($LASTEXITCODE -ne 0) { throw "便携版 Python 环境不可用（解包依赖缺失）" }
 
           # 关键自检：**在项目根能 import server**。
