@@ -385,12 +385,19 @@ jobs:
       # Markdown 里的 `userdata/` 会被当成 Unicode 转义序列，直接把构建搞挂。
       - name: 准备 Release 说明
         shell: pwsh
+        # python 的 stdout 在 Windows runner 上是 cp1252，脚本里只要有中文就会
+        # UnicodeEncodeError 把整个构建搞挂（2026-11-03 手动跑 CI 撞到）。
+        # 脚本自己会 reconfigure，这里再从环境上兜一层。
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
         run: |
           $v = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
           $sha = (git rev-parse --short HEAD).Trim()
           # 正文里**只放这一版的新增/修复**，不追构建戳（用户要求：不包含别的内容）；
           # 构建提交只留在 Actions 日志里备查。
           python tools/release_notes_body.py dist/notes.md $v
+          if ($LASTEXITCODE -ne 0) { throw "生成 Release 说明失败（python exit $LASTEXITCODE）" }
           if (-not (Test-Path dist/notes.md)) { throw "生成 dist/notes.md 失败" }
           "dist/notes.md 已生成（v$v，构建提交 $sha）"
 
