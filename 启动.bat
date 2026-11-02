@@ -59,7 +59,12 @@ echo.
 rem ---- 4) launch -------------------------------------------------------
 :launch
 set "PYTHONPATH=%~dp0"
-"%PYEXE%" %PYARGS% -m server --open
+rem 默认监听 0.0.0.0（局域网），手机/同网段设备可访问；本机仍可用 127.0.0.1
+"%PYEXE%" %PYARGS% -m server --host 0.0.0.0 --open
+echo.
+echo [提示] 若手机连不上，请放行 Windows 防火墙入站端口（管理员 PowerShell 执行）：
+echo   New-NetFirewallRule -DisplayName "ESCAH LAN" -Direction Inbound -LocalPort ^<端口^> -Protocol TCP -Action Allow
+echo   端口见上方启动日志打印的值
 if not errorlevel 1 goto done
 echo.
 call :say launch_fail

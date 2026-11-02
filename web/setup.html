@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 <!-- 剧情列表（②剧情安装 / ③提高CG画质 / ⑤翻译 三页共用），与播放器侧栏同一套观感 -->
 <link rel="stylesheet" href="assets/css/storylist.css?v=1125a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1102a">
 </head>
 <body>
 <div class="layout">
@@ -689,32 +690,69 @@
       <div class="panel">
         <h3>三步上手</h3>
         <ol class="steps">
-          <li><b>下载基础数据</b>：去左边「① 概览 / 快速开始」点「下载基础数据」。
-            背景音乐和音效是所有剧情共用的，一次下齐省事。</li>
-          <li><b>装剧情</b>：「② 剧情安装」→ 勾想看的角色 / 章节 → 点「开始安装」。</li>
-          <li><b>看剧情</b>：回「角色剧情」→ 左侧点角色就能播。想要中文就点播放器里的「翻译」。</li>
+          <li><b>下基础数据</b>：左边「① 概览 / 快速开始」点「下载基础数据」。
+            背景和音乐所有剧情共用，一次下齐最省事。</li>
+          <li><b>装一部剧情</b>：「② 剧情安装」→ 勾想看的角色或章节 → 点「开始安装」。</li>
+          <li><b>开始看</b>：回「角色剧情」→ 左边点角色就播。想要中文，点播放器里的「翻译」。</li>
         </ol>
+      </div>
+      <div class="panel">
+        <h3>几个容易找不到的地方</h3>
+        <p class="dim">功能都在，只是位置不显眼 —— 这里一次说清。</p>
+        <details class="explain"><summary>想跳到剧情中间某一段</summary>
+          <p>播放器底下那条<b>进度条可以直接点</b>，点哪儿就跳到哪儿。正在播就接着播；
+            <b>已经暂停的话只跳过去、不会自己播</b>（等你看清楚再点播放）。</p></details>
+        <details class="explain"><summary>快捷键记不住</summary>
+          <p>播放器底下<b>最右边那个「?」</b>点一下，所有快捷键就列出来了
+            （空格暂停、回车下一句、按住 K 快进、F 全屏…），点别处或按 Esc 收起。</p></details>
+        <details class="explain"><summary>左边列表太占地方</summary>
+          <p>列表顶上点「收起」，或者按键盘上的 <b>[</b>，只留画面；再点一次就展开。</p></details>
+        <details class="explain"><summary>「其他」里的剧情怎么是一组一组的</summary>
+          <p>「其他」按游戏里的入口分好了组：打 BOSS、広域戦、殲滅戦、周年庆、愚人节、
+            H 场景合集…一共 17 组。点组名就展开，里面的名字跟游戏里一模一样
+            （来襲 その1、忍者 3、祝！3.5周年！！…）。</p></details>
+        <details class="explain"><summary>想先看看「变高清」到底能清楚多少</summary>
+          <p>「③ 提高CG画质」页右上角有个<b>「查看效果」</b>：左边是原来的样子，
+            右边是变清楚之后的样子，中间那条竖线可以拖着比，还能全屏看。
+            觉得不值就关掉，<b>不会动你的任何文件</b>。</p></details>
+        <details class="explain"><summary>CG 页怎么只有角色的图，剧情的图在哪</summary>
+          <p>CG 页搜索框下面有一排小按钮：<b>角色 / 主线 / 活动 / 其他</b>，点一下就换一类。
+            换到剧情那几类以后，左边列的是「哪一部剧情」；右上角的「⬇ 导出 CG」
+            也能把这一批打包下来。</p></details>
+        <details class="explain"><summary>想让手机 / 另一台电脑也能看</summary>
+          <p>播放器右上角有 <b>「局域网访问」</b>，点一下会出一个二维码：手机连<b>同一个 WiFi</b>
+            扫一下就能看。扫不开的话，多半是电脑的安全软件把外面连进来的请求挡住了 ——
+            启动时那个黑窗口里有一行提示，照着做一次就好。</p></details>
+        <details class="explain"><summary>想批量翻译，怎么一次挑出没翻过的</summary>
+          <p>「⑤ 翻译」页那排按钮里点<b>「全选未翻译」</b>（可以先把列表缩到你要的那一类），
+            再点这一行最右边的<b>「导出所选剧情」</b>。翻好之后用上面的「批量导入」放回来。</p></details>
       </div>
       <div class="panel">
         <h3>常见问题</h3>
         <details class="explain"><summary>点角色提示"资源还没有下载"</summary>
-          <p>这部剧没装。回「剧情安装」，勾上它（可以按名字搜索），点「开始安装」。
-            装完它会自动出现在播放器里。</p></details>
+          <p>这部剧还没装。回「剧情安装」，勾上它（可以按名字搜），点「开始安装」。
+            装好之后它会自动出现在播放器里。</p></details>
         <details class="explain"><summary>有画面但没声音 / 没有背景音乐</summary>
-          <p>先检查「基础数据 → 公共素材」下过没有：背景和 BGM 是所有剧情共用的，
+          <p>先看「基础数据」里的<b>公共素材</b>下过没有：背景和音乐是所有剧情共用的，
             <b>不下就只有你装过的那几部剧情自带的音效</b>。
-            如果已经下过还是没声音，点一下画面再播（浏览器会拦截自动播放）。</p></details>
+            如果下过了还是没声音，用鼠标点一下画面再播（浏览器会拦自动播放）。</p></details>
         <details class="explain"><summary>立绘缺脸 / 显示不完整</summary>
-          <p>约 10% 的特殊立绘在原作里本身就是分层图（缺脸部部件）。播放器设置里勾上
-            「显示不完整立绘」可以看到底图。</p></details>
+          <p>约一成的特殊立绘，在游戏原作里本身就是分开画的（缺了脸部那一层）。
+            播放器设置里勾上「显示不完整立绘」就能看到底图。</p></details>
+        <details class="explain"><summary>下载到 100% 了却一直在转</summary>
+          <p>正常。下完还要在原地「拆开装好」，这一步在进度条上接着往后走，
+            <b>不是卡住了</b>，等它走完就行。真的一动不动，就点一下「暂停」再「继续」。</p></details>
         <details class="explain"><summary>下载很慢</summary>
-          <p>把「剧情安装」页的<b>下载速度</b>调到 32 最省时间；老是失败就降到 8–16。
+          <p>把「剧情安装」页的<b>下载速度</b>调大（32 最省时间）；老是失败就调小到 8–16。
             另外<b>下载前先关掉代理软件</b>——代理按流量计费，一部剧情 30–60 MB。</p></details>
         <details class="explain"><summary>磁盘满了 / 想清理空间</summary>
-          <p>去「<b>设置 / 清理空间</b>」页，那里把占空间的东西按用途列全了，
-            并告诉你哪些删了不影响播放：<b>资源包缓存</b>、<b>没用的旧缓存</b>、
-            <b>已经被高清版替代的原图</b>、<b>导出成品</b>、<b>日志</b>。
+          <p>去「<b>设置 / 清理空间</b>」页，那里把占地方的东西按用途列全了，
+            还会告诉你哪些删了不影响看：下载时留下的<b>临时文件</b>、没用的<b>旧缓存</b>、
+            <b>已经被高清版替换掉的原图</b>、<b>导出的成品</b>、<b>日志</b>。
             只想删某一部剧情，就在「剧情安装」里点那一行的「卸载」。</p></details>
+        <details class="explain"><summary>想让新手引导再讲一遍</summary>
+          <p>点页面右上角的 <b>「?」</b>（播放器里按 <b>H</b> 也行），引导会从头再放一次。
+            这个「帮助」页往下就是常见问题，遇到怪现象先来这里翻一翻。</p></details>
       </div>
       <div class="panel">
         <h3>关于本站</h3>
@@ -828,10 +866,11 @@
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
 <script src="assets/js/storylist.js?v=1125a"></script>
 <script src="assets/js/header.js?v=1101a"></script>
-<script src="assets/js/tour.js?v=1101c"></script>
+<script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1101a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
-<script src="assets/js/setup.js?v=1103a"></script>
+<script src="assets/js/setup.js?v=1105a"></script>
+<script src="assets/js/mobile.js?v=1102a"></script>
 </body>
 </html>

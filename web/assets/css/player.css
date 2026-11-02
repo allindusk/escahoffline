@@ -16,8 +16,11 @@ nav a{padding:5px 12px;border-radius:8px;font-size:14px;text-decoration:none;
 nav a:hover{color:var(--fg)}
 nav a.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
 h1 small{color:var(--fg3);font-weight:400;margin-left:8px;font-size:14px}
-/* 语言切换按钮：与 <nav> 胶囊同套视觉，选中态用青色区分 */
-#btnLang{margin-left:auto;padding:4px 12px;border-radius:13px;font-size:14px;cursor:pointer;
+/* 语言切换按钮：与 <nav> 胶囊同套视觉，选中态用青色区分。
+   推到右侧的 margin-left:auto 由 header.js 给第一个右侧控件统一打 .hdr-first，
+   这里不能再写 —— 右边插了「局域网访问」按钮后两个 auto margin 会平分剩余空间，
+   把按钮顶到正中间被绝对定位的 nav 盖住（点不到、看不见）。 */
+#btnLang{padding:4px 12px;border-radius:13px;font-size:14px;cursor:pointer;
   color:var(--fg2);background:var(--bg3);border:1px solid transparent;
   min-width:66px}
 #btnLang:hover{color:var(--fg)}
@@ -134,7 +137,8 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   font-family:inherit;line-height:1.4}
 .tabPg:hover{color:var(--gold);border-color:#4a3f78}
 .tabPg:disabled{opacity:.35;cursor:default;color:var(--fg3);border-color:transparent}
-#tabs.paged .tabPg{display:block}
+/* 多段时常驻显示（它们是「上一段 / 下一段」，不装不下也该能点） */
+#tabs.paged .tabPg,#tabs.multi .tabPg{display:block}
 
 /* ---------- 舞台 ---------- */
 #stageWrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
@@ -523,3 +527,48 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #charList .char-btn.ep .info .nm{flex:1;min-width:0;font-size:14px}
 #charList .char-btn.ep .info .sub{flex:0 0 auto;white-space:nowrap;gap:6px}
 #charList .char-btn.ep .info .cpy{flex:0 0 auto}
+
+/* 局域网访问浮层（含二维码） */
+#lanPanel{position:fixed;z-index:9999;display:none;width:260px;padding:14px;
+  background:#1c2230;border:1px solid #3a4a60;border-radius:12px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);color:#e6e9f0;font-size:14px;text-align:center}
+#lanPanel .lan-title{font-size:15px;font-weight:600;color:#e0b566;margin-bottom:6px}
+#lanPanel .lan-desc{font-size:14px;color:#9aa4b8;line-height:1.6;margin-bottom:10px;text-align:left}
+#lanPanel .lan-qr{width:200px;height:200px;background:#fff;border-radius:6px;margin:0 auto 8px;display:block}
+#lanPanel .lan-url{font-size:14px;color:#4dd4c4;word-break:break-all;margin-bottom:8px;
+  background:#0b0d12;padding:6px 8px;border-radius:6px;line-height:1.5}
+#lanPanel .lan-hint{font-size:14px;color:#6b7488;line-height:1.6;text-align:left}
+
+/* ================= 全屏（含手机） ================= */
+/* 伪全屏：iOS Safari 不支持 div 的 requestFullscreen，用 CSS 铺满视口顶上 */
+#stageWrap.fsp { position: fixed; inset: 0; z-index: 9990; }
+
+/* 全屏时 #controls 被 JS 搬进 #stageWrap（原生全屏只显示该元素本身），
+   绝对定位压在底部；鼠标/手指静止 2.6s 后自动淡出。 */
+#stageWrap.fs #controls.in-fs {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 86;
+  background: rgba(12, 15, 22, .94); border-top: 1px solid #2a3040;
+  opacity: 0; pointer-events: none; transition: opacity .22s;
+}
+#stageWrap.fs #controls.in-fs.show { opacity: 1; pointer-events: auto; }
+/* 这几个按钮打开的面板在 #stageWrap 之外，全屏时点了也看不见，先收起 */
+#controls.in-fs #btnTrans,
+#controls.in-fs #btnSet,
+#controls.in-fs #btnKeys,
+#controls.in-fs #dlBar { display: none; }
+
+/* 全屏观看时右上角不该有「1.00x 全屏」这种缩放指示文字 */
+#stageWrap.fs #dbgFit { display: none; }
+
+/* 退出全屏：固定右上角，保证任何平台都能一键退出（手机上尤其重要） */
+#fsExit { display: none; }
+#stageWrap.fs #fsExit {
+  display: inline-flex; position: absolute; top: 10px; right: 10px; z-index: 88;
+  align-items: center; padding: 8px 15px; border-radius: 18px;
+  font-size: 14px; font-family: inherit; cursor: pointer;
+  color: #fff; background: rgba(176, 54, 64, .92); border: 1px solid #e07a82;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+  opacity: 0; pointer-events: none; transition: opacity .22s;
+}
+#stageWrap.fs #fsExit.show { opacity: 1; pointer-events: auto; }
+#fsExit:hover { filter: brightness(1.12); }

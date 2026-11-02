@@ -6,6 +6,7 @@
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
 <link rel="stylesheet" href="assets/css/player.css?v=1106a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1102a">
 </head>
 <body>
 <!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
@@ -215,7 +216,7 @@
         <div id="progress"><i></i></div>
         <div id="pinfo"></div>
       </div>
-      <div class="grp gOpt">
+      <div class="grp gOpt gOptA">
         <label class="ctl" data-i18n="ctrl.speed">倍速
           <select id="speed">
             <option value="0.5">0.5x</option>
@@ -229,6 +230,10 @@
         <span class="vsep"></span>
         <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
         <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
+      </div>
+      <!-- 翻译 / 设置 / 快捷键 一组：竖屏时它们是第四行，版本与免责是第五行。
+           分组固定下来，按钮位置就不会随屏幕宽度飘来飘去。 -->
+      <div class="grp gOpt gOptB">
         <button id="btnTrans" title="导出本剧情原文给 AI 翻译，或把译好的 txt 导回">翻译</button>
         <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
         <!-- 快捷键提示原来是一整句占半屏的文字，把进度条挤到了角落；改成最右边的「?」，悬停看全句 -->
@@ -263,33 +268,52 @@
 <script src="assets/js/packstate.js?v=1103a"></script>
 <script src="assets/js/player.js?v=1105a"></script>
 <script src="assets/js/transui.js?v=1120a"></script>
-<script src="assets/js/tour.js?v=1101c"></script>
+<script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
+<script src="assets/js/mobile.js?v=1102a"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
 const TOUR_STEPS = [
-  { el: 'nav a[href="setup.html"]', title: '① 先去「资源管理」装资源',
-    text: '这个程序<b>本身不含</b>游戏图片和语音。第一次用要先去「资源管理」，'
-      + '先下<b>基础数据</b>（资源清单 + 公共素材），再挑你想看的剧情装上。'
-      + '没装的剧情点开会提示「未下载」。' },
-  { el: '#search', title: '② 搜索、排序、筛选',
-    text: '框里输角色名（日文或中文都行）或 ID 就能搜。下面两个下拉可以换<b>排序</b>，'
-      + '也能只看<b>已下载</b>或<b>未下载</b>的剧情。' },
-  { el: '#srcRow', title: '③ 剧情分类',
-    text: '<b>角色</b>是个人剧情 6 段；<b>主线 / 活动 / 其他</b>是公共章节（含开场动画、新手教程）。' },
-  { el: '#charList', title: '④ 点角色开始',
-    text: '点一下就开始播。<b>用鼠标点画面</b>可以暂停或继续，不用去找播放键。' },
-  { el: '#tabs', title: '⑤ 段落切换',
-    text: '每部角色剧情分 6 段，点这里换段。标题右边会显示<b>翻译覆盖率</b>（已译 X/Y 句）。' },
-  { el: '#stage', title: '⑥ 画面区',
-    text: '背景、立绘、对话框都显示在这里。快捷键：<b>空格</b>暂停、<b>回车</b>下一句、按住 <b>K</b> 快进。' },
-  { el: '#controls', title: '⑦ 播放控制',
-    text: '重播、暂停、下一段、倍速、自动播放、进度条都在这一条上。最右边的 ⚙ 打开显示设置。' },
-  { el: '#btnTrans', title: '⑧ 翻译导入 / 导出',
-    text: '导出块式 txt（一句一个 <b>###</b> 块，带编号/说话人/原文行数），交给任意 AI 翻译，再导回即可。<b>这是本项目的核心玩法之一</b>——翻译最需要 AI 帮忙。' },
-  { el: '#btnSet', title: '⑨ 显示设置',
-    text: '字号、行距、描边、对话框样式、立绘大小与偏移、音量、打字速度都在这里，改完立即生效并自动记住。' },
+  { el: 'nav a[href="setup.html"]', title: '① 先装素材，不然没东西可看',
+    text: '这个程序<b>不带游戏的图片和声音</b>。先去「资源管理」点「下载基础数据」'
+      + '（背景、音乐这些所有剧情共用的），再挑一部想看的装上。'
+      + '没装的剧情会标着「未下载」。' },
+  { el: '#search', title: '② 想找哪部就搜哪部',
+    text: '名字记不全也没关系：输一两个字就行。下面两个框可以换排列顺序、'
+      + '只看装好的 / 只没装的；SSR / SR / R 那排是按稀有度挑。' },
+  { el: '#srcRow', title: '③ 剧情分四类',
+    text: '<b>角色</b>是每个人的单独故事；<b>主线 / 活动 / 其他</b>是大家共有的章节。'
+      + '「其他」里已经按游戏里的入口分好组（打 BOSS、愚人节、周年庆那些），'
+      + '点组名展开就能看到每一话。' },
+  { el: '#sHead', title: '④ 列表能收起来',
+    text: '想看得宽敞点，点这个「收起」（或按键盘上的 <b>[</b>），左边列表就收起来了，'
+      + '再点一次放回来。' },
+  { el: '#charList', title: '⑤ 点一下就播',
+    text: '左边点角色、或者「其他」里点具体某一话，立刻开始播，不用再找播放键。'
+      + '播的时候<b>用鼠标点一下画面就能暂停</b>。' },
+  { el: '#tabs', title: '⑥ 这一段 / 下一段',
+    text: '一部剧情分好几段，点这里换段。段太多一行放不下时，右边会出现 <b>◀ ▶</b> 让你翻；'
+      + '左边写着「第几段、共几句」。' },
+  { el: '#stage', title: '⑦ 剧情就演在这块',
+    text: '画面、说话的人、台词都在这块。最常用的三个键：<b>空格</b>暂停、'
+      + '<b>回车</b>下一句、按住 <b>K</b> 快进。' },
+  { el: '#controls', title: '⑧ 底下一排按钮',
+    text: '左边三个是重播、播放/暂停、下一段；中间那条是进度，'
+      + '<b>想往后看就直接点进度条</b>，会跳到那个位置（暂停时只跳过去、不会自己播）；'
+      + '右边是倍速、自动、对话框、全屏、翻译和设置。' },
+  { el: '#btnKeys', title: '⑨ 快捷键记不住就看这里',
+    text: '最右边这个「<b>?</b>」点一下，会把所有快捷键列出来，看一眼就会。'
+      + '点别处、或者按 <b>Esc</b> 就关掉。' },
+  { el: '#btnTrans', title: '⑩ 想把台词变成中文',
+    text: '点「翻译」先导出这部剧的日文原文，把文件交给 AI（比如让我翻），'
+      + '翻好之后再导回来，播放器里就显示中文了。' },
+  { el: '#btnSet', title: '⑪ 字太小、界面不合适',
+    text: '点 ⚙ 可以调字号、行距、对话框的样子、立绘大小、音量和说话速度。'
+      + '改完立刻生效，下次打开还记得。' },
+  { el: '#btnLan', title: '⑫ 手机上也想看',
+    text: '点右上角「局域网访问」会出一个<b>二维码</b>，手机连同一个 WiFi 扫一下，'
+      + '就能在手机上看。扫不开的话，按启动窗口里的提示放行一次就行。' },
 ];
 
 (function () {

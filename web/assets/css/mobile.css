@@ -1,0 +1,315 @@
+/* ============================================================
+ * 移动端 / 窄屏自适应
+ *
+ * 只在 max-width:860px 生效 —— 桌面窗口正常宽度下，本文件一条规则都不命中，
+ * 所以不会影响电脑页面。三页共用一份，避免像以前的"三页三套顶栏"那样走样。
+ *
+ * 顶栏那条用了 body > header[data-shared] 这种比 header.js 注入的
+ * header[data-shared] 更高优先级的写法：header.js 的 <style> 是运行时插到
+ * head 末尾的，排在所有 css 之后，不用提高优先级就会被它盖回去。
+ * ============================================================ */
+
+/* ---------- 「功能请在电脑上使用」弹窗（全局，mb- 前缀，桌面不会触发） ---------- */
+.mbMask { position: fixed; inset: 0; z-index: 10400; background: rgba(4, 7, 12, .86);
+  display: flex; align-items: center; justify-content: center; padding: 18px; }
+.mbBox { width: min(460px, 94vw); background: #0d1622; border: 1px solid #2b4a6b;
+  border-radius: 14px; padding: 20px 22px; color: #dbe8f6; font-size: 15px;
+  line-height: 1.8; box-shadow: 0 18px 60px #000; }
+.mbBox h3 { margin: 0 0 8px; font-size: 18px; color: #ffd77a; }
+.mbBox p { margin: 0 0 10px; }
+.mbBox .mbWhy { color: #c7d9ec; }
+.mbBox .mbHint { color: #7d92ab; font-size: 14px; }
+.mbBox .mbPrimary { background: #2b6ea8; border: 1px solid #4b96d4; color: #fff;
+  border-radius: 9px; padding: 9px 20px; font-size: 15px; font-weight: 600;
+  cursor: pointer; }
+.mbBox .mbPrimary:hover { filter: brightness(1.12); }
+
+/* CG 页的「角色列表」抽屉开关（只在窄屏出现，桌面不显示） */
+#mbSideBtn { display: none; }
+
+@media (max-width: 860px) {
+
+  /* ---------- 三页共用顶栏：改成两行 ---------- */
+  /* 一行放不下"标题 + 居中导航 + 右侧按钮"：第一行标题与右侧控件，
+     第二行导航横向滚动（不换行、不挤压，滑一下就能看到全部）。 */
+  body > header[data-shared] {
+    height: auto; min-height: 50px; max-height: none;
+    flex-wrap: wrap; align-items: center;
+    padding: 6px 10px; gap: 6px 8px;
+  }
+  body > header[data-shared] h1 { font-size: 15px; }
+  /* 副标题（统计数字）在手机上只会挤掉导航，先收起来 */
+  body > header[data-shared] h1 small { display: none; }
+  body > header[data-shared] > nav {
+    position: static; left: auto; transform: none;
+    order: 10; width: 100%; margin: 0;
+    display: flex; gap: 4px; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  body > header[data-shared] > nav::-webkit-scrollbar { display: none; }
+  body > header[data-shared] > nav a {
+    flex: none; padding: 4px 10px; white-space: nowrap;
+  }
+  body > header[data-shared] #btnLan { min-width: 0; padding: 4px 9px; }
+  /* 资源管理页右上角的统计（"已装 611/611 · 缓存 24.68 GB"）很长，
+     默认会把 ? 和 GitHub 挤到第二行、导航再被挤到第三行。
+     让它可收缩 + 省略号，顶栏就只要两行。 */
+  body > header[data-shared] #hdrStat {
+    flex: 1 1 0; min-width: 0; margin-left: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 14px;
+  }
+
+  /* ---------- 三页共用：占据剩余高度的主容器 ---------- */
+  /* 竖屏用 dvh，地址栏收起/展开时不会把底部控制条顶出屏幕外 */
+  body { display: flex; flex-direction: column; height: 100vh; height: 100dvh;
+    overflow: hidden; }
+  /* 三页的 .layout 原本是横排（侧栏 + 主区）。窄屏统一改成竖排：
+     播放器 / CG 页的侧栏在上面已经 position:fixed 脱离文档流，主区独占；
+     资源管理页则变成「顶部横向导航条 + 下面内容」。 */
+  .layout { flex: 1; min-height: 0; height: auto; flex-direction: column; }
+  /* 必须显式 min-height:0：.layout 变竖排后 main 成了 flex 子项，
+     默认 min-height:auto 会按内容（#stage 固定 720px）撑开，
+     实测把 main 顶到 948px、整个布局溢出（横屏尤其明显）。 */
+  main { min-height: 0; }
+
+  /* ---------- 播放器：左右侧栏改成盖在页面上的抽屉 ---------- */
+  /* 手机上 300px 的固定侧栏会把舞台挤没。改成抽屉，开合逻辑直接复用
+     player.js 现成的 .hide + #sTab/#hTab 把手，不改它的 JS。 */
+  #sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0;
+    width: min(86vw, 340px); z-index: 220;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, .55);
+  }
+  #history {
+    position: fixed; top: 0; bottom: 0; right: 0;
+    width: min(86vw, 340px); z-index: 220;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, .55);
+  }
+  #sTab, #hTab { z-index: 230; }
+
+  /* CG 页没有现成的开合逻辑：默认滑出屏幕，点「角色列表」再拉回来 */
+  body.mb-cg #sidebar {
+    transform: translateX(-100%); transition: transform .18s ease;
+  }
+  body.mb-cg #sidebar.mbOpen { transform: none; }
+  #mbSideBtn {
+    display: block; position: fixed; left: 10px; bottom: 12px; z-index: 240;
+    padding: 8px 14px; border-radius: 20px; font-size: 14px; cursor: pointer;
+    color: #e6e9f0; background: rgba(28, 34, 48, .96);
+    border: 1px solid #3a4a60; box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+    font-family: inherit;
+  }
+  #mbSideBtn:hover { border-color: #5a6f8a; }
+
+  /* 控制条：第一行播放三连，第二行工具按钮横向滚动，进度条独占一行 */
+  #controls { gap: 8px; row-gap: 8px; padding: 8px 10px; }
+  #controls .gPlay { flex: 0 0 auto; }
+  #controls .gProgress { flex: 1 1 100%; order: 3; min-width: 0; }
+  #controls .gOpt {
+    flex: 1 1 100%; order: 2; overflow-x: auto; flex-wrap: nowrap;
+    padding-bottom: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  #controls .gOpt::-webkit-scrollbar { display: none; }
+  #controls .gOpt button, #controls .gOpt label { flex: none; }
+  #controls button { padding: 6px 11px; }
+  #pinfo { max-width: 44vw; }
+
+  /* 设置面板：窄屏直接铺满，否则右侧一列会被裁掉。
+     max-height 也要放开，否则被桌面的 calc(100vh - 62px) 卡住、底部留一条缝。 */
+  #settings {
+    width: 100vw; left: 0; right: 0; top: 0; bottom: 0;
+    height: auto; max-height: none;
+    grid-template-columns: 1fr; border-radius: 0; padding: 16px 14px 96px;
+    /* 全屏铺满时用不透明底色，否则背后的按钮/导航会透出来很乱 */
+    background: #121620;
+    /* 必须压过左右把手（#sTab/#hTab z-index 230）和竖屏提示条（215），
+       否则它们会浮在设置面板上挡住内容 */
+    z-index: 300;
+  }
+  /* 关闭按钮：player.js 的 place() 会写 inline style（桌面是贴面板左侧垂直居中），
+     全屏面板下那位置正好压在左边缘的「剧情列表」把手上、30px 小圆点根本找不到。
+     手机上固定到右上角并加大 —— 必须 !important 才能压过 inline style。 */
+  #setClose {
+    top: 10px !important; right: 10px !important;
+    left: auto !important; bottom: auto !important;
+    transform: none !important;
+    width: 40px !important; height: 40px !important;
+    font-size: 17px !important; z-index: 310 !important;
+  }
+
+  /* 段标签条横向滚动，别把翻页按钮挤出去 */
+  #tabs { padding: 4px 8px; gap: 6px; }
+  #tabStrip { overflow-x: auto; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch; }
+  #tabStrip::-webkit-scrollbar { display: none; }
+
+  /* 对话框占满宽度，别让两侧留白把字挤成一条 */
+  #msgWindow { left: 4%; right: 4%; width: 92%; }
+
+  /* ---------- CG 页 ---------- */
+  /* 底部留够高度：左下角那个「☰ 角色列表」悬浮按钮会压住最后一张卡片的文字 */
+  #grid { --cardMin: 44vw; padding: 10px 10px 72px; gap: 10px; }
+  #bar { flex-wrap: wrap; row-gap: 6px; padding: 6px 10px; }
+  #bar .sizes { margin-left: 0; flex-wrap: wrap; }
+  #lbTop, #lbBottom { flex-wrap: wrap; padding: 8px 10px; }
+  /* 手机没有键盘，方向键提示纯占地方 */
+  #lbHint { display: none; }
+
+  /* ---------- 资源管理：竖排侧栏改成顶部横向滚动 ---- */
+  #side {
+    width: auto; flex: none; flex-direction: row;
+    overflow-x: auto; overflow-y: hidden;
+    padding: 8px; gap: 6px;
+    border-right: none; border-bottom: 1px solid var(--line);
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  #side::-webkit-scrollbar { display: none; }
+  #side button { white-space: nowrap; flex: none; padding: 7px 12px; }
+  body.mb-setup main { padding: 14px 12px 100px; }
+  section { max-width: none; }
+  .cards { grid-template-columns: 1fr; }
+  .card button { width: 100%; }
+  /* 「名称 / 说明 / 状态」三列在手机上放不下，改成上下堆叠 */
+  .basepack .bp-row { grid-template-columns: 1fr; gap: 4px; justify-items: start; }
+  .basepack .bp-row > :last-child { justify-self: start; }
+  .statGrid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .cleanRow { flex-wrap: wrap; row-gap: 8px; }
+  .optrow { flex-wrap: wrap; row-gap: 6px; }
+  .cmpHead { padding: 8px 10px; }
+
+  /* ---------- 右下角「操作记录」浮窗 ---------- */
+  /* 桌面写死 width:392px，手机 390 宽会从左边溢出屏幕。
+     用 min() 兜住：窄屏铺满可用宽度，横屏 / 平板上仍保持 392。 */
+  body.mb-setup #actPanel {
+    right: 8px; width: min(392px, calc(100vw - 16px)); max-height: 46vh;
+  }
+  body.mb-setup .apHead { gap: 6px; padding: 6px 8px; }
+  body.mb-setup .apTitle { font-size: 14px; }
+  body.mb-setup .apBtn { padding: 2px 6px; }
+  body.mb-setup .apChk { font-size: 14px; }
+  /* 折叠态收成右下角一个小框（只留「操作记录 + 展开」），
+     展开时才铺满可用宽度，避免默认横着挡内容 */
+  /* max-height 也要写：上面那条 body.mb-setup #actPanel 的优先级高于
+     setup.css 的 #actPanel.collapsed，不显式覆盖的话折叠态会被撑到 46vh */
+  body.mb-setup #actPanel.collapsed { width: auto; max-height: 34px; }
+  body.mb-setup #actPanel.collapsed .apChk,
+  body.mb-setup #actPanel.collapsed #apClear { display: none; }
+  body.mb-setup #actPanel.collapsed .apTitle { flex: none; }
+  /* 有新记录但仍保持收起时，标题旁点一个小圆点提示"里面还有内容" */
+  body.mb-setup #actPanel.has-new .apTitle::after {
+    content: ' •'; color: var(--warn, #e0a33a); font-weight: 700;
+  }
+
+  /* ---------- 底部任务条 ---------- */
+  /* 桌面把「标题 / 消息 / 进度 / 数字」挤在一行，手机上必然横向溢出。
+     改成堆叠：标题+取消 一行、消息一行、进度条独占一行、数字靠左一行。 */
+  body.mb-setup .job {
+    flex-wrap: wrap; row-gap: 6px; gap: 8px; padding: 8px 12px;
+  }
+  body.mb-setup .job .jt { min-width: 0; flex: 1 1 60%; font-size: 14px; }
+  body.mb-setup .job .jx { flex: 0 0 auto; font-size: 16px; }
+  body.mb-setup .job .jm { flex: 1 1 100%; order: 2; }
+  body.mb-setup .job .jp { flex: 1 1 100%; max-width: none; order: 3; }
+  body.mb-setup .job .jv {
+    min-width: 0; flex: 1 1 100%; max-width: none;
+    align-items: flex-start; order: 4;
+  }
+}
+
+/* ============================================================
+ * 手机竖屏：控制栏改成四行居中
+ *
+ * 原来工具按钮挤在一条里靠横向滑动，用户根本不知道右边还藏着功能
+ * （用户 2026-11-02 反馈）。竖屏宽度够，就全部平铺出来：
+ *   1 重播 / 播放 / 下一段
+ *   2 进度条 + 段信息
+ *   3 倍速 / 自动 / 对话框 / 全屏 / 翻译
+ *   4 设置 / ? / 版本号 / 免责声明
+ * 进度条单独一行是必须的：塞进任何一行都会短到没法拖。
+ * ============================================================ */
+@media (orientation: portrait) and (max-width: 860px) {
+  #controls { justify-content: center; row-gap: 7px; padding: 8px 8px; }
+  #controls .gPlay { flex: 0 0 100%; justify-content: center; }
+  #controls .gProgress { flex: 1 1 100%; order: 2; min-width: 0; gap: 8px; }
+  /* 第三行：倍速 / 自动 / 对话框 / 全屏 */
+  #controls .gOptA {
+    flex: 0 0 100%; order: 3; justify-content: center; gap: 6px;
+    overflow: visible; flex-wrap: wrap;
+  }
+  /* 第四行：翻译 / 设置 / ? */
+  #controls .gOptB {
+    flex: 0 0 100%; order: 4; justify-content: center; gap: 8px;
+    overflow: visible; flex-wrap: wrap;
+  }
+  /* 第五行：版本号 + 免责声明 */
+  #controls #dlBar.inline {
+    order: 5; flex: 1 1 100%; margin-left: 0; justify-content: center;
+  }
+  /* 换行后竖向分隔线没有意义，留着反而让行不居中 */
+  #controls .gOpt .vsep { display: none; }
+}
+
+/* ============================================================
+ * 手机横屏：紧凑模式
+ *
+ * 播放器是 16:9 的横版舞台，横屏才是它的主场。但横屏可用高度往往只有
+ * 330–430px，顶栏/控制条各占两行就会把舞台挤成一条缝。这里全部压回单行，
+ * 把高度让给舞台。
+ * ============================================================ */
+@media (orientation: landscape) and (max-height: 520px) {
+  /* 顶栏回到单行 50px：横屏宽度足够，换行只是白占高度 */
+  body > header[data-shared] {
+    height: 50px; min-height: 50px; max-height: 50px;
+    flex-wrap: nowrap; padding: 0 10px; gap: 10px; align-items: center;
+  }
+  body > header[data-shared] > nav {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    order: 0; width: auto; overflow: visible;
+  }
+  body > header[data-shared] > nav a { padding: 3px 9px; }
+
+  /* 控制条单行：左侧播放三连固定，进度条弹性，右侧工具横向滑动 */
+  #controls { flex-wrap: nowrap; padding: 5px 8px; gap: 8px; overflow: hidden; }
+  #controls .gPlay { flex: 0 0 auto; }
+  #controls .gProgress { flex: 1 1 60px; order: 0; min-width: 60px; }
+  #controls .gOpt { flex: 0 1 auto; order: 0; overflow-x: auto;
+    flex-wrap: nowrap; scrollbar-width: none; }
+  #controls .gOpt::-webkit-scrollbar { display: none; }
+  #controls .gOpt button, #controls .gOpt label { flex: none; }
+  #controls button { padding: 5px 9px; height: 28px; }
+  /* 段信息在横屏只会挤占进度条，收起来（进度条本身够看） */
+  #pinfo { display: none; }
+  #tabs { padding: 3px 10px; }
+  #meta { font-size: 14px; }
+
+  /* 抽屉窄一点，别盖掉大半个画面 */
+  #sidebar, #history { width: min(64vw, 320px); }
+
+  /* 播放器设置面板：横屏两列，高度不够就滚动 */
+  #settings { grid-template-columns: 1fr 1fr; padding: 12px 14px 60px; }
+
+  /* CG 页：横屏可以回到多列 */
+  #grid { --cardMin: 30vw; }
+
+  /* 资源管理：横屏导航条更紧凑 */
+  #side { padding: 6px; }
+  #side button { padding: 6px 10px; }
+  body.mb-setup main { padding: 10px 12px 80px; }
+}
+
+/* ============================================================
+ * 竖屏提示：播放器是横版舞台，竖屏会被压成很窄的一条，提醒用户转屏
+ * ============================================================ */
+#mbRotate { display: none; }
+@media (orientation: portrait) and (max-width: 860px) {
+  #mbRotate {
+    display: inline-flex; position: fixed; z-index: 215; left: 50%;
+    transform: translateX(-50%); top: 104px;
+    align-items: center; gap: 6px; padding: 8px 15px; border-radius: 20px;
+    font-size: 14px; font-family: inherit; cursor: pointer; white-space: nowrap;
+    color: #ffe6b8; background: rgba(58, 42, 18, .96);
+    border: 1px solid #6b4a1c; box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+  }
+  #mbRotate:hover { background: rgba(74, 54, 22, .98); }
+}

@@ -25,6 +25,19 @@ def _port_free(port: int, host: str) -> bool:
             return False
 
 
+def _lan_ip() -> str | None:
+    """best-effort 取本机局域网出口 IP（用于打印手机访问地址），失败返回 None。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # 不发任何包，仅借默认路由确定出口网卡地址
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m server",
                                  description="ESCAH 离线阅读器本地服务")
@@ -75,6 +88,10 @@ def main(argv=None) -> int:
     if a.open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     print(f"打开：{url}")
+    if a.host == '0.0.0.0':
+        lan = _lan_ip()
+        if lan:
+            print(f"手机/同网段设备访问：http://{lan}:{port}/{a.page}")
     return api.serve(a.host, port)
 
 

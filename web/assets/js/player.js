@@ -110,44 +110,136 @@ function fitStage() {
 }
 window.addEventListener('resize', fitStage);
 
-/* ================= 全屏 ================= */
+/* ================= 全屏 =================
+ * 原生全屏只显示被请求的那个元素本身：全屏的是 #stageWrap，写在它外面的
+ * #controls 整条都不可见 —— 所以以前全屏后一个按钮都没有，手机上只能靠系统
+ * 返回键退出。现在的做法：
+ *   · 进全屏时把 #controls 临时搬进 #stageWrap，绝对定位压在底部；
+ *   · 右上角固定一个「✕ 退出全屏」，任何平台都能一键退出；
+ *   · 鼠标 / 手指静止 2.6s 后两者一起淡出，动一下就回来。
+ * 另外 iOS Safari 不支持 div 的 requestFullscreen，退化成 CSS 伪全屏。
+ */
+let _ctlHome = null;            // 控制条原来的父节点与后继兄弟
+let _fsChromeTimer = null;
+
+function _fsActive() {
+  const el = document.getElementById('stageWrap');
+  return !!(document.fullscreenElement || document.webkitFullscreenElement)
+    || !!(el && el.classList.contains('fsp'));
+}
+
 function toggleFullscreen() {
   const el = document.getElementById('stageWrap');
   if (!el) return;
-  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-  if (!fsEl) {
-    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-    if (req) req.call(el);
-  } else {
-    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+  // 已在原生全屏：退出
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen
+      || document.msExitFullscreen;
     if (exit) exit.call(document);
+    return;
+  }
+  // 已在伪全屏：退出
+  if (el.classList.contains('fsp')) {
+    el.classList.remove('fsp');
+    onFsChange();
+    return;
+  }
+  const req = el.requestFullscreen || el.webkitRequestFullscreen
+    || el.msRequestFullscreen;
+  if (req) {
+    try {
+      const p = req.call(el);
+      // 被浏览器拒绝（没有用户手势等）时退化成伪全屏，别什么都不发生
+      if (p && p.catch) p.catch(() => { el.classList.add('fsp'); onFsChange(); });
+      return;
+    } catch (e) { /* 落到下面的伪全屏 */ }
+  }
+  el.classList.add('fsp');
+  onFsChange();
+}
+
+/* 显示控制条 + 退出按钮，并重置自动淡出计时 */
+function showFsChrome() {
+  const el = document.getElementById('stageWrap');
+  if (!el || !el.classList.contains('fs')) return;
+  const ctl = document.getElementById('controls');
+  const ex = document.getElementById('fsExit');
+  if (ctl) ctl.classList.add('show');
+  if (ex) ex.classList.add('show');
+  el.classList.remove('hidecur');
+  if (_fsChromeTimer) clearTimeout(_fsChromeTimer);
+  _fsChromeTimer = setTimeout(() => {
+    const w = document.getElementById('stageWrap');
+    if (!w || !w.classList.contains('fs')) return;
+    const c = document.getElementById('controls');
+    const e = document.getElementById('fsExit');
+    if (c) c.classList.remove('show');
+    if (e) e.classList.remove('show');
+    w.classList.add('hidecur');
+  }, 2600);
+}
+
+function _fsShowCursor() {
+  showFsChrome();
+}
+
+/* 控制条在「main 里」与「#stageWrap 里」之间来回搬 */
+function _fsMoveControls(on) {
+  const wrap = document.getElementById('stageWrap');
+  const ctl = document.getElementById('controls');
+  if (!wrap || !ctl) return;
+  if (on) {
+    if (!_ctlHome) _ctlHome = { parent: ctl.parentNode, next: ctl.nextSibling };
+    if (ctl.parentNode !== wrap) wrap.appendChild(ctl);
+    ctl.classList.add('in-fs');
+  } else {
+    ctl.classList.remove('in-fs');
+    ctl.classList.remove('show');
+    if (_ctlHome && ctl.parentNode !== _ctlHome.parent) {
+      // 记住的后继兄弟可能已被移除，退回 appendChild
+      if (_ctlHome.next && _ctlHome.next.parentNode === _ctlHome.parent) {
+        _ctlHome.parent.insertBefore(ctl, _ctlHome.next);
+      } else {
+        _ctlHome.parent.appendChild(ctl);
+      }
+    }
+    _ctlHome = null;
   }
 }
-let _fsMouseTimer = null;
-function _fsShowCursor() {
-  const el = document.getElementById('stageWrap');
-  if (el) el.classList.remove('hidecur');
-  if (_fsMouseTimer) clearTimeout(_fsMouseTimer);
-  _fsMouseTimer = setTimeout(() => {
-    const e = document.getElementById('stageWrap');
-    if (e) e.classList.add('hidecur');
-  }, 2500);
+
+/* 退出按钮：只在第一次进全屏时创建一次，之后复用 */
+function _ensureFsExit() {
+  const wrap = document.getElementById('stageWrap');
+  if (!wrap) return;
+  if (!document.getElementById('fsExit')) {
+    const b = document.createElement('button');
+    b.id = 'fsExit';
+    b.type = 'button';
+    b.textContent = '✕ 退出全屏';
+    b.onclick = (e) => { e.stopPropagation(); toggleFullscreen(); };
+    b.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+    wrap.appendChild(b);
+  }
 }
+
 function onFsChange() {
-  const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const el = document.getElementById('stageWrap');
+  const fs = _fsActive();
   if (el) el.classList.toggle('fs', fs);
   fitStage();
   const b = document.getElementById('btnFs');
   if (b) b.textContent = fs ? '⛶ 退出' : '⛶ 全屏';
-  // 全屏时鼠标静止 2.5s 后隐藏，移动即显
-  if (fs) {
+  _fsMoveControls(fs);
+  if (fs && el) {
+    _ensureFsExit();
     el.addEventListener('mousemove', _fsShowCursor);
-    _fsShowCursor();
+    el.addEventListener('touchstart', _fsShowCursor, { passive: true });
+    showFsChrome();
   } else if (el) {
     el.removeEventListener('mousemove', _fsShowCursor);
+    el.removeEventListener('touchstart', _fsShowCursor);
     el.classList.remove('hidecur');
-    if (_fsMouseTimer) { clearTimeout(_fsMouseTimer); _fsMouseTimer = null; }
+    if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
   }
 }
 document.addEventListener('fullscreenchange', onFsChange);
@@ -1897,13 +1989,22 @@ function tipShow(el, html) {
 function tipHide() {
   if (tipEl) tipEl.classList.remove('show');
 }
+/* 触屏设备没有真正的"鼠标移开"：点列表项会合成一个 mouseenter，但之后
+   不会再有 mouseleave，浮窗就一直挂着挡住画面（手机上点剧情后再点播放，
+   浮窗还压在上面）。所以只在**确实能悬停**的设备上绑这个浮窗。 */
+const CAN_HOVER = !!(window.matchMedia
+  && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+
 function bindTip(el, htmlFn) {
+  if (!CAN_HOVER) return;
   el.addEventListener('mouseenter', () => {
     const h = htmlFn();
     if (h) tipShow(el, h);
   });
   el.addEventListener('mouseleave', tipHide);
 }
+/* 兜底：触摸任何位置都收起浮窗（触屏笔记本这类混合设备上仍可能残留） */
+document.addEventListener('touchstart', tipHide, { passive: true });
 
 /** 头像候选链（imgmap 没有 avatar 段，直接按命名拼） */
 function avatarCands(id) {
@@ -2297,6 +2398,9 @@ function transStats() {
 
 function renderTabs() {
   const strip = $('#tabStrip') || $('#tabs');
+  // 多段时让左右箭头常驻：它们现在是「上一段 / 下一段」，不是标签条滚动条
+  const tabsEl = $('#tabs');
+  if (tabsEl) tabsEl.classList.toggle('multi', (S.data.parts || []).length > 1);
   strip.querySelectorAll('.tab').forEach(e => e.remove());
   S.data.parts.forEach((p, i) => {
     const d = document.createElement('div');
@@ -2333,8 +2437,10 @@ function fitTabs(scrollToActive) {
   const over = s.scrollWidth > s.clientWidth + 2;
   t.classList.toggle('paged', over);
   const prev = $('#tabPrev'), next = $('#tabNext');
-  if (prev) prev.disabled = s.scrollLeft <= 1;
-  if (next) next.disabled = s.scrollLeft >= s.scrollWidth - s.clientWidth - 1;
+  // 箭头现在是「上一段 / 下一段」：可点状态由当前段位置决定，跟滚动位置无关
+  const n = (S.data && S.data.parts) ? S.data.parts.length : 0;
+  if (prev) prev.disabled = n < 2 || ST.part <= 0;
+  if (next) next.disabled = n < 2 || ST.part >= n - 1;
   // 当前段可能被挤到可视区外（切段/翻页后），自动带进视野
   if (scrollToActive) {
     const on = s.querySelector('.tab.on');
@@ -2351,12 +2457,18 @@ function fitTabs(scrollToActive) {
   const s = $('#tabStrip');
   const prev = $('#tabPrev'), next = $('#tabNext');
   if (!s || !prev || !next) return;
-  const page = d => {
-    s.scrollLeft += d * Math.max(120, s.clientWidth * 0.8);
-    fitTabs();
+  /* 原来是「把标签条横向滚一下」，画面完全不变，用户点了会以为按钮坏了
+     （用户 2026-11-02 反馈）。改成真正的「上一段 / 下一段」：直接切段播放，
+     标签条再自动滚到当前段。 */
+  const step = d => {
+    if (!S.data || !S.data.parts) return;
+    const i = ST.part + d;
+    if (i < 0 || i >= S.data.parts.length) return;
+    playPart(i);
+    fitTabs(true);        // playPart 内部已重建标签，这里把当前段滚进视野
   };
-  prev.onclick = () => page(-1);
-  next.onclick = () => page(1);
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
   s.addEventListener('scroll', () => fitTabs(), { passive: true });
   window.addEventListener('resize', () => fitTabs());
 })();
@@ -2456,6 +2568,67 @@ async function switchLang(explicit) {
 }
 if ($('#btnLang')) $('#btnLang').onclick = () => switchLang();
 
+/* ================= 局域网访问（二维码浮层） =================
+ * 只有播放器页有 #btnLan（header.js 仅给 index.html 注入），其它页无此按钮。
+ * 点按钮 → 拉 /api/lan_info 拿本机 IP:端口 → 拼出当前页的局域网 URL
+ * → /api/lan_qr 生成二维码 → 浮层展示二维码与文字地址。点浮层外关闭。 */
+if (document.getElementById('btnLan')) {
+  document.getElementById('btnLan').onclick = (e) => {
+    e.stopPropagation();          // 别让 document 的关闭监听立刻把它关掉
+    toggleLanPanel();
+  };
+}
+document.addEventListener('click', () => closeLanPanel());
+
+let _lanPanel = null;
+function closeLanPanel() {
+  if (_lanPanel) { _lanPanel.style.display = 'none'; _lanPanel.dataset.open = '0'; }
+}
+function buildLanPanel() {
+  const d = document.createElement('div');
+  d.id = 'lanPanel';
+  d.dataset.open = '0';
+  d.innerHTML =
+    '<div class="lan-title">局域网访问</div>' +
+    '<div class="lan-desc">播放器已在局域网内共享。用手机或同网段的电脑扫描下方二维码，' +
+    '即可直接打开本播放器页面。</div>' +
+    '<img class="lan-qr" alt="局域网访问二维码">' +
+    '<div class="lan-url"></div>' +
+    '<div class="lan-hint">若手机扫不出：确认手机与电脑连同一 WiFi，' +
+    '并放行 Windows 防火墙该端口的入站连接。</div>';
+  d.addEventListener('click', (e) => e.stopPropagation());
+  document.body.appendChild(d);
+  return d;
+}
+function toggleLanPanel() {
+  const btn = document.getElementById('btnLan');
+  if (!btn) return;
+  if (!_lanPanel) _lanPanel = buildLanPanel();
+  const p = _lanPanel;
+  if (p.dataset.open === '1') { closeLanPanel(); return; }
+  p.style.display = 'block';
+  p.dataset.open = '1';
+  p.querySelector('.lan-url').textContent = '获取中…';
+  p.querySelector('.lan-qr').removeAttribute('src');
+  // 定位到按钮正下方，右边缘对齐按钮右边缘
+  const r = btn.getBoundingClientRect();
+  const w = p.offsetWidth || 260;
+  let left = r.right - w;
+  if (left < 8) left = 8;
+  p.style.left = left + 'px';
+  p.style.top = (r.bottom + 8) + 'px';
+  fetch('/api/lan_info').then((res) => res.json()).then((info) => {
+    const ip = info.ip || location.hostname;
+    const port = info.port || location.port;
+    const url = 'http://' + ip + ':' + port + location.pathname;
+    p.querySelector('.lan-url').textContent = url;
+    p.querySelector('.lan-qr').src = '/api/lan_qr?text=' + encodeURIComponent(url);
+  }).catch(() => {
+    p.querySelector('.lan-url').textContent =
+      '获取局域网地址失败（请确认服务以 --host 0.0.0.0 启动）';
+  });
+}
+
 /* ================= 事件 ================= */
 $('#btnPlay').onclick = () => {
   if (ST.running) {
@@ -2481,7 +2654,27 @@ $('#btnNext').onclick = () => {
   playPart(n);
 };
 // 点击舞台 = 暂停/播放（与 P 键一致）
-$('#stage').onclick = () => togglePlay();
+let _lastStageTap = 0;
+$('#stage').onclick = () => {
+  const wrap = document.getElementById('stageWrap');
+  const inFs = !!(wrap && wrap.classList.contains('fs'));
+  /* 触屏 + 全屏：单击只呼出控制条，双击才暂停/继续。
+     否则每次想看一眼按钮都会顺手把播放暂停掉（用户 2026-11-02 反馈）。
+     桌面仍保持单击暂停 —— 鼠标用户已经习惯那样。 */
+  if (inFs && !CAN_HOVER) {
+    const now = Date.now();
+    if (now - _lastStageTap < 300) {      // 300ms 内第二次点击 = 双击
+      _lastStageTap = 0;
+      togglePlay();
+      showFsChrome();
+      return;
+    }
+    _lastStageTap = now;
+    showFsChrome();                        // 单击：只把控制条叫出来
+    return;
+  }
+  togglePlay();
+};
 $('#hToggle').onclick = () => {
   const h = $('#history');
   h.classList.toggle('hide');

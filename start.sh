@@ -16,4 +16,5 @@ if ! $PY -c "import PIL" >/dev/null 2>&1; then
   echo "[!] 缺少 Pillow（转 WebP / 超分需要）。安装： $PY -m pip install pillow"
 fi
 
-exec $PY -m server --open "$@"
+# 默认监听 0.0.0.0（局域网），手机/同网段设备可访问；本机仍可用 127.0.0.1
+exec $PY -m server --host 0.0.0.0 --open "$@"

@@ -430,6 +430,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _qr(self, text: str):
+        """把文字编码成 PNG 二维码返回（前端用于局域网扫码访问）。"""
+        import io
+        try:
+            import qrcode
+        except Exception as e:                              # noqa: BLE001
+            return self._err("服务端缺少二维码库 qrcode：" + str(e), 500)
+        if not text:
+            return self._err("缺少 text 参数", 400)
+        try:
+            img = qrcode.make(text, box_size=12, border=3)
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            data = buf.getvalue()
+        except Exception as e:                              # noqa: BLE001
+            return self._err("生成二维码失败：" + str(e), 500)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _err(self, msg: str, code: int = 400):
         self._status = int(code)
         self._err_msg = str(msg)[:600]
@@ -602,6 +625,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/engine":
             return self._json({"pillow": media.have_pillow(),
                                "engine": media.find_engine()})
+        if path == "/api/lan_info":
+            return self._json(LAN_INFO)
+        if path == "/api/lan_qr":
+            return self._qr(q.get("text") or "")
         if path == "/api/mirrors":
             return self._json(mirrors.summary(q.get("kind") or "pip"))
         if path == "/api/deps/status":
@@ -1093,6 +1120,58 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         }
 
 
+# 局域网访问：服务启动后记录本机出口 IP 与端口，供前端生成二维码
+LAN_INFO = {"ip": None, "port": None}
+
+
+def _lan_ip() -> str | None:
+    """best-effort 取本机局域网 IP（手机能访问的那个），失败返回 None。
+
+    为什么不能只借默认路由：Clash 等代理的 TUN 虚拟网卡会接管默认路由，
+    connect() 拿到的是 198.18.x.x —— 手机根本连不上。所以把所有本机地址
+    收集起来按可信度排序：192.168.* 最优先，其次 10.* / 172.16-31.*，
+    回环、链路本地和 TUN 网段（198.18.0.0/15）直接排除。
+    """
+    import ipaddress
+    import socket
+    _TUN = ipaddress.ip_network("198.18.0.0/15")
+
+    def prio(ip: str) -> int:
+        a = ipaddress.ip_address(ip)
+        if a.is_loopback or a.is_link_local:
+            return 99
+        if a in _TUN:
+            return 98
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        parts = ip.split(".")
+        if parts[0] == "172" and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
+            return 2
+        return 50
+
+    ips = set()
+    try:                            # 默认路由的出口地址（不发任何包）
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ips.add(s.getsockname()[0])
+        finally:
+            s.close()
+    except OSError:
+        pass
+    try:                            # 主机名解析出的地址（覆盖多网卡）
+        ips |= {i[4][0] for i in
+                socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+    except OSError:
+        pass
+    for _p, ip in sorted((prio(i), i) for i in ips):
+        if _p < 90:
+            return ip
+    return None
+
+
 def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     paths.ensure_dirs()
     # data/imgmap.x2.js 被三个页面无条件加载，缺它每次开页面都 404（刷日志 +
@@ -1123,6 +1202,8 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
         print(f"端口 {port} 不可用（{e}），换一个：python -m server -p 8012")
         return 1
     httpd.daemon_threads = True
+    LAN_INFO["ip"] = _lan_ip()
+    LAN_INFO["port"] = port
     print("=" * 56)
     print(f"  ESCAH 离线阅读器  v{paths.app_version()}")
     print("=" * 56)

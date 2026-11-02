@@ -236,6 +236,11 @@ PROLOGUES = [
 #: ``_0`` 段里的「〇名札（角色）」说话人前缀 —— 标题显示时要剥掉
 NAME_TAG_RE = re.compile(r"^[〇○]?名札（[^）]{1,24}）\s*")
 
+#: ``_0`` 段里这些是**占位/演出提示**，不是标题（event_91 的 ``_0`` 就是「タイトルコール」，
+#: 不挡掉的话侧栏会显示一行「タイトルコール」当标题）。
+TITLE_PLACEHOLDER = {"タイトルコール", "タイトル", "アイキャッチ", "オープニング",
+                     "オープニングムービー", "つづく", "おわり", "完", "ＥＮＤ", "END"}
+
 
 def _squash(s: str) -> str:
     """去掉引号与空白，只用于「这几句是不是同一个标题的分解」的判断。"""
@@ -294,6 +299,8 @@ def _part_title(parts: list) -> str:
     uniq = []
     for msg in raw:
         t = _repair_mojibake(NAME_TAG_RE.sub("", msg).strip())
+        if t.strip("「」\"' ") in TITLE_PLACEHOLDER:
+            continue
         if len(t) >= 2 and t not in uniq:
             uniq.append(t)
     if not uniq:
@@ -312,24 +319,33 @@ def _part_title(parts: list) -> str:
 
 
 def load_story_titles() -> dict:
-    """读「封面横幅上识读出来的标题」表（``data/story_titles.json``）。
+    """读剧情标题表 ``data/story_titles.json`` → ``{"titles": {...}, "event_order": {...}}``。
 
     为什么需要这张表：官方剧本包里没有 title 字段，很多章节连 ``_0`` 标题段都没有，
-    标题只存在于封面横幅图的美术字里（见 :func:`_part_title`）。识读结果放在这里，
-    与剧本包解耦 —— 改标题不用重新下载/解析资源。
+    标题只存在于封面横幅图的美术字里（见 :func:`_part_title`）。这些标题与剧本包解耦
+    放在数据文件里 —— 改标题不用重新下载/解析资源，也不用改代码。
+
+    ``event_order`` 是 ``adv_event_<n>`` → 官方一览里的**发表顺序**。注意这不是资源包编号：
+    用户提供的「イベント01…」是剧情上线的时间顺序，而 bundle 是按批次打包的，两者无关
+    （实测 ``adv_event_4`` 是官方第 16 个活动、``adv_event_9`` 是第 2 个）。所以这个对应
+    只能显式记；它同时当活动列表的排序键，因为官方顺序才是用户认知里的顺序。
     """
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "data", "story_titles.json")
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f).get("titles") or {}
+            d = json.load(f)
     except Exception:                                          # noqa: BLE001
-        return {}
+        return {"titles": {}, "event_order": {}}
+    return {"titles": d.get("titles") or {},
+            "event_order": d.get("_event_order") or {}}
 
 
 def sync_advindex() -> int:
     """把已接入的非角色剧情汇总成 ``web/data/advindex.js``（侧栏列表数据源）。"""
-    titles = load_story_titles()
+    info = load_story_titles()
+    titles = info["titles"]
+    ev_order = info["event_order"]
     rows = []
     for fn in os.listdir(DATA):
         if not select.PAT_ADV_FILE.fullmatch(fn):
@@ -353,17 +369,27 @@ def sync_advindex() -> int:
             rel = f"media/img/story/{kind}_{n}.webp"
             if os.path.exists(os.path.join(WEB, rel)):
                 cover = rel
+        # 排序键。序章这类由数据手工指定（0 / 23.5 / 44.5 插在部与部之间），
+        # 普通章节就是章号；活动例外 —— 官方一览的**发表顺序**才是用户认知的顺序，
+        # adv_event_<n> 是 bundle 批次号（1、4、6、16、7… 跳着走），按它排列表是乱的。
+        # 还没接入标题表的新活动排到本类末尾（+1000），补上官方顺序后自动归位。
+        if d.get("order") is not None:
+            order = d["order"]
+        elif ev_order.get(key):
+            order = ev_order[key]
+        elif isinstance(n, (int, float)):
+            order = 1000 + n if kind == "event" else n
+        else:
+            order = 0
         rows.append({
             "key": key,
             "kind": kind,
             # tutorial / op 无编号，no = None（前端不显示「第X话」）
             "no": n,
-            # 优先级：剧本自带的 title（序章这类）> 封面图识读表 > ``_0`` 段台词。
-            # 识读表放中间：它只在剧本完全没有标题时补位，不会盖掉官方文本。
+            # 优先级：剧本自带的 title（序章这类）> 标题表 > ``_0`` 段台词。
+            # 标题表放中间：它只在剧本完全没有标题时补位，不会盖掉剧本里的文本。
             "title": d.get("title") or titles.get(key) or _part_title(d["parts"]),
-            # 排序用：序章插在部与部之间（0 / 23.5 / 44.5），普通章节就是章号
-            "order": d.get("order") if d.get("order") is not None else (
-                n if isinstance(n, (int, float)) else 0),
+            "order": order,
             "cover": cover,
             "first": _first_line(d["parts"]),
             "parts": len(d["parts"]),

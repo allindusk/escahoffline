@@ -14,12 +14,13 @@
 
   // 每页右上角有什么，也在这里声明（id 保持原样，各自 JS 照旧能找到）
   const EXTRA = {
-    'index.html': ['lang', 'help'],
+    'index.html': ['lan', 'lang', 'help'],
     'cg.html': [],
     'setup.html': ['stat', 'help'],
   };
 
   const CTRL = {
+    lan: '<button id="btnLan" title="局域网访问：本播放器已在局域网内共享。手机或同网段电脑连同一 WiFi 后，用此设备的 IP 地址即可打开本页。点此生成二维码">局域网访问</button>',
     lang: '<button id="btnLang" title="切换显示语言（L）">日本語</button>',
     help: '<button id="btnHelp" title="新手教程：一步步告诉你每个按钮干什么（H）">?</button>',
     stat: '<span id="hdrStat"></span>',
@@ -82,6 +83,11 @@ header[data-shared] #btnHelp,header[data-shared] #btnHelp2{width:28px;height:26p
   padding:0;display:flex;align-items:center;justify-content:center;
   font-size:15.7px;font-weight:700;line-height:1}
 /* 右侧控件靠 .hdr-first 统一左推，这里不再用 :first-of-type 兜底 */
+/* 局域网访问按钮：与语言切换同套胶囊视觉 */
+header[data-shared] #btnLan{padding:4px 12px;border-radius:13px;font-size:14px;
+  cursor:pointer;color:#9aa4b8;background:#1c2230;border:1px solid transparent;
+  min-width:100px;line-height:1.4}
+header[data-shared] #btnLan:hover{color:#e6e9f0;border-color:#3a4a60}
 `;
 
   function currentPage() {

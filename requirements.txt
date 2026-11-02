@@ -38,3 +38,6 @@ playwright>=1.40
 # 帧序列 + 音频时间轴 → mp4。wheel 里自带 ffmpeg 库，不需要外部 ffmpeg.exe。
 av>=12.0
 
+# 局域网访问：播放器生成二维码（纯 Python，无 C 依赖）
+qrcode>=7.0
+
