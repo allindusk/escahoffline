@@ -1148,7 +1148,7 @@
         ? ` · ${human(j.speed)}/s`
         : ` · ${j.speed.toFixed(1)} ${u}/秒`)
       : '';
-      const eta = (j.eta && j.state === 'running') ? `剩 ${secs(j.eta)}` : '';
+      const eta = (j.eta && j.state === 'running') ? j.eta : 0;
       const cls = [j.state === 'failed' ? 'failed' : '',
         j.state === 'done' ? 'done' : '',
         j.paused ? 'paused' : ''].filter(Boolean).join(' ');
@@ -1175,9 +1175,14 @@
       if (j.subTotal && j.subTotal > 0) {
         parts.push(`包 ${Math.round(j.subDone)}/${Math.round(j.subTotal)}`);
       }
-      // 单单元 / 公共素材：退回原来的「个数 x/y」显示
-      if ((!j.itemsTotal || j.itemsTotal <= 1) && j.total) {
-        parts.push(`${Math.round(j.done)}/${Math.round(j.total)} ${j.unit || '个'}`);
+      /* 单单元 / 公共素材：退回「个数 x/y」显示。
+         **必须由后端明确给出单位才显示**（j.unit 非空）：以前缺单位就按"个"
+         兜底，于是下载任务把字节总量当个数渲染成「0/933450 个」—— 一个
+         0.9 MB 的应用更新报出九十多万个文件，用户只会怀疑中病毒。
+         计数单位现在由 set_total(n, "个"/"张"/"部"/"包") 明确声明，
+         字节量只走 bytesDone/bytesTotal（就是左边那行 x MB / y MB）。 */
+      if ((!j.itemsTotal || j.itemsTotal <= 1) && j.total && j.unit) {
+        parts.push(`${Math.round(j.done)}/${Math.round(j.total)} ${j.unit}`);
       }
       if (bsp) parts.push(`${human(bsp)}/s`);
       if (eta) parts.push(`剩 ${secs(eta)}`);

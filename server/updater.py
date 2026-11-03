@@ -469,8 +469,9 @@ def stage(url: str, job) -> str:
         job.log("下载地址不是 GitHub，直接下载（不套反代）")
         routes = [{"id": "direct", "name": "直连", "tpl": "{url}"}]
 
-    job.set_total(1)
-
+    # 这里以前有一句 ``job.set_total(1)``，本意只是"让进度条别一直是空的"，
+    # 结果在任务条上渲染成「0/1 个」——"1 个什么？"，和下面的字节进度并列时
+    # 更像出错了。进度完全由 ``net.download`` 的字节通道驱动，不必再设计数。
     last = None
     for i, route in enumerate(routes, 1):
         if job.cancelled:

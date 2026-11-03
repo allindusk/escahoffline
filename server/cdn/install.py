@@ -946,7 +946,7 @@ def prune_cache(job=None, dry: bool = True) -> dict:
     units = list(local_units())
     if job is not None:
         job.log(f"扫描 {len(units)} 部已装剧情，统计它们引用的 bundle…")
-        job.set_total(max(1, len(units)))
+        job.set_total(max(1, len(units)), "部")
     used = set()
     failed = []
     for i, k in enumerate(units, 1):

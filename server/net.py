@@ -95,7 +95,9 @@ def download(url: str, dest: str, threads: int = 4, job=None,
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     size, ranges = probe(url, headers)
     if job is not None:
-        job.set_total(size or 0)
+        # 只写**字节**通道。``total``/``done`` 是"计数"通道 —— 界面上渲染成
+        # 「已完成 0/933450 个」，把字节数塞进去就变成一个 0.9 MB 的更新包
+        # 报出九十多万个文件（用户 2026-11-03 报的：看着像在偷下东西）。
         job.bytes_total = size or 0
         job.progress(0, message=f"开始下载 {size / 1024 ** 2:.1f} MB")
 

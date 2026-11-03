@@ -133,10 +133,12 @@ def extract(zip_path: str, job=None, convert: bool = False,
     stats = {"files": 0, "bytes": 0, "converted": 0, "failed": 0}
     with zipfile.ZipFile(zip_path) as z:
         infos = [i for i in z.infolist() if not i.is_dir()]
-        total = sum(i.file_size for i in infos) or 1
         if job is not None:
-            job.set_total(total)
+            # 计数通道按**文件数**走（以前塞的是字节总和，任务条上会说
+            # 「已解包 0/734003 个」）；字节量留给 bytes_* 那一对字段。
+            job.set_total(len(infos), "个")
             job.set_items(len(infos))
+            job.bytes_total = float(sum(i.file_size for i in infos))
         base_map = {}
         for info in infos:
             if job is not None and job.cancelled:
@@ -148,7 +150,8 @@ def extract(zip_path: str, job=None, convert: bool = False,
             exists = os.path.exists(dst)
             if exists and not overwrite:
                 if job is not None:
-                    job.progress(add=info.file_size)
+                    job.bytes_done += info.file_size
+                    job.progress(add=1)
                 continue
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             try:
@@ -171,7 +174,8 @@ def extract(zip_path: str, job=None, convert: bool = False,
                         key = os.path.splitext(parts[3])[0]
                         base_map.setdefault(parts[2], {})[key] = _rel_of(new)
             if job is not None:
-                job.progress(add=info.file_size,
+                job.bytes_done += info.file_size
+                job.progress(add=1,
                              message=f"{stats['files']}/{len(infos)} 个文件")
         if base_map:
             ovr = load_overlay("base")
@@ -631,7 +635,7 @@ def _run_upscale(job, eng: dict, pairs, scale: int, extra: str = "") -> dict:
     if not pairs:
         return {"done": 0, "failed": 0, "skipped": 0, "note": "没有需要超分的图"}
 
-    job.set_total(len(pairs))
+    job.set_total(len(pairs), "张")
     job.set_items(len(pairs))
     job.log(f"引擎：{eng['note']}；共 {len(pairs)} 张{extra}")
     x2 = load_overlay("x2")
@@ -697,7 +701,7 @@ def convert_existing(job, quality: int = 88,
                 targets.append((kind, key, p))
     if not targets:
         return {"done": 0, "failed": 0, "note": "没有需要转码的图"}
-    job.set_total(len(targets))
+    job.set_total(len(targets), "张")
     job.set_items(len(targets))
     buf: dict = {}
     ok = fail = 0
@@ -752,7 +756,7 @@ def delete_originals(job=None, kinds=("stand", "back", "cg")) -> dict:
             victims.append(paths.web_path(orig))
     freed = 0
     if job is not None:
-        job.set_total(len(victims))
+        job.set_total(len(victims), "个")
     for p in victims:
         if job is not None and job.cancelled:
             break

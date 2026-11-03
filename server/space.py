@@ -295,7 +295,7 @@ def _remove(files: list[tuple[str, int]], job=None, what: str = "") -> dict:
     got = removed = skipped = 0
     freed = 0
     if job is not None:
-        job.set_total(max(1, len(files)))
+        job.set_total(max(1, len(files)), "个")
         if what:
             job.log(f"{what}：{len(files)} 个文件")
     for i, (p, sz) in enumerate(files, 1):

@@ -94,6 +94,13 @@ class Job:
         return self
 
     def set_total(self, n: float, unit: str = "") -> None:
+        """设置「计数」总量：``total``/``done`` 是给「已完成 x/y 个」用的。
+
+        ``unit`` 是**必给**的量词（个 / 张 / 部 / 包 / 帧）。前端只在 unit
+        非空时才渲染「x/y 单位」那一段 —— 因为 ``total`` 一旦被拿来塞字节数，
+        任务条就会把「911 KB 的更新包」说成「0/933450 个」（2026-11-03 用户报的）。
+        字节口径请只写 ``bytes_total`` / ``bytes_done``。
+        """
         self.total = float(n)
         if unit:
             # snapshot() 读的是 self.unit —— 以前写进了 detail["unit"]，

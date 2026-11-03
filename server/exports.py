@@ -168,7 +168,7 @@ def export_cg(job, chars: list[int] | None = None,
 
     total = sum(len(f) for _, _, f, _u in picked)
     if job is not None:
-        job.set_total(total)
+        job.set_total(total, "个")
         job.set_items(total)
     if not total:
         return {"path": "", "files": 0, "note": "没有匹配到 CG"}
@@ -784,7 +784,7 @@ def _run_import(items: list[dict], mode: str, j=None) -> dict:
             todo.append((unit, text))
     n = len(todo)
     if j:
-        j.set_total(n or 1); j.set_items(n)        # 进度条按部数走
+        j.set_total(n or 1, "部"); j.set_items(n)   # 进度条按部数走
         if n == 0:
             j.progress(done=1, message="没有可导入的内容")
     for i, (unit, text) in enumerate(todo, 1):
@@ -914,7 +914,7 @@ def export_trans_batch(job=None, scope: str = "translated",
     # 否则会变成「译文_20261031_0046_20261031_004651.zip」这种双时间戳。
     dst = _unique_path("译文")
     if job is not None:
-        job.set_total(len(units))
+        job.set_total(len(units), "部")
     n = 0
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
         for i, u in enumerate(units, 1):
