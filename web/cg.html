@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色 CG 查看</title>
-<link rel="stylesheet" href="assets/css/cg.css?v=1103c">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1103b">
+<link rel="stylesheet" href="assets/css/cg.css?v=1104a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1104a">
 </head>
 <body>
 <div class="layout">
@@ -29,10 +29,11 @@
         <option value="date-desc">实装日期 新→旧</option>
         <option value="date-asc">实装日期 旧→新</option>
       </select>
-      <select id="dlFilter" title="按资源状态筛选">
+      <select id="dlFilter" title="筛选：资源状态 / 收藏">
         <option value="">全部角色</option>
         <option value="have">只看已下载</option>
         <option value="miss">只看未下载</option>
+        <option value="fav">只看已收藏</option>
       </select>
     </div>
     <div id="charList"></div>
@@ -60,6 +61,8 @@
     <span id="lbTitle"></span>
     <span id="lbCount" style="color:var(--fg3)"></span>
     <span id="lbGroup" style="color:var(--fg3)"></span>
+    <!-- 收藏当前这一组 CG（整组一张卡片，与卡片左上角的星是同一个状态） -->
+    <button id="lbFav" title="收藏这一组 CG">☆ 收藏</button>
     <!-- 全屏浏览：手机上浏览器地址栏会吃掉一大截高度，进全屏才看得清细节 -->
     <button id="lbFs" title="全屏浏览 (F)">⛶ 全屏</button>
     <button id="lbClose">关闭 Esc</button>
@@ -92,7 +95,9 @@
 <script src="assets/js/common.js?v=1103a"></script>
 <script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
-<script src="assets/js/cg.js?v=1103e"></script>
+<!-- 收藏夹 / 设置：与播放器共用同一份 localStorage（assets/js/userdata.js） -->
+<script src="assets/js/userdata.js?v=1105a"></script>
+<script src="assets/js/cg.js?v=1105a"></script>
 <script src="assets/js/cgexport.js?v=1103a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>

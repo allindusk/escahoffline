@@ -163,6 +163,9 @@
   #lbGroup { display: none; }
   #lbFs { margin-left: auto; flex: 0 0 auto; padding: 5px 9px; }
   #lbClose { margin-left: 0; flex: 0 0 auto; padding: 5px 9px; }
+  /* 收藏按钮在手机上只留星星，文字藏掉：顶栏必须单行，多两个字角色名就被挤没了 */
+  #lbTop #lbFav { flex: 0 0 auto; padding: 4px 8px; }
+  #lbTop #lbFav .t { display: none; }
   /* 底部圆点条在手机上只留一行 */
   #lbBottom { padding: 8px 10px; }
   /* 手机没有键盘，方向键提示纯占地方 */

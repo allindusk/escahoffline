@@ -1424,11 +1424,16 @@
       + '<div class="bar"><i style="width:' + usedPct + '%"></i></div></div>';
 
     // 逐项明细（像账单一样一行一项）：只列有内容的桶。
-    // 具体目录只放在鼠标悬停里 —— 小白看路径没意义，排错时悬停就能看到。
+    // 目录直接排在体积**后面**（小字、灰色、过长省略号，悬停看全）：
+    // 以前只放在 title 里，得把鼠标停在整行上才看得到，对不上号（2026-11-03 用户反馈）。
     const rows = (d.groups || []).map(function (g) {
-      return '<div class="kv" title="' + esc(g.path || '') + '">'
+      return '<div class="kv">'
         + '<span class="nm">' + esc(g.label) + '</span>'
-        + '<span class="sz">' + human(g.bytes) + '</span></div>';
+        + '<span class="sz">' + human(g.bytes) + '</span>'
+        + (g.path
+          ? '<span class="pth" title="' + esc(g.path) + '">' + esc(g.path) + '</span>'
+          : '')
+        + '</div>';
     }).join('');
 
     // "为什么图片数量对不上"：两个口径不同（磁盘上全部图片 vs 映射表里可超分的图），

@@ -110,6 +110,49 @@ select,input,button{font-family:inherit}
   flex-shrink:0;transition:opacity .12s;cursor:pointer}
 .char-btn:hover .cpy{opacity:1}
 .char-btn .cpy:hover{color:var(--cyan)}
+
+/* ---------- 收藏星 / 播放进度 ----------
+ * 星星常驻显示（不是只在 hover 时出现）：用户要能一眼看出"哪些是我收藏的"，
+ * 悬停才出现等于必须一个个扫过去。未收藏用亮灰 ☆，收藏后变金色 ★。
+ * margin-left:auto = **贴到每行最右**：一列星在同一条竖线上，鼠标只需要上下移动
+ * 就能连点（用户 2026-11-03 明确要求，原来跟在"句数"后面左右漂）。
+ * 未收藏的颜色原来是 #454d63，暗到几乎看不见，现在提亮到 #98a3b8 再加一点描边感。 */
+.char-btn .fav{flex:0 0 auto;margin-left:auto;cursor:pointer;font-size:18px;line-height:1;
+  color:#98a3b8;padding:1px 1px 1px 6px;border-radius:4px;
+  text-shadow:0 0 6px rgba(0,0,0,.55);
+  transition:color .12s,transform .12s,background .12s;user-select:none}
+.char-btn .fav:hover{color:var(--gold);transform:scale(1.15);
+  background:rgba(224,181,102,.12)}
+.char-btn .fav.on{color:var(--gold);text-shadow:0 0 8px rgba(224,181,102,.55)}
+.char-btn .pg{flex:0 0 auto;color:var(--cyan);opacity:.9;white-space:nowrap}
+.char-btn.on .pg{color:inherit;opacity:.85}
+/* 播放记录的每一行：左侧没有头像/横幅，用左边的竖条标一下"这是记录" */
+#charList .char-btn.hrow{padding:6px 8px;margin-bottom:3px;border:1px solid #1f2733;
+  border-left:2px solid #3a6d78;border-radius:6px;background:#121820}
+#charList .char-btn.hrow:hover{border-color:#3a4a5e;border-left-color:var(--cyan);
+  background:#181f2a}
+#charList .char-btn.hrow.on{border-color:rgba(224,181,102,.55);border-left-color:var(--gold);
+  background:linear-gradient(90deg,#3a2d5c,#2a2340)}
+/* 记录行的信息比角色行多（段 / 进度 / 句数 / 时间），
+   必须让每一项整体换行，否则每一项都被压窄、文字在格子里竖着断行 */
+#charList .char-btn.hrow .sub{flex-wrap:wrap;row-gap:1px;column-gap:8px}
+#charList .char-btn.hrow .sub > span{white-space:nowrap}
+/* 「主 / 活 / 他」在这里当小标签，不能套用 42×42 的色块 */
+#charList .char-btn.hrow .nm .srcTag{width:auto;height:auto;display:inline-block;
+  padding:0 5px;margin-right:5px;font-size:14px;line-height:17px;font-weight:600;
+  vertical-align:1px;border-radius:4px}
+#charList .char-btn.hrow .del{flex:0 0 auto;color:var(--fg3);cursor:pointer;
+  padding:0 3px;font-size:14px;opacity:.55}
+#charList .char-btn.hrow:hover .del{opacity:1}
+#charList .char-btn.hrow .del:hover{color:#e06c75}
+#charList .histBar{display:flex;align-items:center;gap:8px;padding:2px 6px 7px;
+  font-size:14px;color:var(--fg3)}
+#charList .histBar button{margin-left:auto;padding:2px 10px;border-radius:6px;
+  border:1px solid var(--line);background:var(--bg3);color:var(--fg3);
+  font-size:14px;cursor:pointer}
+#charList .histBar button:hover{color:#e06c75;border-color:#5a3038}
+/* 「播放记录」是 rar-row 的第四格：四个字比 SSR/SR/R 宽，多分一点宽度 */
+.rar-row button[data-f="hist"]{flex:1.3;white-space:nowrap;overflow:hidden}
 #toast{position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:200;
   background:rgba(45,42,74,.97);color:var(--gold);border:1px solid #4a3f78;
   padding:6px 18px;border-radius:20px;font-size:14px;opacity:0;

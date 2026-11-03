@@ -22,6 +22,60 @@ const ADV_TITLE = (() => {
   return m;
 })();
 const isCat = id => id < 0;
+
+/* ---------- 收藏（与播放器共用 assets/js/userdata.js） ----------
+ * 收藏粒度 = **一组 CG**（卡片），因为"一组"才是游戏里一次事件的那批图；
+ * 单张图在灯箱里翻，收藏单张会让"已收藏"这个筛选变得没法看（一张一张列）。
+ * favId 用 cgmap 里的「桶id|组名」，重跑 build_cgmap 也不会变。 */
+const UD = window.UD || null;
+const favIdOf = g => g.c + '|' + g.k;
+const isGFav = g => !!(UD && UD.isFav('cg', favIdOf(g)));
+function favOnlyMode() {
+  return (($('#dlFilter') || {}).value || '') === 'fav';
+}
+/** 收藏了多少组（侧栏「全部」那一行的计数用） */
+function favGroupCount() {
+  let n = 0;
+  for (const g of GROUPS) if (isGFav(g)) n++;
+  return n;
+}
+function toggleGFav(g) {
+  if (!UD) return false;
+  const on = UD.toggleFav('cg', favIdOf(g));
+  refreshFavMarks();
+  return on;
+}
+/** 收藏状态变了：卡片上的星、灯箱按钮、以及"只看已收藏"时的列表都要跟着变 */
+function refreshFavMarks() {
+  document.querySelectorAll('#grid .card').forEach(card => {
+    const gi = +card.dataset.gi;
+    if (!Number.isInteger(gi) || !GROUPS[gi]) return;
+    const on = isGFav(GROUPS[gi]);
+    const st = card.querySelector('.fav');
+    if (st) {
+      st.classList.toggle('on', on);
+      st.textContent = on ? '★' : '☆';
+      st.title = on ? '取消收藏这一组' : '收藏这一组';
+    }
+  });
+  updateLbFav();
+  if (!favOnlyMode()) return;
+  /* 「只看已收藏」时取消收藏 = 这一组要从墙上消失，整墙都要重排。
+     灯箱若正好开着，重排后要回到同一组（否则用户会看到画面莫名其妙换了一张）。 */
+  const keep = (lb.g >= 0 && visible[lb.g] != null) ? GROUPS[visible[lb.g]] : null;
+  const keepImg = lb.i;
+  renderChars();
+  renderGrid();
+  if (!keep) return;
+  const pos = visible.findIndex(gi => GROUPS[gi] === keep);
+  if (pos >= 0) {
+    lb.g = pos;
+    lb.i = Math.max(0, Math.min(keepImg, keep.f.length - 1));
+    paintLB();
+  } else {
+    closeLB();
+  }
+}
 /* 图片候选链：本地超分 → 本地转码 → 出厂映射 → 直接拼路径。
    改造前这里硬编码 media/img_x2/，只下原图的新用户会满屏裂图。 */
 const IMGX2 = window.__IMGX2 || {};
@@ -156,7 +210,18 @@ function unitTitle(u, fallback) {
 
 /* ---------- 状态 ---------- */
 const PAGE = 120;        // 每次渲染的卡片数，滚动到底自动追加
-let scope = 'char';      // 'char' = 角色 CG；-1/-2/-3 = 主线/活动/其他剧情 CG
+/* 「角色 / 主线 / 活动 / 其他」也要记住：用户在这四个范围之间来回切，
+   每次打开都跳回「角色」等于每次都得重新点一遍（2026-11-03 要求保存筛选条件）。 */
+const SCOPE_KEY = 'escah_cg_scope';
+let scope = (function () {
+  // 偏好层优先（可能来自别的设备），老键只作为迁移来源
+  let v = (UD && UD.prefValue) ? UD.prefValue('ui', 'cgScope', null) : null;
+  if (v == null) { try { v = localStorage.getItem(SCOPE_KEY); } catch (e) { } }
+  if (v === 'char') return 'char';
+  const n = +v;
+  if (n === -1 || n === -2 || n === -3) return n;
+  return 'char';
+})();                     // 'char' = 角色 CG；-1/-2/-3 = 主线/活动/其他剧情 CG
 let curChar = null;      // 角色范围下选中的角色；null = 全部
 let curUnit = null;      // 剧情范围下选中的剧情 key；null = 全部
 let keyword = '';
@@ -196,7 +261,10 @@ const lb = { g: -1, i: 0 };   // 灯箱：在 visible 中的位置 + 组内张�
 
 /* URL 参数：?char=377 直接定位角色；?g=事件组序号 直接开灯箱 */
 const usp = new URLSearchParams(location.search);
-if (usp.get('char') && chars.has(+usp.get('char'))) curChar = +usp.get('char');
+if (usp.get('char') && chars.has(+usp.get('char'))) {
+  curChar = +usp.get('char');
+  scope = 'char';          // 指定了角色就必须在角色范围里，不然侧栏和墙对不上
+}
 
 /* ---------- 侧栏 ---------- */
 function thumbOf(c) {
@@ -212,16 +280,21 @@ function renderChars() {
 
 /** 角色范围：384 个角色（不含 -1/-2/-3 剧情桶） */
 function renderCharList(box) {
+  const favMode = favOnlyMode();
   const all = el('div', 'char-btn all' + (curChar === null ? ' on' : ''));
-  all.textContent = `全部角色（${withCG.length}）`;
+  all.textContent = favMode
+    ? `全部（已收藏 ${favGroupCount()} 组）`
+    : `全部角色（${withCG.length}）`;
   all.onclick = () => { curChar = null; renderChars(); renderGrid(); };
   box.appendChild(all);
 
   let list = withCG;
-  // 已下载 / 未下载筛选（和播放器、安装列表同一套口径）
+  // 已下载 / 未下载 / 已收藏筛选（同一套口径，和播放器一致）
   const dlf = ($('#dlFilter') || {}).value || '';
   if (dlf === 'have') list = list.filter(c => dlHave(c.id));
   if (dlf === 'miss') list = list.filter(c => !dlHave(c.id));
+  // 只看已收藏：侧栏只留"下面有收藏过 CG"的角色，否则点哪个都是空墙
+  if (dlf === 'fav') list = list.filter(c => c.groups.some(gi => isGFav(GROUPS[gi])));
 
   if (keyword) {
     const k = keyword.toLowerCase();
@@ -269,14 +342,18 @@ function renderCatList(box, id) {
   const totalG = units.reduce((a, u) => a + u.groups.length, 0);
   const totalI = units.reduce((a, u) => a + u.imgs, 0);
 
+  const favMode = favOnlyMode();
   const all = el('div', 'char-btn all' + (curUnit === null ? ' on' : ''));
-  all.textContent = `全部（${units.length} 部 / ${totalG} 组 / ${totalI} 张）`;
+  all.textContent = favMode
+    ? `全部（已收藏 ${units.reduce((a, u) => a + u.groups.filter(gi => isGFav(GROUPS[gi])).length, 0)} 组）`
+    : `全部（${units.length} 部 / ${totalG} 组 / ${totalI} 张）`;
   all.onclick = () => { curUnit = null; renderChars(); renderGrid(); };
   box.appendChild(all);
 
   const dlf = ($('#dlFilter') || {}).value || '';
   if (dlf === 'have') units = units.filter(u => u.groups.some(gi => groupHave(GROUPS[gi])));
   if (dlf === 'miss') units = units.filter(u => u.groups.some(gi => !groupHave(GROUPS[gi])));
+  if (dlf === 'fav') units = units.filter(u => u.groups.some(gi => isGFav(GROUPS[gi])));
 
   if (keyword) {
     const k = keyword.toLowerCase();
@@ -331,6 +408,8 @@ function renderGrid() {
     // 于是"只看未下载"时左侧空了、墙上还是满的，同一个控件两套答案
     if (dlf === 'have' && !groupHave(g)) continue;
     if (dlf === 'miss' && groupHave(g)) continue;
+    // 只看已收藏：按"组"筛，星星在卡片左上角
+    if (dlf === 'fav' && !isGFav(g)) continue;
     if (keyword) {
       const k = keyword.toLowerCase();
       const ch = chars.get(g.c);
@@ -367,7 +446,8 @@ function renderGrid() {
   } else {
     who = ` · ${CATS[scope]}` + (curUnit ? ` · <b>${unitTitle(curUnit)}</b>` : '');
   }
-  $('#barInfo').innerHTML = `<b>${visible.length}</b> 组 · <b>${totalImgs}</b> 张` + who;
+  $('#barInfo').innerHTML = `<b>${visible.length}</b> 组 · <b>${totalImgs}</b> 张` + who
+    + (favOnlyMode() ? ' · 只看已收藏' : '');
   updateExportBtn();
 
   const grid = $('#grid');
@@ -402,16 +482,21 @@ function appendCards() {
     const ch = chars.get(g.c) || { name: CATS[g.c] || ('ID ' + g.c), zh: '' };
     const unit = g.u ? unitTitle(g.u, g.k) : '';
     const card = el('div', 'card');
+    // 收藏状态刷新（refreshFavMarks）靠 data-gi 找到对应的组，别在 DOM 里重新查表
+    card.dataset.gi = gi;
     // 该角色没下载 → 缩略图必然 404，直接给占位底色（点开会有提示）
     const have = groupHave(g);
     // 状态还没拿到时先写"读取中"，别一口断言"未下载"（首屏会闪一整墙未下载）
     const tip = dlReady || isCat(g.c) ? '未下载' : '读取中';
+    const fav = isGFav(g);
     card.innerHTML =
       `<div class="thumb${have ? '' : ' noimg'}">` +
         (have
           ? `<img alt="" loading="lazy" decoding="async">`
           : `<span class="noimg-tip">${tip}</span>`) +
         `<span class="badge">${g.f.length}</span>` +
+        `<span class="fav${fav ? ' on' : ''}" title="${fav ? '取消收藏这一组' : '收藏这一组'}">`
+          + `${fav ? '★' : '☆'}</span>` +
       `</div>` +
       `<div class="cap">` +
         `<span class="cn">${g.u ? unit : ch.name}</span>` +
@@ -419,6 +504,11 @@ function appendCards() {
         `<span class="ck"><span>${g.k}</span>` +
         `<span>${g.u ? unit : 'ID ' + g.c}</span></span>` +
       `</div>`;
+    // 星要挡住冒泡：否则点收藏会顺手把灯箱打开
+    card.querySelector('.fav').onclick = ev => {
+      ev.stopPropagation();
+      toggleGFav(g);
+    };
     card.onclick = () => openLB(gi, 0);
     if (have) setChain(card.querySelector('.thumb img'), cgCands(g.f[0]));
     frag.appendChild(card);
@@ -458,6 +548,21 @@ function paintLB() {
     d.onclick = () => { lb.i = i; paintLB(); };
     dots.appendChild(d);
   });
+  updateLbFav();
+}
+
+/** 灯箱顶栏的收藏按钮：跟着当前这一组的状态走 */
+function updateLbFav() {
+  const b = $('#lbFav');
+  if (!b) return;
+  const g = (lb.g >= 0 && visible[lb.g] != null) ? GROUPS[visible[lb.g]] : null;
+  if (!g) { b.hidden = true; return; }
+  b.hidden = false;
+  const on = isGFav(g);
+  // 文字包在 .t 里：手机上顶栏挤，CSS 会把文字藏掉只留星星
+  b.innerHTML = (on ? '★' : '☆') + `<span class="t"> ${on ? '已收藏' : '收藏'}</span>`;
+  b.title = on ? '取消收藏这一组 CG' : '收藏这一组 CG（和卡片上的星是同一个）';
+  b.classList.toggle('on', on);
 }
 
 /* 上一张 / 下一张：走到本组第一张再按「上一张」就跳到上一组的**最后一张**，
@@ -632,6 +737,7 @@ function closeLB() {
   updateFsBtn();
   showRotTip();
   lb.g = -1;
+  updateLbFav();                                        // 没有当前组了，收藏按钮收起来
 }
 
 /* ---------- 范围切换（角色 CG / 主线·活动·其他剧情 CG） ---------- */
@@ -657,6 +763,8 @@ function setScope(v) {
   scope = v;
   curChar = null;
   curUnit = null;
+  if (UD && UD.syncPref) UD.syncPref('ui', 'cgScope', String(v));
+  try { localStorage.setItem(SCOPE_KEY, String(v)); } catch (e) { /* file:// 可能被禁 */ }
   document.querySelectorAll('#cgScope button').forEach(b =>
     b.classList.toggle('on', b.dataset.scope === String(v)));
   rebuildSort();
@@ -679,6 +787,11 @@ function updateExportBtn() {
 
 /* ---------- 事件绑定 ---------- */
 $('#lbClose').onclick = closeLB;
+$('#lbFav').onclick = e => {
+  e.stopPropagation();
+  const g = (lb.g >= 0 && visible[lb.g] != null) ? GROUPS[visible[lb.g]] : null;
+  if (g) toggleGFav(g);
+};
 $('#lbFs').onclick = e => { e.stopPropagation(); toggleLBFull(); };
 $('#lbPrev').onclick = e => { e.stopPropagation(); moveImg(-1); };
 $('#lbNext').onclick = e => { e.stopPropagation(); moveImg(1); };
@@ -702,13 +815,15 @@ $('#q').oninput = e => {
 /* 排序方式记忆（与卡片大小同套做法） */
 const SORT_KEY = 'escah_cg_sort';
 try {
-  const s = localStorage.getItem(SORT_KEY);
+  const s = (UD && UD.prefValue ? UD.prefValue('ui', 'cgSort', null) : null)
+    || localStorage.getItem(SORT_KEY);
   if (s) { sortBy = s; $('#sortBy').value = s; }
 } catch (e) { /* file:// 下可能被禁 */ }
 rebuildSort();   // 按当前范围（默认角色）重建下拉，顺手纠正存下来的旧值
 
 $('#sortBy').onchange = e => {
   sortBy = e.target.value;
+  if (UD && UD.syncPref) UD.syncPref('ui', 'cgSort', sortBy);
   try { localStorage.setItem(SORT_KEY, sortBy); } catch (e2) { }
   renderChars();
   renderGrid();
@@ -718,11 +833,14 @@ $('#sortBy').onchange = e => {
 const DL_KEY = 'escah_cg_dl';
 if ($('#dlFilter')) {
   try {
-    const v = localStorage.getItem(DL_KEY);
+    const v = (UD && UD.prefValue ? UD.prefValue('ui', 'cgDl', null) : null)
+      || localStorage.getItem(DL_KEY);
     if (v) $('#dlFilter').value = v;
   } catch (e) { /* ignore */ }
   $('#dlFilter').onchange = () => {
-    try { localStorage.setItem(DL_KEY, $('#dlFilter').value); } catch (e) { }
+    const v = $('#dlFilter').value;
+    if (UD && UD.syncPref) UD.syncPref('ui', 'cgDl', v);
+    try { localStorage.setItem(DL_KEY, v); } catch (e) { }
     renderChars();
     renderGrid();
   };
@@ -749,18 +867,25 @@ $('#grid').addEventListener('scroll', () => {
 
 /* 卡片大小 */
 const SZ_KEY = 'escah_cg_size';
-function applySize(v) {
+/* silent：启动时套用存下来的大小，不能算成"用户刚改"（否则每开一次页面
+   就给这个偏好刷新时间戳，别的设备改的值永远进不来） */
+function applySize(v, silent) {
   $('#grid').style.setProperty('--cardMin', v + 'px');
   document.querySelectorAll('#bar .sz').forEach(b =>
     b.classList.toggle('on', b.dataset.sz === String(v)));
+  if (!silent && UD && UD.syncPref) UD.syncPref('ui', 'cgSize', v);
   try { localStorage.setItem(SZ_KEY, v); } catch (e) { /* file:// 下可能被禁 */ }
 }
 document.querySelectorAll('#bar .sz').forEach(b => {
   b.onclick = () => applySize(+b.dataset.sz);
 });
 let initSz = 320;
-try { const s = +localStorage.getItem(SZ_KEY); if (s > 0) initSz = s; } catch (e) { }
-applySize(initSz);
+try {
+  const s = +((UD && UD.prefValue ? UD.prefValue('ui', 'cgSize', 0) : 0)
+    || localStorage.getItem(SZ_KEY));
+  if (s > 0) initSz = s;
+} catch (e) { }
+applySize(initSz, true);
 
 document.addEventListener('keydown', e => {
   if (lb.g >= 0) {
@@ -819,8 +944,46 @@ function updateScopeTitles() {
 
 /* ---------- 启动 ---------- */
 updateScopeTitles();
+// 「角色 / 主线 / 活动 / 其他」可能是上次存的，先把按钮高亮同步过来
+document.querySelectorAll('#cgScope button').forEach(b =>
+  b.classList.toggle('on', b.dataset.scope === String(scope)));
 renderChars();
 renderGrid();
+/* 收藏：浏览器 localStorage 是主，userdata/marks.json 是备份（与播放器共用一个文件）。
+   启动拉一次合并进来，有变化就重画一次（换浏览器 / 清缓存后收藏还在）。 */
+if (UD && UD.hydrate) {
+  UD.hydrate().then(r => {
+    if (r && r.prefs) applyRemotePrefsToUI();
+    if (r && r.marks) { renderChars(); renderGrid(); if (lb.on) paintLB(); }
+  });
+}
+
+/** 把偏好层里"别的设备改过的"范围/排序/筛选/卡片大小搬到界面 */
+function applyRemotePrefsToUI() {
+  if (!UD) return;
+  let any = false;
+  const sc = UD.prefValue('ui', 'cgScope', null);
+  if (sc != null && String(sc) !== String(scope)) {
+    scope = (sc === 'char') ? 'char' : (+sc || 'char');
+    document.querySelectorAll('#cgScope button').forEach(b =>
+      b.classList.toggle('on', b.dataset.scope === String(scope)));
+    any = true;
+  }
+  const so = UD.prefValue('ui', 'cgSort', null);
+  if (so && so !== sortBy) { any = true; }
+  const dl = UD.prefValue('ui', 'cgDl', null);
+  if (dl != null && $('#dlFilter') && $('#dlFilter').value !== dl) {
+    $('#dlFilter').value = dl; any = true;
+  }
+  const sz = +UD.prefValue('ui', 'cgSize', 0);
+  if (sz > 0) { applySize(sz, true); any = true; }
+  if (!any) return;
+  if (so) sortBy = so;
+  rebuildSort();        // 范围变了以后排序可选项会变，它会校验并纠正 sortBy
+  renderChars();
+  renderGrid();
+  if (lb.on) paintLB();
+}
 /* ?g=N 表示打开当前筛选结果中的第 N 组（从 0 开始） */
 if (usp.has('g')) {
   const pos = +usp.get('g');

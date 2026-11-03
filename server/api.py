@@ -22,8 +22,8 @@ import time
 import traceback
 import urllib.parse
 
-from . import (exports, facts, jobs, log as applog, media, mirrors, packs, paths,
-               proc, space, updater, videxport)
+from . import (exports, facts, jobs, log as applog, marks, media, mirrors, packs,
+               paths, prefs, proc, space, updater, videxport)
 from .cdn import install as cdn_install
 from .cdn import manifest as cdn_manifest
 from .cdn import stages as cdn_stages
@@ -709,6 +709,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         q = self._q()
         if path == "/api/state":
             return self._json(self.state_payload())
+        if path == "/api/marks":
+            # 收藏 / 播放进度的本机存档（浏览器 localStorage 的备份）。
+            # 纯读文件，没有就返回空结构 —— 前端拿不到也不会报错，只是不显示历史。
+            return self._json(marks.load())
+        if path == "/api/prefs":
+            # 界面偏好（播放器设置 / 筛选 / 语言）的本机副本：换设备也能一致。
+            return self._json(prefs.load())
         if path == "/api/facts":
             # 容量 / 耗时的唯一来源（server/facts.py）。页面里不写死数字，
             # 一律用 data-fact 占位 + assets/js/facts.js 拉这份成品文案。
@@ -834,6 +841,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------------- POST
     def _api_post(self, path: str):
+        if path == "/api/marks":
+            b = self._body()
+            if not isinstance(b, dict):
+                return self._err("收藏进度的格式不对（应是 JSON 对象）")
+            return self._json({"marks": marks.merge_into(b)})
+        if path == "/api/prefs":
+            b = self._body()
+            if not isinstance(b, dict):
+                return self._err("界面偏好的格式不对（应是 JSON 对象）")
+            return self._json({"prefs": prefs.merge_into(b)})
         if path == "/api/config":
             b = self._body()
             cfg = paths.load_config()

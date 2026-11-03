@@ -151,16 +151,33 @@ input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--acc); curs
 button.danger { border-color: #7a3a42; background: #2a1418; color: #ffb3ba; }
 button.danger:hover:not(:disabled) { background: #3a1c22; }
 button.smallBtn { padding: 5px 10px; font-size: 14px; }
-/* 容量明细列表：一行一个桶，去掉标签感，读起来像账单 */
+/* 容量明细列表：一行一个桶，去掉标签感，读起来像账单。
+   名称列**定宽**、体积紧跟其后：以前 .nm 是 flex:1，名称和体积被顶到容器两端，
+   宽屏上中间空出一大片，读一行要横跳（2026-11-03 用户反馈「清单和占用相隔太远」）。
+   定宽还有个好处：各行体积的起始位置一致，一眼就能比大小。 */
 .kvList { margin-top: 12px; display: grid; gap: 4px; }
 .kvList .kv {
-  display: flex; gap: 8px; align-items: baseline;
+  display: flex; gap: 14px; align-items: baseline;
   font-size: 14px; color: var(--fg2);
 }
-.kvList .kv .nm { flex: 1; min-width: 120px; }
-.kvList .kv .sz { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
-.kvList .kv .pth { flex: 0 0 34%; color: var(--fg3); font-size: 14px;
-  font-family: Consolas, "Courier New", monospace; }
+.kvList .kv .nm { flex: 0 0 auto; width: 15em; min-width: 0; }
+/* 体积列也定宽：数值长短不一（489.7 KB / 18.52 GB），不定宽的话后面路径的起点
+   会跟着左右跳；定宽后名称 / 体积 / 目录三列各成一条线。 */
+.kvList .kv .sz { flex: 0 0 6em; color: var(--fg); font-weight: 600;
+  font-variant-numeric: tabular-nums; }
+/* 目录排在体积后面：紧跟数值、过长就省略号（悬停看全），别把整行撑开 */
+.kvList .kv .pth {
+  flex: 0 1 auto; min-width: 0; color: var(--fg3); font-size: 14px;
+  font-family: Consolas, "Courier New", monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 窄屏（手机/平板）：路径让位，名称重新占满、体积靠右 —— 屏幕本来就不宽，
+   两端对齐不会出现宽屏那种"中间一大片空白"，反而比参差的行尾更好扫。 */
+@media (max-width: 860px) {
+  .kvList .kv .nm { flex: 1 1 auto; width: auto; }
+  .kvList .kv .sz { flex: 0 0 auto; }
+  .kvList .kv .pth { display: none; }
+}
 
 .panel {
   background: var(--bg2); border: 1px solid var(--line); border-radius: 12px;

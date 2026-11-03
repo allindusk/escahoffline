@@ -50,6 +50,10 @@ AUDIO = os.path.join(MEDIA, "audio")
 CFG_FILE = os.path.join(USERDATA, "config.json")
 STATE_FILE = os.path.join(USERDATA, "state.json")
 LINKS_FILE = os.path.join(USERDATA, "links.json")
+#: 收藏夹 / 播放进度的本地存档（浏览器 localStorage 的备份，见 server/marks.py）
+MARKS_FILE = os.path.join(USERDATA, "marks.json")
+#: 界面偏好（播放器设置 / 筛选 / 语言）的本地副本，见 server/prefs.py
+PREFS_FILE = os.path.join(USERDATA, "prefs.json")
 
 #: 默认配置。新增键一律给默认值，老 config.json 缺键也不会炸。
 DEFAULTS = {

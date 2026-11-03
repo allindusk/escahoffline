@@ -253,46 +253,116 @@ const _btnFs = document.getElementById('btnFs');
 if (_btnFs) _btnFs.onclick = toggleFullscreen;
 
 /* ================= 画面 ================= */
-function setBackground(id) {
-  const list = id ? candsOf('back', id) : [];
-  const L = $('#bgLayer');
-  L.innerHTML = '';
-  if (!list.length) return Promise.resolve();
+/* 背景/CG 层「台上现在是哪张图」的状态。
+ *
+ * 为什么需要记这个：点进度条、点台词、上一句/下一句都走 seekTo()，
+ * 而 seekTo() 会从第 0 条开始重放画面指令。旧写法每次都 innerHTML=''
+ * 再 new Image，于是舞台先空一帧（透出黑底）、新图再从 opacity:0 淡入
+ * 0.45s——每跳一次就闪一下黑屏。
+ * 现在同一张图直接复用（不拆不建不淡入），真换图就新旧叠放交叉淡入，
+ * 任何时刻图层里都有图。
+ * hit：本轮重建里有没有下过这类指令（没下过说明这个位置本来没图，需清空）。 */
+const VIS = {
+  bg: { key: null, el: null, hit: false },
+  cg: { key: null, el: null, hit: false },
+};
+
+/** 往某个图层画一张图（背景 / CG 共用）：同图复用、换图交叉淡入 */
+function setLayerImage(kind, sel, id, fade) {
+  const L = $(sel), st = VIS[kind];
+  const key = id || '';
+  const list = key ? candsOf(kind === 'bg' ? 'back' : 'cg', key) : [];
+  st.hit = true;
+  if (!key || !list.length) {
+    L.innerHTML = '';
+    st.key = null; st.el = null;
+    return Promise.resolve();
+  }
+  const instant = ST.fastForward;          // 跳转重放：不演淡入，直接就位
+  if (st.key === key && st.el && st.el.parentNode === L) {
+    // 同一张图：不清层、不重建、不淡入（filter 由随后的颜色乘算指令重新施加）
+    st.el.style.filter = '';
+    if (instant) L.querySelectorAll('img').forEach(o => { if (o !== st.el) o.remove(); });
+    return instant ? Promise.resolve() : wait(fade * 1000);
+  }
   const img = applyChain(new Image(), list);
-  img.style.opacity = 0;
-  img.style.transition = 'opacity .45s';
+  img.style.filter = '';
+  img.style.opacity = instant ? 1 : 0;
+  img.style.transition = instant ? 'none' : `opacity ${fade}s`;
+  const olds = Array.from(L.children);
   L.appendChild(img);
-  requestAnimationFrame(() => { img.style.opacity = 1; });
-  return wait(450);
+  st.key = key; st.el = img;
+  let done = false;
+  const reveal = () => {
+    if (done) return; done = true;
+    if (!instant) requestAnimationFrame(() => { img.style.opacity = 1; });
+    // 等新图真的能画出来再撤旧图：中间不能有「两张都没有」的瞬间
+    const dropOld = () => olds.forEach(o => { if (o !== img) o.remove(); });
+    if (instant) dropOld();
+    else setTimeout(dropOld, fade * 1000 + 80);
+  };
+  if (img.complete && img.naturalWidth) reveal();
+  else {
+    img.addEventListener('load', reveal, { once: true });
+    // 候选链走完仍加载不出来才算失败，避免中途误撤旧图
+    img.addEventListener('error', () => { if (!(img.dataset.chain || '').length) reveal(); }, { once: true });
+    setTimeout(reveal, 2500);              // 兜底：别让旧图永远压在台上
+  }
+  return instant ? Promise.resolve() : wait(fade * 1000);
 }
+
+function setBackground(id) { return setLayerImage('bg', '#bgLayer', id, 0.45); }
 
 function setDoubleBackground(l, r) {
   const L = $('#bgLayer');
-  L.innerHTML = '';
+  const key = `D|${l || ''}|${r || ''}`;
+  VIS.bg.hit = true;
+  const instant = ST.fastForward;
+  if (VIS.bg.key === key && L.childElementCount === 2) {
+    return instant ? Promise.resolve() : wait(400);
+  }
+  VIS.bg.key = key; VIS.bg.el = null;
+  const olds = Array.from(L.children);
+  const made = [];
   [[l, 'left'], [r, 'right']].forEach(([id, side]) => {
     const list = id ? candsOf('back', id) : [];
     if (!list.length) return;
     const img = applyChain(new Image(), list);
     img.className = 'half';
     img.style[side] = '0';
+    if (instant) img.style.opacity = 1;
     L.appendChild(img);
+    made.push(img);
   });
-  return wait(400);
+  if (!made.length) {
+    L.innerHTML = '';
+    VIS.bg.key = null;
+    return Promise.resolve();
+  }
+  let n = made.length, fired = false;
+  const drop = () => {
+    if (fired) return; fired = true;
+    olds.forEach(o => { if (made.indexOf(o) < 0) o.remove(); });
+  };
+  const one = () => { if (--n <= 0) drop(); };
+  made.forEach(im => {
+    let used = false;
+    const once = () => { if (used) return; used = true; one(); };
+    if (im.complete && im.naturalWidth) { once(); return; }
+    im.addEventListener('load', once, { once: true });
+    im.addEventListener('error', () => { if (!(im.dataset.chain || '').length) once(); }, { once: true });
+  });
+  setTimeout(drop, 2500);
+  return instant ? Promise.resolve() : wait(400);
 }
 
 function setCg(id, fade) {
-  const L = $('#cgLayer');
-  L.innerHTML = '';
-  if (!id) return Promise.resolve();
-  const list = candsOf('cg', id);
-  if (!list.length) return Promise.resolve();
-  const img = applyChain(new Image(), list);
-  img.style.opacity = 0;
-  img.style.transition = `opacity ${fade}s`;
-  L.appendChild(img);
-  requestAnimationFrame(() => { img.style.opacity = 1; });
-  return wait(fade * 1000);
+  const f = (fade == null || !isFinite(fade)) ? 0.3 : Math.max(fade, 0);
+  return setLayerImage('cg', '#cgLayer', id, f);
 }
+
+/** 当前台上的 CG：交叉淡入期间 #cgLayer 里可能同时有新/旧两张，取状态里记的那张 */
+function cgImg() { return VIS.cg.el || $('#cgLayer').querySelector('img'); }
 
 /* ================= 立绘 ================= */
 const POS_X = { Left: '23%', Center: '50%', Right: '77%', All: '50%' };
@@ -754,6 +824,7 @@ function playLoopSe(m) {
   if (!src) return;
   if (loopSe) { try { loopSe.pause(); } catch (e) { } }
   loopSe = new Audio(src);
+  loopSe.dataset.src = src;        // 记录下来源：跳转时同一段循环音效不要重启
   loopSe.loop = true;
   loopSe.volume = SET.seVol;
   loopSe.play().catch(() => { });
@@ -824,18 +895,18 @@ function runOne(m, midx, isSeek) {
     case 'ShowEventCg': P(setCg(m.EventImage, num(m.Time, .5))); return;
     case 'HideEventCg': P(setCg('', num(m.Time, .3))); return;
     case 'StareEventCG': {
-      const img = $('#cgLayer').querySelector('img');
+      const img = cgImg();
       if (img) { img.style.transition = 'transform 6s ease-out'; img.style.transform = 'scale(1.12)'; }
       return;
     }
     case 'EndStareEventCG': {
-      const img = $('#cgLayer').querySelector('img');
+      const img = cgImg();
       if (img) { img.style.transition = 'transform .5s'; img.style.transform = 'scale(1)'; }
       return;
     }
     case 'ZoomInEventCG':
     case 'FastZoomInEventCG': {
-      const img = $('#cgLayer').querySelector('img');
+      const img = cgImg();
       if (img) {
         img.style.transition = `transform ${num(m.Time, 1)}s ease`;
         img.style.transform = `scale(${num(m.Rate, 1.3)}) translate(${num(m.PosX, 0)}px,${num(m.PosY, 0)}px)`;
@@ -859,6 +930,8 @@ function runOne(m, midx, isSeek) {
       ST.voiceP = null;
       const hasVoice = ST.voiceHas && !!voiceP;
       if (midx != null) ST.curMsgIdx = midx;   // 供“暂停后继续”定位
+      // 播放进度：每显示一句记一次（内存立即更新，"播放记录"与自动续播都靠它）
+      noteProgress();
       if (!isSeek && midx != null && ST.lineMap) {
         const gi = ST.lineMap[midx];
         if (gi != null) focusLine(gi);
@@ -949,7 +1022,7 @@ function runOne(m, midx, isSeek) {
     case 'ToUpper': $('#msgText').style.fontSize = 'calc(var(--msgFS,21px) * 1.24)'; return;
     case 'ToLower': $('#msgText').style.fontSize = ''; return;
     case 'ZoomOutEventCG': {
-      const img = $('#cgLayer').querySelector('img');
+      const img = cgImg();
       if (img) {
         img.style.transition = `transform ${num(m.Time, .5)}s ease`;
         img.style.transform = 'scale(1)';
@@ -1076,6 +1149,11 @@ const REPLAY = new Set([
   'ShowEventCg', 'HideEventCg',
   'SetDrawModeSepia', 'SetDrawModeGrayscale', 'SetDrawModeDefault',
 ]);
+/* 背景/CG 这两类只重放「最后一条」：中间的先 Show 再 Hide 再 Show 会互相抵消，
+   逐条重放等于把同一张图拆了建好几次，每一次都可能有一帧没有图（闪黑）。 */
+const BG_REPLAY = new Set(['ShowBackground', 'HideBackground',
+  'ShowDoubleBackground', 'ShowDoubleBackgroundOffset']);
+const CG_REPLAY = new Set(['ShowEventCg', 'HideEventCg']);
 
 function hideStandInstant(m) {
   const key = (m.Position && m.Position !== 'All') ? m.Position : null;
@@ -1122,6 +1200,40 @@ function replayOne(m) {
 
 let seeking = false;
 
+/** 跳转后补"音频状态"：[0, midx) 里的 PlayMusic / StopMusic / PlayLoopSound /
+ *  StopLoopSound 都被"不碰音频"的跳转跳过了，不补就会出现——
+ *  从播放记录回到上次位置、拖进度条、点右侧句子跳转 → **一点 BGM 都没有**
+ *  （2026-11-03 用户反馈；尤其是从列表点进来时 openStory 已经 stopAll 把音乐关掉了）。
+ *
+ *  只补"状态"，不补一次性音效（PlaySound）：那是"当时那一下"的效果，
+ *  隔了几十句再响一次反而怪。
+ *  同一首还在放时 playMusic 会直接续上（内部按 src 去重），所以逐句跳不会重起音乐。 */
+function restoreAudioAt(midx, keepPaused) {
+  let music = null, loop = null;
+  for (let i = 0; i < midx; i++) {
+    const m = ST.methods[i];
+    switch (m.Method) {
+      case 'PlayMusic': music = m; break;
+      case 'StopMusic': music = null; break;
+      case 'PlayLoopSound': loop = m; break;
+      case 'StopLoopSound': loop = null; break;
+    }
+  }
+  // 音乐：目标位置"应该正在放的那首"；目标位置本来就没有音乐，就把上一段留下的收掉
+  if (music && SFX[music.Music]) playMusic(music);
+  else if (!music && bgmAudio) stopMusic({ FadeTime: 0.25 });
+  // 循环音效（雨声/机械声）：同样按最后一次状态恢复，同一段就继续放着
+  if (loop && SFX[loop.Sound]) {
+    const src = SFX[loop.Sound];
+    if (!(loopSe && loopSe.dataset.src === src && !loopSe.paused)) playLoopSe(loop);
+  } else if (loopSe) stopLoopSe();
+  // 暂停状态下拖进度条：状态照建、声音先按住，等用户点播放由 resumeAudio 续上
+  if (keepPaused) {
+    if (bgmAudio) { try { bgmAudio.pause(); } catch (e) { } }
+    if (loopSe) { try { loopSe.pause(); } catch (e) { } }
+  }
+}
+
 /* 跳到某条台词：重建画面状态后从该句继续播 */
 async function seekTo(midx, opt) {
   if (seeking || !ST.methods.length) return;
@@ -1134,17 +1246,34 @@ async function seekTo(midx, opt) {
     haltLoop();                    // 只杀循环与语音，保留 BGM
     resumeAudio();                 // 暂停时挂起的 BGM/循环音效续上
     ST.typeSkip = true;            // 掐断还在跑的打字机
-    resetStage();
+    resetStage({ keepVisual: true });   // 背景/CG 先留在台上，别拆了再建（会闪黑）
     ST.fastForward = true;
 
     // 1) 同步重建画面状态（几百条指令也就几十毫秒）
+    /* 背景/CG 只重放最终状态：中间的先 Show 再 Hide 再 Show 会互相抵消，
+       逐条重放等于把同一张图拆了建好几次，每次都可能有一帧没图（闪黑）。
+       MulColorBackground 是给当前背景上色的，只补在最后一条背景指令之后。 */
+    let lastBg = null, lastCg = null;
+    const muls = [];
     for (let i = 0; i < midx; i++) {
       const m = ST.methods[i];
-      if (REPLAY.has(m.Method)) {
-        try { replayOne(m); } catch (e) { }
-      }
+      if (!REPLAY.has(m.Method)) continue;
+      const M = m.Method;
+      if (BG_REPLAY.has(M)) { lastBg = { i, m }; continue; }
+      if (CG_REPLAY.has(M)) { lastCg = { i, m }; continue; }
+      if (M === 'MulColorBackground') { muls.push({ i, m }); continue; }
+      try { replayOne(m); } catch (e) { }
     }
+    if (lastBg) { try { replayOne(lastBg.m); } catch (e) { } }
+    for (const x of muls) {
+      if (lastBg && x.i < lastBg.i) continue;   // 旧背景上的颜色乘算已被最终背景替代
+      try { mulColorBg(x.m); } catch (e) { }
+    }
+    if (lastCg) { try { replayOne(lastCg.m); } catch (e) { } }
     ST.fastForward = false;
+    // 目标位置本来就没有背景/CG：重放里一条都没下过才撤掉，否则留着复用
+    if (!VIS.bg.hit) { $('#bgLayer').innerHTML = ''; VIS.bg.key = null; VIS.bg.el = null; }
+    if (!VIS.cg.hit) { $('#cgLayer').innerHTML = ''; VIS.cg.key = null; VIS.cg.el = null; }
 
     // 2) 恢复说话人与配音标记
     let lastWindow = null;
@@ -1162,7 +1291,10 @@ async function seekTo(midx, opt) {
       $('#msgText').classList.toggle('narr', !whoJump);
     }
 
-    // 3) 目标句的语音挂在 midx 前一条 VOICE 上，补播它
+    // 3) 音频状态（BGM / 循环音效）：跳过的段落里的 PlayMusic 要补上，否则进来没声音
+    restoreAudioAt(midx, !resume);
+
+    // 4) 目标句的语音挂在 midx 前一条 VOICE 上，补播它
     ST.voiceP = null;
     const prev = ST.methods[midx - 1];
     if (prev && prev.Method === 'VOICE' && prev.Voice) {
@@ -1190,7 +1322,10 @@ async function seekTo(midx, opt) {
 }
 
 /* ================= 播放控制 ================= */
-async function playPart(partIdx) {
+/** 播放某一段。
+ *  opt.noResume：忽略播放进度、从这一段开头播（重播 / 下一段 / 自动续播下一段用）。
+ *  默认行为是从**上次看到的那一句**接着播 —— 侧栏点进来就能马上定位。 */
+async function playPart(partIdx, opt) {
   // 只换播放循环，不销毁 BGM：重播/切段后音乐还能续上（脚本里的 PlayMusic 会自然换曲）
   haltLoop();
   stopLoopSe();
@@ -1209,6 +1344,16 @@ async function playPart(partIdx) {
   renderTabs();
   updateInfo();
   setPlayBtn(true);
+  /* 接着上次看：只有"这一段确实留了进度、而且没看到最后一句"才跳，
+     否则从开头播（已经看完的段再点进来应该重看，不是停在最后一句话上）。 */
+  const rec = (opt && opt.noResume) ? null : (UD ? UD.prog(ST.key) : null);
+  if (rec && rec.p === partIdx && rec.mi > 0 && rec.mi < ST.methods.length
+      && (rec.n ? rec.l < rec.n - 1 : true)) {
+    toast(`继续上次：第 ${partIdx + 1} 段 第 ${UD.lineNo(rec)}/${rec.n} 句`
+      + `（${UD.progPct(rec)}%）· 点「⏮ 重播」从头看`);
+    seekTo(rec.mi);
+    return;
+  }
   continueLoop();
 }
 
@@ -1227,15 +1372,35 @@ async function continueLoop() {
   if (ST.running && ST.idx >= ST.methods.length) {
     if (ST.auto && ST.part + 1 < S.data.parts.length) {
       await wait(700);
-      if (ST.running) playPart(ST.part + 1);
+      // noResume：自动播下一段就是"接着往下看"，别又跳回下一段自己的旧进度
+      if (ST.running) playPart(ST.part + 1, { noResume: true });
     } else {
       ST.running = false; setPlayBtn(false);
     }
   }
 }
 
-function resetStage() {
-  ['#bgLayer', '#cgLayer', '#fxLayer', '#standLayer'].forEach(s => { $(s).innerHTML = ''; });
+/* opt.keepVisual：跳转重建时保留背景/CG（见 seekTo），避免黑屏闪烁 */
+function resetStage(opt) {
+  const keepVisual = !!(opt && opt.keepVisual);
+  if (keepVisual) {
+    $('#fxLayer').innerHTML = '';
+    VIS.bg.hit = false; VIS.cg.hit = false;
+    // 颜色乘算 / 缩放等一次性效果由重放重新施加，先复位成原始画面
+    ['#bgLayer', '#cgLayer'].forEach(s => {
+      $(s).querySelectorAll('img').forEach(i => {
+        i.style.transition = 'none';
+        i.style.filter = '';
+        i.style.transform = '';
+        i.style.opacity = 1;
+      });
+    });
+    $('#standLayer').innerHTML = '';
+  } else {
+    ['#bgLayer', '#cgLayer', '#fxLayer', '#standLayer'].forEach(s => { $(s).innerHTML = ''; });
+    VIS.bg.key = null; VIS.bg.el = null;
+    VIS.cg.key = null; VIS.cg.el = null;
+  }
   $('#flashLayer').style.opacity = 0;
   $('#placeLayer').style.opacity = 0;
   $('#msgWindow').classList.remove('on');
@@ -1434,6 +1599,10 @@ function applySettings() {
   if (loopSe) loopSe.volume = Math.min(1, SET.seVol);
   if (ST.voice) ST.voice.volume = Math.min(1, SET.voiceVol);
   localStorage.setItem('escah_set', JSON.stringify(SET));
+  /* 同步层：SET 里哪些键变了就给哪个打时间戳，推给 userdata/prefs.json。
+     换设备/换浏览器登录同一台机器时，这些设置会跟着回来（用户 2026-11-03 要求）。
+     注意用 window.UD：本函数可能在 UD 这个 const 声明之前就被调用（模块初始化阶段）。 */
+  if (window.UD && window.UD.syncSet) window.UD.syncSet(SET);
 }
 /* 把所有控件的值设为 SET 当前值（loadSettings 与恢复默认共用） */
 function syncSettingControls() {
@@ -1495,8 +1664,22 @@ function loadSettings() {
   // 但 localStorage 里可能还留着 'other'，会筛出空列表 → 读盘时清掉。
   SET.rarSel = (SET.rarSel || '').split(',')
     .filter(x => x === 'SSR' || x === 'SR' || x === 'R').join(',');
+  /* 偏好层优先：escah_prefs 里有的键覆盖上面从 escah_set 读到的值。
+     为什么以偏好层为准：它每改一次都会跟着打时间戳并推给 userdata/prefs.json，
+     而 escah_set 只是"本机最后一次实际应用"的镜像（也给视频导出脚本读）。
+     escah_set 被清掉、或这台设备是新的，就靠这一句把设置恢复回来。
+     服务端有更新的值（别的设备改过）时，hydrate 之后还会再覆盖一次。 */
+  if (window.UD && window.UD.prefValue) {
+    for (const k in DEFAULTS) {
+      const v = window.UD.prefValue('set', k, undefined);
+      if (v !== undefined) SET[k] = v;
+    }
+  }
   syncSettingControls();
   applySettings();
+  /* 老用户第一次升级到「设置也同步」的版本：本机设置还没登记进偏好层，
+     这里补一次（时间戳给 1 —— 别的设备真改过的时间戳是真实时间，永远优先）。 */
+  if (window.UD && window.UD.syncSet) window.UD.syncSet(SET, true);
 }
 
 /* 恢复默认：清空浏览器保存的设置，回到出厂值 */
@@ -1710,8 +1893,25 @@ $('#setPav').oninput = e => { SET.pauseAfterVoice = +e.target.value; applySettin
 
 /* ================= 剧情来源（侧栏列表） ================= */
 /* SRC 只决定「左侧列表显示哪一类剧情」，与正在播放的内容无关；
-   播放状态一律由 S.key / S.data 描述。 */
-let SRC = 'char';
+   播放状态一律由 S.key / S.data 描述。
+   用户最后停在哪个分类也要记住（用户 2026-11-03 要求保存筛选条件：
+   上次在「活动」里翻剧情，下次打开不该又跳回「角色」）。 */
+const SRC_KEY = 'escah_src';
+const SRC_ALL = ['char', 'main', 'event', 'other'];
+let SRC = (function () {
+  // 偏好层优先（可能来自别的设备 / userdata/prefs.json），老键只作为迁移来源
+  const v = (window.UD && window.UD.prefValue) ? window.UD.prefValue('ui', 'src', null) : null;
+  if (v && SRC_ALL.indexOf(v) >= 0) return v;
+  try {
+    const s = localStorage.getItem(SRC_KEY);
+    if (s && SRC_ALL.indexOf(s) >= 0) return s;
+  } catch (e) { }
+  return 'char';
+})();
+function saveSrc() {
+  if (window.UD && window.UD.syncPref) window.UD.syncPref('ui', 'src', SRC);
+  try { localStorage.setItem(SRC_KEY, SRC); } catch (e) { }
+}
 const S = { key: null, kind: 'char', char: null, data: null, voiceRes: 0 };
 
 /** 按 key 取 advindex 条目：**优先整包条目**（没有 part 的），
@@ -1760,6 +1960,100 @@ function copyText(text, msg) {
 function rarityOf(cid) {
   const r = (CHARMETA[cid] || {}).r || '';
   return (r === 'SSR' || r === 'SR' || r === 'R') ? r : 'other';
+}
+
+/* ================= 收藏夹 / 播放进度 =================
+ * 数据层在 assets/js/userdata.js（CG 页共用同一份 localStorage），这里只负责
+ * 把它接进左侧列表：每行一颗 ★ + 一行"看到多少"，外加「播放记录」视图。
+ *
+ * 收藏粒度 = 列表里的一行：
+ *   角色 / 主线 / 活动 → 整部剧情（char_12 / adv_event_42）
+ *   「其他」的一话     → 包 + 段（adv_other_7#2），因为那才是用户点的那一项
+ */
+const UD = window.UD || null;
+/* 「播放记录」视图开关：点 rar-row 第四格切换，列表换成"最近看过什么" */
+let HIST_ON = false;
+
+/** 一行的收藏 id（part 传 null 表示整部剧情） */
+function favIdStory(key, part) {
+  return (part == null) ? String(key) : String(key) + '#' + part;
+}
+const dlFilterVal = () => ($('#dlFilter') || {}).value || '';
+const favOnly = () => dlFilterVal() === 'fav';
+
+/** 收藏星（拼进 innerHTML；点击在 bindFav 里绑） */
+function favHTML(id) {
+  if (!UD) return '';
+  const on = UD.isFav('story', id);
+  return `<span class="fav${on ? ' on' : ''}" title="${on ? '取消收藏' : '加入收藏'}">${on ? '★' : '☆'}</span>`;
+}
+
+/** 播放进度提示：「第2/5段 45%」；其他视图按"话"取，段对不上就不显示 */
+function progHTML(key, part, totalParts) {
+  const rec = UD ? UD.prog(key) : null;
+  if (!rec) return '';
+  if (part != null && rec.p !== part) return '';
+  const seg = (totalParts && totalParts > 1) ? `第${rec.p + 1}/${totalParts}段 `
+    : (rec.p > 0 ? `第${rec.p + 1}段 ` : '');
+  // data-tp 记住总段数：播放中要就地刷新这行进度，格式不能变
+  return `<span class="pg" data-tp="${totalParts || 0}"`
+    + ` title="上次看到：第 ${rec.p + 1} 段，第 ${UD.lineNo(rec)} 句 / 共 ${rec.n} 句">`
+    + `${seg}${UD.progPct(rec)}%</span>`;
+}
+
+/** 正在播的这一行，进度文字就地跟着走。
+ *  不重画整个列表（384 行太重、还会闪），只改那一行里已经存在的 .pg。
+ *  列表里本来没有进度提示的行（第一次看）不在这里插入 —— 下次刷新自然就有了。 */
+function syncRowProg() {
+  if (!UD || !ST.key) return;
+  const box = $('#charList');
+  if (!box) return;
+  const rec = UD.prog(ST.key);
+  if (!rec) return;
+  box.querySelectorAll(`.char-btn[data-key="${ST.key}"]`).forEach(row => {
+    const part = row.dataset.part == null ? null : +row.dataset.part;
+    if (part != null && part !== ST.part) return;
+    const pg = row.querySelector('.sub .pg');
+    if (!pg) return;
+    const tp = +pg.dataset.tp || 0;
+    const seg = (tp > 1) ? `第${rec.p + 1}/${tp}段 ` : (rec.p > 0 ? `第${rec.p + 1}段 ` : '');
+    pg.textContent = `${seg}${UD.progPct(rec)}%`;
+    pg.title = `上次看到：第 ${rec.p + 1} 段，第 ${UD.lineNo(rec)} 句 / 共 ${rec.n} 句`;
+  });
+}
+
+/** 绑收藏点击；onChange 用于"已收藏筛选开着时点掉就重画列表" */
+function bindFav(root, id, onChange) {
+  const el = root.querySelector('.fav');
+  if (!el || !UD) return;
+  el.onclick = ev => {
+    ev.stopPropagation();          // 别顺手把这一行点开了
+    const on = UD.toggleFav('story', id);
+    el.classList.toggle('on', on);
+    el.textContent = on ? '★' : '☆';
+    el.title = on ? '取消收藏' : '加入收藏';
+    toast(on ? '已加入收藏' : '已取消收藏');
+    if (onChange) onChange();
+  };
+}
+
+/** 收藏 / 已下载筛选变化后要不要立刻重画（收藏筛选开着时，星点掉这行就该走） */
+function refilterIfFav() {
+  if (favOnly()) renderSidebar(($('#search') || {}).value || '');
+}
+
+/** 当前剧情每收到一句台词就记一次进度（内存立即更新，落盘由 UD 合并） */
+let _progTitleKey = null, _progTitle = '';
+function noteProgress() {
+  if (!UD || !ST.key || ST.curMsgIdx == null || !ST.lineMap) return;
+  const line = ST.lineMap[ST.curMsgIdx];
+  if (line == null) return;
+  if (_progTitleKey !== ST.key) {
+    _progTitleKey = ST.key;
+    _progTitle = storyTitle(ST.key);
+  }
+  UD.setProg(ST.key, ST.part, ST.curMsgIdx, line, ST.allLines.length, _progTitle);
+  syncRowProg();
 }
 
 /* ================= 云端有、本地没装的角色 =================
@@ -1839,11 +2133,106 @@ function endScroll(box, sc, anchorSel) {
   box.scrollTop = sc.top;
 }
 
+/** 筛选条跟着"当前看什么"显隐。
+ *  以前整条 #filters 只在「角色」里显示，于是主线/活动/其他的列表**根本没有筛选**，
+ *  "只看已收藏 / 播放记录"在那些分类里等于不存在。现在：
+ *    · 排序 + SSR/SR/R 只对角色有意义 → 非角色/播放记录视图里藏起来；
+ *    · 资源与收藏筛选对所有分类都有效 → 一直显示（收藏就是四类都要用的）。 */
+function syncFilterBar() {
+  const flt = $('#filters');
+  if (!flt) return;
+  flt.style.display = '';
+  const charView = (SRC === 'char') && !HIST_ON;
+  const sortEl = $('#sortBy');
+  if (sortEl) sortEl.style.display = charView ? '' : 'none';
+  const dlEl = $('#dlFilter');
+  if (dlEl) dlEl.style.display = HIST_ON ? 'none' : '';
+  document.querySelectorAll('.rar-row button[data-r]').forEach(b => {
+    b.style.display = charView ? '' : 'none';
+  });
+}
+
+/** 「播放记录」视图：跨分类、按最后观看时间倒序。
+ *  这是"上次看到哪"的最短路径 —— 不用先想起来它在角色还是活动里。 */
+function renderHistList(box, filter = '') {
+  const sc = beginScroll(box, 'hist|' + filter);
+  box.innerHTML = '';
+  const f = (filter || '').trim().toLowerCase();
+  let list = UD ? UD.recent() : [];
+  if (f) {
+    list = list.filter(r => {
+      const t = (r.t || storyTitle(r.key) || '').toLowerCase();
+      return t.includes(f) || String(r.key).toLowerCase().includes(f);
+    });
+  }
+
+  const hit = $('#hit');
+  if (hit) {
+    hit.textContent = list.length
+      ? `播放记录 ${list.length} 条 · 点一条接着看`
+      : '还没有播放记录：看过的剧情会自动记在这里';
+    hit.className = list.length ? 'on' : '';
+  }
+
+  if (!list.length) {
+    const d = document.createElement('div');
+    d.className = 'advEmpty';
+    d.textContent = '还没有播放记录。随便点一部剧情开始看，这里就会记住你看到第几句，'
+      + '下次点「播放记录」就能直接接着看。';
+    box.appendChild(d);
+    endScroll(box, sc);
+    return;
+  }
+
+  // 顶部一条：条数 + 清空（误积累太多时可以一次性清掉）
+  const bar = document.createElement('div');
+  bar.className = 'histBar';
+  bar.innerHTML = `<span>共 ${list.length} 条</span>`;
+  const clr = document.createElement('button');
+  clr.textContent = '清空记录';
+  clr.title = '删除全部播放记录（收藏不受影响）';
+  clr.onclick = () => {
+    if (!confirm('清空全部播放记录？（收藏不会被动）')) return;
+    UD.clearAllProg();
+    renderHistList(box, filter);
+  };
+  bar.appendChild(clr);
+  box.appendChild(bar);
+
+  list.forEach(r => {
+    const key = r.key;
+    const title = r.t || storyTitle(key);
+    const kind = isCharKey(key) ? 'char' : String(key).split('_')[1];
+    const d = document.createElement('div');
+    d.className = 'char-btn hrow' + (key === S.key ? ' on' : '');
+    d.dataset.key = key;
+    d.title = `${title}\n上次看到：第 ${r.p + 1} 段，第 ${UD.lineNo(r)} 句 / 共 ${r.n} 句`
+      + `\n${new Date(r.ts).toLocaleString()}`;
+    d.innerHTML = `<span class="info"><span class="nm">`
+      + (kind === 'char' ? '' : `<span class="srcTag" data-k="${kind}">${ADV_TAG[kind] || '剧'}</span>`)
+      + `${esc(title)}</span>`
+      + `<span class="sub"><span>第 ${r.p + 1} 段</span>`
+      + `<span class="pg">看到 ${UD.progPct(r)}%</span>`
+      + `<span>${UD.lineNo(r)}/${r.n} 句</span>`
+      + `<span>${UD.ago(r.ts)}</span></span></span>`
+      + `<span class="del" title="从记录里删掉这一条（不影响收藏）">✕</span>`;
+    d.onclick = () => openStory(key);
+    d.querySelector('.del').onclick = ev => {
+      ev.stopPropagation();
+      UD.clearProg(key);
+      renderHistList(box, filter);
+    };
+    box.appendChild(d);
+  });
+  endScroll(box, sc);
+}
+
 function renderSidebar(filter = '') {
   const box = $('#charList');
   if (!box) return;
-  const flt = $('#filters');
-  if (flt) flt.style.display = SRC === 'char' ? '' : 'none';   // 排序/稀有度只对角色有意义
+  syncFilterBar();
+  // 播放记录是**独立视图**（跨分类、按时间倒序），不参与来源/稀有度筛选
+  if (HIST_ON) { renderHistList(box, filter); return; }
   // 非角色列表各自由 renderAdvList / renderOtherGroups 负责清空与还原滚动，
   // 这里**不能**先清空，否则它们读到的 scrollTop 已经是 0，等于强制回顶部
   if (SRC !== 'char') { renderAdvList(filter); return; }
@@ -1851,8 +2240,8 @@ function renderSidebar(filter = '') {
   box.innerHTML = '';
   const f = filter.trim().toLowerCase();
   const sel = SET.rarSel ? SET.rarSel.split(',') : [];
-  // 「已下载 / 未下载」筛选：和安装列表、CG 页同一套状态口径
-  const dlf = ($('#dlFilter') || {}).value || '';
+  // 「已下载 / 未下载 / 已收藏」筛选：和安装列表、CG 页同一套状态口径
+  const dlf = dlFilterVal();
   const isHave = (cid) => {
     const st = window.PACKSTATE ? PACKSTATE.status('char_' + cid) : 'unknown';
     return st === 'ready' || st === 'soft-missing' || st === 'partial';
@@ -1861,6 +2250,7 @@ function renderSidebar(filter = '') {
   let list = allChars().filter(c => {
     if (dlf === 'have' && !isHave(c.id)) return false;
     if (dlf === 'miss' && isHave(c.id)) return false;
+    if (dlf === 'fav' && !(UD && UD.isFav('story', 'char_' + c.id))) return false;
     if (sel.length && !sel.includes(rarityOf(c.id))) return false;
     if (!f) return true;
     const m = CHARMETA[c.id] || {};
@@ -1885,11 +2275,13 @@ function renderSidebar(filter = '') {
   /* 命中计数：列表自身可滚动，结果多于可视区时用户会以为"搜不到" */
   const hit = $('#hit');
   if (hit) {
-    const active = !!f || sel.length > 0;
+    const active = !!f || sel.length > 0 || dlf === 'fav';
     hit.textContent = !active ? ''
-      : (list.length
-        ? L10N.t('search.hit', '命中 {n} 个角色（可滚动）').replace('{n}', list.length)
-        : L10N.t('search.none', '没有匹配的角色'));
+      : (dlf === 'fav'
+        ? (list.length ? `已收藏 ${list.length} 个角色` : '还没有收藏过角色剧情（点行尾的 ☆ 就能收藏）')
+        : (list.length
+          ? L10N.t('search.hit', '命中 {n} 个角色（可滚动）').replace('{n}', list.length)
+          : L10N.t('search.none', '没有匹配的角色')));
     hit.className = !active ? '' : (list.length ? 'on' : 'none');
   }
 
@@ -1926,10 +2318,13 @@ function renderSidebar(filter = '') {
       `<span class="info"><span class="nm">${esc(nm)}</span>` +
       `<span class="sub"><span class="rar" data-r="${rar}">${m.r || '—'}</span>` +
       `<span>${c.lines ? c.lines + ' 句' : '未安装'}</span>` +
+      progHTML('char_' + c.id, null, c.parts) +
       (st === 'missing' ? '<span class="badge nodl">未下载</span>' :
         st === 'soft-missing' ? '<span class="badge soft">缺素材</span>' : '') +
       `</span>` +
-      `<span class="cpy" title="复制角色名">⧉</span></span>`;
+      `<span class="cpy" title="复制角色名">⧉</span>` +
+      // 收藏星放在最右边：每行位置一致，鼠标只需要上下移动
+      favHTML('char_' + c.id) + `</span>`;
     // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）
     if (haveImg) {
       const chain = [];
@@ -1940,6 +2335,7 @@ function renderSidebar(filter = '') {
     bindTip(d, () => {
       const parts = c.parts || 0;
       const tr = (typeof transStatsOf === 'function') ? '' : '';
+      const rec = UD && UD.prog('char_' + c.id);
       // 浮窗里的缩略图同样只在"确定有图"时才请求（鼠标扫过侧栏就会触发）
       return (bannersOK
         ? `<img src="${esc(imgSrc(bannerOfChar(c.id)))}" alt="" `
@@ -1950,8 +2346,11 @@ function renderSidebar(filter = '') {
         + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}${m.d ? ' · 实装 ' + esc(m.d) : ''}</dd>`
         + `<dt>剧情</dt><dd>${parts} 段 · ${c.lines || 0} 句</dd>`
         + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+        + (rec ? `<dt>上次看到</dt><dd>第 ${rec.p + 1} 段 · 第 ${UD.lineNo(rec)}/${rec.n} 句`
+          + `（${UD.progPct(rec)}%，${UD.ago(rec.ts)}）</dd>` : '')
         + `</dl>${tr}`;
     });
+    bindFav(d, 'char_' + c.id, refilterIfFav);
     d.onclick = () => openChar(c.id);
     d.querySelector('.cpy').onclick = ev => {
       ev.stopPropagation();
@@ -2062,13 +2461,20 @@ function renderOtherGroups(box, filter = '', opt = {}) {
 
   box.innerHTML = '';
 
+  const favMode = favOnly();       // 「只看已收藏」：只留收藏过的话，并自动展开
+  let any = false;                 // 是否画出了任何分组/话（空结果要给一句提示）
+
   groups.forEach(g => {
-    const eps = f
-      ? g.eps.filter(e => (e.t || '').toLowerCase().includes(f) ||
-          (e.c || '').toLowerCase().includes(f) || g.name.toLowerCase().includes(f))
+    let eps = favMode
+      ? g.eps.filter(e => UD && UD.isFav('story', favIdStory(e.k, e.i)))
       : g.eps;
+    if (f) {
+      eps = eps.filter(e => (e.t || '').toLowerCase().includes(f) ||
+        (e.c || '').toLowerCase().includes(f) || g.name.toLowerCase().includes(f));
+    }
     if (!eps.length) return;
-    const open = OTHER_OPEN.has(g.no) || !!f;      // 搜索时全展开
+    // 搜索 / 只看已收藏时全展开：结果是筛过的，收着等于让用户多点一次
+    const open = OTHER_OPEN.has(g.no) || !!f || favMode;
 
     const head = document.createElement('div');
     head.className = 'og-head' + (open ? ' open' : '');
@@ -2091,6 +2497,7 @@ function renderOtherGroups(box, filter = '', opt = {}) {
       renderOtherGroups(box, filter, { anchor: head.dataset.key });
     };
     box.appendChild(head);
+    any = true;
 
     if (!open) return;
     eps.forEach(e => {
@@ -2099,20 +2506,32 @@ function renderOtherGroups(box, filter = '', opt = {}) {
       d.className = 'char-btn ep' + (on ? ' on' : '');
       d.dataset.key = e.k;
       d.dataset.part = e.i;
+      // 「其他」的一话才是用户点的那一项，所以收藏/进度都按"包 + 段"算
+      const fid = favIdStory(e.k, e.i);
       // 一行：话名左对齐（超长省略）＋ 句数右对齐 ＋ 复制
       d.innerHTML = `<span class="info"><span class="nm">${esc(e.t)}</span>`
         + `<span class="sub">${e.m ? `<span>#${e.i + 1}</span>` : ''}`
+        + progHTML(e.k, e.i)
         + `<span>${e.n} 句</span></span>`
-        + `<span class="cpy" title="复制">⧉</span></span>`;
+        + `<span class="cpy" title="复制">⧉</span>`
+        + favHTML(fid) + `</span>`;
+      bindFav(d, fid, refilterIfFav);
       d.onclick = () => openStory(e.k, { part: e.i });
       d.querySelector('.cpy').onclick = ev => {
         ev.stopPropagation();
         copyText(`${g.name} #${e.i + 1}`, '已复制');
       };
-      bindTip(d, () => `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
-        + `<dl><dt>段</dt><dd>#${e.i + 1}</dd><dt>句数</dt><dd>${e.n}</dd>`
-        + `<dt>首句</dt><dd>${esc(e.t)}</dd>`
-        + `<dt>主要人物</dt><dd>${esc(e.c || '—')}</dd></dl>`);
+      bindTip(d, () => {
+        const rec = UD && UD.prog(e.k);
+        return `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
+          + `<dl><dt>段</dt><dd>#${e.i + 1}</dd><dt>句数</dt><dd>${e.n}</dd>`
+          + `<dt>首句</dt><dd>${esc(e.t)}</dd>`
+          + `<dt>主要人物</dt><dd>${esc(e.c || '—')}</dd>`
+          + ((rec && rec.p === e.i)
+            ? `<dt>上次看到</dt><dd>第 ${UD.lineNo(rec)}/${rec.n} 句`
+              + `（${UD.progPct(rec)}%，${UD.ago(rec.ts)}）</dd>` : '')
+          + `</dl>`;
+      });
       box.appendChild(d);
     });
   });
@@ -2120,11 +2539,12 @@ function renderOtherGroups(box, filter = '', opt = {}) {
   // 教程 / 开场这类没有入口分组的，直接平铺在最后（以前靠 renderAdvList 平铺，
   // 改成分组视图后如果不补，它们就从列表里消失了）
   const extra = ADV.filter(a => a.kind === 'tutorial' || a.kind === 'op')
+    .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f));
   if (extra.length) {
     // 这一组也是可折叠的（以前写死 open 又没有 onclick，点了没反应）。
     // 用伪入口号 'tuto' 存展开态，跟其它分组一样默认收起。
-    const openT = OTHER_OPEN.has('tuto') || !!f;
+    const openT = OTHER_OPEN.has('tuto') || !!f || favMode;
     const head = document.createElement('div');
     head.className = 'og-head' + (openT ? ' open' : '');
     head.dataset.key = 'tuto';
@@ -2136,7 +2556,19 @@ function renderOtherGroups(box, filter = '', opt = {}) {
       renderOtherGroups(box, filter, { anchor: 'tuto' });
     };
     box.appendChild(head);
+    any = true;
     if (openT) extra.forEach(a => box.appendChild(advItem(a)));
+  }
+
+  /* 一条都没画出来：必须给一句话，否则用户看到的是"空白的黑列表"，
+     会以为清单没加载（"只看已收藏"刚开始时必然是这个状态）。 */
+  if (!any) {
+    const d = document.createElement('div');
+    d.className = 'advEmpty';
+    d.textContent = favMode
+      ? '「其他」里还没有收藏过的剧情：展开下面任意一组，点行尾的 ☆ 就能收藏。'
+      : '没有匹配的剧情';
+    box.appendChild(d);
   }
 
   endScroll(box, sc, anchorSel);
@@ -2144,8 +2576,14 @@ function renderOtherGroups(box, filter = '', opt = {}) {
   const total = groups.reduce((a, g) => a + g.eps.length, 0) + extra.length;
   const hit = $('#hit');
   if (hit) {
-    hit.textContent = f ? `命中 ${total} 话` : '';
-    hit.className = f ? 'on' : '';
+    // 收藏筛选下也要有计数：否则"只显示 2 话"看起来像数据丢了
+    const n = favMode
+      ? groups.reduce((a, g) => a + g.eps.filter(e => UD && UD.isFav('story', favIdStory(e.k, e.i))).length, 0)
+        + extra.length
+      : total;
+    hit.textContent = favMode ? `已收藏 ${n} 话`
+      : (f ? `命中 ${n} 话` : '');
+    hit.className = (favMode || f) ? 'on' : '';
   }
 }
 
@@ -2172,7 +2610,9 @@ function renderAdvList(filter = '') {
   }
   const f = filter.trim().toLowerCase();
   const kinds = ADV_MENU[SRC] || [SRC];
+  const favMode = favOnly();
   advAll = ADV.filter(a => kinds.includes(a.kind))
+    .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f)
       || String(a.first || '').toLowerCase().includes(f) || a.key.includes(f));
   /* 未下载资源的排到后面，和角色列表同口径 */
@@ -2182,10 +2622,10 @@ function renderAdvList(filter = '') {
 
   const hit = $('#hit');
   if (hit) {
-    hit.textContent = f
-      ? L10N.t('search.hitAdv', '命中 {n} 部剧情').replace('{n}', advAll.length)
-      : '';
-    hit.className = f ? (advAll.length ? 'on' : 'none') : '';
+    hit.textContent = favMode
+      ? `已收藏 ${advAll.length} 部剧情`
+      : (f ? L10N.t('search.hitAdv', '命中 {n} 部剧情').replace('{n}', advAll.length) : '');
+    hit.className = (favMode || f) ? (advAll.length ? 'on' : 'none') : '';
   }
 
   // 过滤条件没变时保留滚动位置（否则切语言/刷新下载状态都会跳回顶部）
@@ -2195,9 +2635,10 @@ function renderAdvList(filter = '') {
   if (!advAll.length) {
     const d = document.createElement('div');
     d.className = 'advEmpty';
-    d.textContent = kinds.length && ADV.some(a => kinds.includes(a.kind))
-      ? L10N.t('adv.nomatch', '没有匹配的剧情')
-      : L10N.t('adv.none', '这一类剧情还没有接入，用 pipeline.cli adv-all 接入');
+    d.textContent = favMode ? '这一类还没有收藏过剧情（点列表行尾的 ☆ 就能收藏）'
+      : (kinds.length && ADV.some(a => kinds.includes(a.kind))
+        ? L10N.t('adv.nomatch', '没有匹配的剧情')
+        : L10N.t('adv.none', '这一类剧情还没有接入，用 pipeline.cli adv-all 接入'));
     box.appendChild(d);
     return;
   }
@@ -2252,16 +2693,26 @@ function advItem(a) {
     + `${esc(title)}</span>` +
     `<span class="sub"><span>${a.parts} 段</span><span>${a.lines} 句</span>` +
     `<span>${vnote}</span>` +
+    progHTML(a.key, null, a.parts) +
     (st === 'missing' ? '<span class="badge nodl">未下载</span>' : '') +
     `</span>` +
-    `<span class="cpy" title="复制剧情名">⧉</span></span>`;
-  bindTip(d, () => (cover ? `<img src="${esc(imgSrc(cover))}" alt="" `
-    + `onerror="this.style.display='none'">` : '')
-    + `<div style="font-weight:600;margin-bottom:4px">${esc(title)}</div>`
-    + `<dl><dt>剧情</dt><dd>${a.parts} 段 · ${a.lines} 句</dd>`
-    + `<dt>语音</dt><dd>${vnote}</dd>`
-    + (a.first ? `<dt>首句</dt><dd>${esc(a.first)}</dd>` : '')
-    + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd></dl>`);
+    `<span class="cpy" title="复制剧情名">⧉</span>` +
+    favHTML(a.key) + `</span>`;
+  bindTip(d, () => {
+    const rec = UD && UD.prog(a.key);
+    return (cover ? `<img src="${esc(imgSrc(cover))}" alt="" `
+      + `onerror="this.style.display='none'">` : '')
+      + `<div style="font-weight:600;margin-bottom:4px">${esc(title)}</div>`
+      + `<dl><dt>剧情</dt><dd>${a.parts} 段 · ${a.lines} 句</dd>`
+      + `<dt>语音</dt><dd>${vnote}</dd>`
+      + (a.first ? `<dt>首句</dt><dd>${esc(a.first)}</dd>` : '')
+      + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+      + (rec ? `<dt>上次看到</dt><dd>第 ${rec.p + 1} 段 · 第 ${UD.lineNo(rec)}/${rec.n} 句`
+        + `（${UD.progPct(rec)}%，${UD.ago(rec.ts)}）</dd>` : '')
+      + `</dl>`;
+  });
+  // 主线/活动按"整部剧情"收藏（一部的所有段算一个）
+  bindFav(d, a.key, refilterIfFav);
   d.onclick = () => openStory(a.key, startPart === null ? undefined : { part: startPart });
   d.querySelector('.cpy').onclick = ev => {
     ev.stopPropagation();
@@ -2274,7 +2725,8 @@ function advItem(a) {
    「其他」是分组视图一次渲染完，不增量，否则会误追加上一次活动残留） */
 $('#charList').addEventListener('scroll', () => {
   const box = $('#charList');
-  if (SRC === 'char' || SRC === 'other') return;
+  // 播放记录视图里 advAll 还是上一次主线/活动留下的，追加会把两类数据混在一起
+  if (HIST_ON || SRC === 'char' || SRC === 'other') return;
   if (box.scrollTop + box.clientHeight >= box.scrollHeight - 160) appendAdvChunk();
 });
 
@@ -2290,6 +2742,8 @@ $('#search').oninput = e => {
 document.querySelectorAll('#srcRow button').forEach(b => {
   b.onclick = () => {
     SRC = b.dataset.src;
+    saveSrc();                     // 记住最后停在哪个分类（下次打开还是这里）
+    setHistView(false);            // 点分类就是"离开播放记录、看这一类"
     document.querySelectorAll('#srcRow button').forEach(x =>
       x.classList.toggle('on', x === b));
     $('#search').value = '';
@@ -2300,20 +2754,24 @@ document.querySelectorAll('#srcRow button').forEach(b => {
 
 $('#sortBy').onchange = e => {
   SET.sortBy = e.target.value;
-  applySettings();
+  applySettings();                 // 排序方式跟着设置一起存
   renderSidebar($('#search').value);
 };
 if ($('#dlFilter')) {
   $('#dlFilter').onchange = () => {
-    try { localStorage.setItem('escah_dlf', $('#dlFilter').value); } catch (e) { }
+    const v = $('#dlFilter').value;
+    if (window.UD && window.UD.syncPref) window.UD.syncPref('ui', 'dlf', v);
+    try { localStorage.setItem('escah_dlf', v); } catch (e) { }
     renderSidebar($('#search').value);
   };
   try {
-    const v = localStorage.getItem('escah_dlf') || '';
-    $('#dlFilter').value = v;
+    const v = (window.UD && window.UD.prefValue ? window.UD.prefValue('ui', 'dlf', '')
+      : localStorage.getItem('escah_dlf')) || '';
+    // 旧版本存过的值只在选项还存在时恢复（避免选到已被删掉的值）
+    if (v && $('#dlFilter').querySelector(`option[value="${v}"]`)) $('#dlFilter').value = v;
   } catch (e) { }
 }
-document.querySelectorAll('.rar-row button').forEach(b => {
+document.querySelectorAll('.rar-row button[data-r]').forEach(b => {
   b.onclick = () => {
     const r = b.dataset.r;
     let arr = SET.rarSel ? SET.rarSel.split(',') : [];
@@ -2324,6 +2782,23 @@ document.querySelectorAll('.rar-row button').forEach(b => {
     renderSidebar($('#search').value);
   };
 });
+
+/** 「播放记录」视图开关（rar-row 第四格） */
+const btnHist = document.querySelector('.rar-row button[data-f="hist"]');
+function setHistView(on) {
+  on = !!on;
+  if (HIST_ON === on) return;
+  HIST_ON = on;
+  if (btnHist) btnHist.classList.toggle('on', on);
+}
+if (btnHist) {
+  btnHist.onclick = () => {
+    setHistView(!HIST_ON);
+    // 换视图时清掉搜索词：否则"记录是空的"其实是被上次的搜索词滤没了
+    $('#search').value = '';
+    renderSidebar();
+  };
+}
 
 /** 剧情数据缓存上限：227 部全接进来后不能无限堆内存（每部 0.1–0.5 MB） */
 const STORY_CACHE_MAX = 6;
@@ -2392,9 +2867,17 @@ async function openStory(key, opt) {
   // ?part=1 表示第 1 段（界面口径），内部索引再减 1
   // opt.noPlay：只加载数据不开始播（脚本化加载时用，避免先白播一段）
   if (opt && opt.noPlay) return;
-  // opt.part：从侧栏点"某一话"时指定段（0 基）；否则看 URL 的 ?part=（1 基）
+  /* 从哪一段开始，优先级：
+   *   1) 侧栏点了具体某一话（opt.part，0 基）—— 用户点的是哪段就播哪段；
+   *   2) URL 里的 ?part=（1 基，分享链接 / 测试钩子）；
+   *   3) 上次看到的那一段（播放进度）—— 就是"接着看"；
+   *   4) 第 1 段。 */
+  const qp = +(new URLSearchParams(location.search).get('part') || 0);
+  const rec = UD ? UD.prog(key) : null;
+  // 上次这一段已经看完了 → 当"从头再看"，别停在最后一段的第一句
+  const recDone = !!(rec && rec.n && rec.l >= rec.n - 1);
   const want = (opt && Number.isInteger(opt.part)) ? opt.part + 1
-    : +(new URLSearchParams(location.search).get('part') || 1);
+    : (qp || (rec && !recDone ? rec.p + 1 : 1));
   playPart(Math.min(Math.max(want - 1, 0), S.data.parts.length - 1));
 }
 
@@ -2578,6 +3061,8 @@ function refreshForLang() {
 
 async function switchLang(explicit) {
   explicit ? L10N.setLang(explicit) : L10N.cycle();
+  // 语言也算"设置"：记进偏好层，换设备也是同一种语言
+  if (window.UD && window.UD.syncPref) window.UD.syncPref('ui', 'lang', L10N.lang());
   toast(L10N.t('toast.lang', '显示语言：' + L10N.lang(), { name: L10N.label() }));
   if (S.key) await L10N.loadStory(S.key);
   refreshForLang();
@@ -2673,10 +3158,11 @@ $('#btnPlay').onclick = () => {
     playPart(ST.part);
   }
 };
-$('#btnRestart').onclick = () => { playPart(ST.part); };
+// 重播 = 从这一段开头播（noResume：不能又跳回"上次看到的那一句"）
+$('#btnRestart').onclick = () => { playPart(ST.part, { noResume: true }); };
 $('#btnNext').onclick = () => {
   const n = ((ST.part || 0) + 1) % (S.data?.parts.length || 1);
-  playPart(n);
+  playPart(n, { noResume: true });
 };
 // 点击舞台 = 暂停/播放（与 P 键一致）
 let _lastStageTap = 0;
@@ -2826,7 +3312,61 @@ L10N.ready.then(() => {               // ui.json 到位后再刷一遍静态文�
   setPlayBtn(ST.running);
   if (S.data) renderTabs();
 });
+/* 恢复上次的分类（SRC 在声明处已经从 localStorage 读回来了）：
+   按钮高亮是写死在 HTML 里的「角色」，这里同步一次，否则停在「活动」但按钮亮着「角色」 */
+document.querySelectorAll('#srcRow button').forEach(x =>
+  x.classList.toggle('on', x.dataset.src === SRC));
+/* 语言也走偏好层：浏览器里的 escah_lang 被清掉（换浏览器 / 清缓存 / 新设备）时，
+   用偏好层记的语言把界面切回来。L10N 自己只认 localStorage，这里补一刀。 */
+(function applyPrefLang() {
+  const lang = (window.UD && window.UD.prefValue) ? window.UD.prefValue('ui', 'lang', null) : null;
+  if (!lang || !L10N || !L10N.setLang || L10N.lang() === lang) return;
+  L10N.setLang(lang);
+  updateLangBtn();
+})();
+
 renderSidebar();
+/** 把偏好层里"别的设备改过的"值搬到界面：设置面板 + 分类 + 筛选 + 语言。
+ *  只在启动 hydrate 拿到远端更新时调用一次；应用完立刻用合并后的值重建 diff 基准，
+ *  不会把远端值当成"用户刚改的"再推回去。 */
+function applyRemotePrefsToUI() {
+  if (!UD) return;
+  // 设置面板：只认 DEFAULTS 里有的键（防止旧版本残留的垃圾键混进来）
+  let any = false;
+  for (const k in DEFAULTS) {
+    const v = UD.prefValue('set', k, undefined);
+    if (v !== undefined && SET[k] !== v) { SET[k] = v; any = true; }
+  }
+  if (any) { syncSettingControls(); applySettings(); }
+  // 列表分类 / 资源筛选
+  const src = UD.prefValue('ui', 'src', null);
+  if (src && SRC_ALL.indexOf(src) >= 0) SRC = src;
+  document.querySelectorAll('#srcRow button').forEach(x =>
+    x.classList.toggle('on', x.dataset.src === SRC));
+  const dlf = UD.prefValue('ui', 'dlf', null);
+  if (dlf != null && $('#dlFilter') && $('#dlFilter').querySelector(`option[value="${dlf}"]`)) {
+    $('#dlFilter').value = dlf;
+  }
+  if (typeof updateCnt === 'function') updateCnt();
+  renderSidebar(($('#search') || {}).value || '');
+  // 语言：静默切换（不弹 toast —— 用户没点任何东西）
+  const lang = UD.prefValue('ui', 'lang', null);
+  if (lang && L10N && L10N.setLang && L10N.lang() !== lang) {
+    L10N.setLang(lang);
+    updateLangBtn();
+    if (S.key) L10N.loadStory(S.key).then(() => refreshForLang());
+  }
+}
+
+/* 收藏 / 播放进度 / 设置：浏览器 localStorage 是主，userdata/*.json 是备份。
+   启动时拉一次合并进来（换浏览器、清过缓存、手机扫码进来都能看到自己的收藏与设置），
+   有变化就重画一次列表、重新套一遍设置。打不开服务端时 UD 内部直接放弃。 */
+if (UD && UD.hydrate) {
+  UD.hydrate().then(r => {
+    if (r && r.prefs) applyRemotePrefsToUI();
+    if (r && r.marks) renderSidebar(($('#search') || {}).value || '');
+  });
+}
 // 恢复历史面板展开状态
 (() => {
   const open = localStorage.getItem('escah_hist') !== '0';
@@ -2878,9 +3418,10 @@ updateCnt();
 /* 这些模块不想碰播放器内部状态，所以只暴露最小的控制面。 */
 window.PLAYER_API = {
   setAuto(v) { ST.auto = !!v; const el = $('#auto'); if (el) el.checked = ST.auto; },
-  replayPart() { return S.data ? playPart(ST.part) : Promise.resolve(); },
-  /** 播指定段。注意它会一直跑到该段播完 */
-  playPart(i) { return S.data ? playPart(i) : Promise.resolve(); },
+  replayPart() { return S.data ? playPart(ST.part, { noResume: true }) : Promise.resolve(); },
+  /** 播指定段。注意它会一直跑到该段播完。
+      自动化脚本用得到"从段首开始"，所以这里不食用播放进度（noResume）。 */
+  playPart(i) { return S.data ? playPart(i, { noResume: true }) : Promise.resolve(); },
   partDone() { return !ST.running && ST.methods.length > 0 && ST.idx >= ST.methods.length; },
   key: () => ST.key,
   part: () => ST.part,
