@@ -314,6 +314,49 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
     0 calc(var(--msgStroke,1.2px) * -1) 0 rgba(0,0,0,.9),
     0 var(--msgStroke,1.2px) 0 rgba(0,0,0,.9),
     0 2px 10px rgba(0,0,0,.8)}
+
+/* ---------- 无框字幕（设置 → 文本框外观） ----------
+   soft：文字后面垫一层**看不见边界**的径向暗晕，白字压在任何浅色 CG 上都能看清；
+   bare：连暗晕也不要，只靠加重的八方向描边（就是"完全没有文本框"的效果）。
+   两种都把背景 / 边框 / 投影去干净，界面上只剩文字。 */
+#msgWindow.wb-soft,#msgWindow.wb-bare{
+  background:none;border-color:transparent;box-shadow:none}
+#msgWindow.wb-soft::before{
+  content:'';position:absolute;inset:-22px -40px;pointer-events:none;
+  background:radial-gradient(112% 128% at 50% 52%,
+    rgba(0,0,0,.62) 0%,rgba(0,0,0,.46) 42%,rgba(0,0,0,.18) 68%,rgba(0,0,0,0) 86%);
+  border-radius:50%;filter:blur(6px)}
+/* 描边加粗：没底框时文字就是唯一可读性来源（--halo 在原粗细上加 0.7px，
+   并补上四个对角方向——只有上下左右时，白字压在亮背景上还是会被"糊边"） */
+#msgWindow.wb-soft #msgText,#msgWindow.wb-bare #msgText{
+  --halo:calc(var(--msgStroke,1.2px) + .7px);
+  text-shadow:
+    calc(var(--halo) * -1) 0 0 rgba(0,0,0,.92),
+    var(--halo) 0 0 rgba(0,0,0,.92),
+    0 calc(var(--halo) * -1) 0 rgba(0,0,0,.92),
+    0 var(--halo) 0 rgba(0,0,0,.92),
+    calc(var(--halo) * -.7) calc(var(--halo) * -.7) 0 rgba(0,0,0,.85),
+    calc(var(--halo) * .7) calc(var(--halo) * -.7) 0 rgba(0,0,0,.85),
+    calc(var(--halo) * -.7) calc(var(--halo) * .7) 0 rgba(0,0,0,.85),
+    calc(var(--halo) * .7) calc(var(--halo) * .7) 0 rgba(0,0,0,.85),
+    0 3px 14px rgba(0,0,0,.85),
+    0 0 24px rgba(0,0,0,.55)}
+/* 话者名同样去块：只留金色文字 + 描边。padding/left 不动，
+   这样开关切换时名字不会左右跳。
+   名字字号小、又常压在亮招牌/浅色背景上，所以描边比正文更重（--halo + 四对角）。 */
+#msgWindow.wb-soft #msgName,#msgWindow.wb-bare #msgName{
+  background:none;box-shadow:none;color:#ffe9b8;
+  --halo:calc(var(--msgStroke,1.2px) + 1px);
+  text-shadow:
+    calc(var(--halo) * -1) 0 0 rgba(0,0,0,.95),
+    var(--halo) 0 0 rgba(0,0,0,.95),
+    0 calc(var(--halo) * -1) 0 rgba(0,0,0,.95),
+    0 var(--halo) 0 rgba(0,0,0,.95),
+    calc(var(--halo) * -.72) calc(var(--halo) * -.72) 0 rgba(0,0,0,.9),
+    calc(var(--halo) * .72) calc(var(--halo) * -.72) 0 rgba(0,0,0,.9),
+    calc(var(--halo) * -.72) calc(var(--halo) * .72) 0 rgba(0,0,0,.9),
+    calc(var(--halo) * .72) calc(var(--halo) * .72) 0 rgba(0,0,0,.9),
+    0 2px 10px rgba(0,0,0,.95)}
 /* 设置面板 */
 /* top 跟着 header 的固定高度 50px 走，否则面板会压住顶栏下沿 */
 /* 两列布局：单列 264px 时内容高约 1055px，1080p 下必然出滚动条。
@@ -330,6 +373,8 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   grid-column:1/-1}
 /* 同一行里两个控件高度不齐时，别让下面的项跟着错位 */
 #settings>label{align-self:start}
+/* 当前模式下不起作用的设置项：变淡 + 禁止操作（无框字幕时的背景色 / 不透明度） */
+#settings select:disabled,#settings input:disabled{opacity:.4;cursor:not-allowed}
 #settings h4{font-size:14px;color:var(--gold);letter-spacing:1px;margin:9px 0 5px;
   padding-bottom:5px;border-bottom:1px solid var(--line);font-weight:600}
 #settings h4:first-child{margin-top:0}

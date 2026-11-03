@@ -87,6 +87,22 @@ function wait(ms) {
 }
 function skipAll() { ST.skips.slice().forEach(f => f()); ST.skips = []; }
 
+/* 剧本里的 Time 字段混着三样东西：
+ *   1. 真秒数 —— 0.25 / 0.5（绝大多数字幕与立绘指令）；
+ *   2. 演出枚举 —— '右ワイプ' / '黒画面' / '中'（数值化没有意义）；
+ *   3. 哨兵值 —— 100 / 255，游戏里含义是「等玩家点击」，**不是秒数**。
+ * 以前一律 num(Time) 当秒数，遇到哨兵就要等 100~255 秒：表现是剧情卡在
+ * 那一句不动、点暂停再播放又回到同一句继续等（seekTo 会重放这几条指令）。
+ * 这里统一归一一次，别在各个指令里各自 num()。 */
+const TIME_CAP = 5;            // 超过 5 秒的一定是哨兵/枚举，不可能是演出时长
+/** Time → 毫秒。非数字走 defMs；哨兵走 sentinelMs（不传时同 defMs）。 */
+function timeMs(v, defMs, sentinelMs) {
+  const n = num(v, NaN);
+  if (!isFinite(n) || n < 0) return defMs;
+  if (n > TIME_CAP) return (sentinelMs == null ? defMs : sentinelMs);
+  return n * 1000;
+}
+
 /* ================= 舞台缩放 ================= */
 function fitStage() {
   const wrap = $('#stageWrap'), stage = $('#stage');
@@ -736,12 +752,15 @@ function showWindow(m) {
   if (who) { n.textContent = who; n.classList.add('on'); }
   else n.classList.remove('on');
   $('#msgText').classList.toggle('narr', !who);
-  return wait(Math.max(num(m.Time, .2), .05) * 1000);
+  return wait(winFadeMs(m));
 }
 function hideWindow(m) {
   $('#msgWindow').classList.remove('on');
-  return wait(Math.max(num(m.Time, .2), .05) * 1000);
+  return wait(winFadeMs(m));
 }
+/** 对话框开关的淡入淡出时长：Time 常写成擦除方向（'右ワイプ'）或 100/255
+ *  哨兵，这些都不是时长，统一按 0.2s 处理（原来会等 100 秒）。 */
+function winFadeMs(m) { return Math.max(timeMs(m.Time, 200), 50); }
 
 function typeText(text) {
   const el = $('#msgText');
@@ -997,7 +1016,9 @@ function runOne(m, midx, isSeek) {
       ST.pendingAll.length = 0;
       return Promise.all(all).then(() => undefined);
     }
-    case 'Wait': return wait(num(m.Time, .5) * 1000);
+    /* Wait 的 Time=100（漫画/演出里 696 处）同样是「等玩家点击」哨兵：
+       真等 100 秒就等于卡死，这里按 2 秒算（自动播放时的翻页节奏）。 */
+    case 'Wait': return wait(timeMs(m.Time, 500, 2000));
     /* --- 音频 --- */
     case 'PlayMusic':
       if (!ST.fastForward) playMusic(m); return;
@@ -1540,6 +1561,7 @@ const DEFAULTS = { alpha: 90, fs: 21, typeRate: 1, showWin: true, standH: 100,
               msgFont: 'sans', msgLH: 1.62, msgStroke: 1.2,
               msgH: 150, msgY: 26,          // 对话框高度 / 垂直位置（都是 px）
               msgX: 0, msgAlign: 'left',
+              msgBox: 'box',                // 文本框外观：box / soft / bare
               nameX: 0, nameY: 0, nameAlign: 'left' };
 /* 工作副本：所有改动作用在 SET 上，恢复默认时 Object.assign(SET, DEFAULTS) 即可 */
 const SET = { ...DEFAULTS };
@@ -1570,6 +1592,21 @@ function applySettings() {
     nmEl.classList.remove('align-left', 'align-center', 'align-right');
     nmEl.classList.add('align-' + (SET.nameAlign || 'left'));
   }
+  /* 文本框外观：box=有边框 / soft=无框+柔和底衬 / bare=无框+纯文字（只剩字幕）。
+     用 class 而不是内联样式，CSS 那边全靠 #msgWindow.wb-* 覆盖，改动集中在一处。 */
+  const wEl = $('#msgWindow');
+  const wb = SET.msgBox || 'box';
+  if (wEl) {
+    wEl.classList.toggle('wb-soft', wb === 'soft');
+    wEl.classList.toggle('wb-bare', wb === 'bare');
+  }
+  // 无框时背景色/不透明度不生效：控件变灰（面板上那行说明已经解释了原因），
+  // 免得用户拖了没反应以为坏了
+  const noBg = wb !== 'box';
+  ['#setA', '#setMsgBg'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.disabled = noBg;
+  });
   // 立绘高度上限锁死 720（舞台高），超出会被裁切导致"缺头"
   st.style.setProperty('--standH', Math.min(720 * SET.standH / 100, 720) + 'px');
   st.style.setProperty('--standY', (SET.standY || 0) + 'px');
@@ -1627,6 +1664,7 @@ function syncSettingControls() {
   $('#setStandY').value = SET.standY ?? 0;
   $('#setStandX').value = SET.standOX ?? 0;
   $('#setMsgBg').value = SET.msgBg || '10,14,22';
+  if ($('#setMsgBox')) $('#setMsgBox').value = SET.msgBox || 'box';
   $('#setMsgColor').value = SET.msgColor || '#f2f5fb';
   $('#setMsgFont').value = SET.msgFont || 'sans';
   $('#setLH').value = Math.round((SET.msgLH ?? 1.62) * 100);
@@ -1873,6 +1911,7 @@ if ($('#setUseX2')) {
 }
 $('#setStandY').oninput = e => { SET.standY = +e.target.value; applySettings(); };
 $('#setStandX').oninput = e => { SET.standOX = +e.target.value; applySettings(); };
+$('#setMsgBox').onchange = e => { SET.msgBox = e.target.value; applySettings(); };
 $('#setMsgBg').onchange = e => { SET.msgBg = e.target.value; applySettings(); };
 $('#setMsgColor').onchange = e => { SET.msgColor = e.target.value; applySettings(); };
 $('#setMsgFont').onchange = e => { SET.msgFont = e.target.value; applySettings(); };
@@ -3304,6 +3343,19 @@ setInterval(() => {
 window.__testSeek = n => seekTo(n);
 INDEX.sort((a, b) => a.id - b.id);   // 按数字 ID 排序（文件名排序会得到 1,10,100…）
 loadSettings();
+/* ?msgbox=box|soft|bare 供自动化测试：启动即切到该文本框外观
+   （与 ?seek / ?settings / ?langswitch 同一套约定，正常访问不带这个参数就完全没影响）
+   注意只切 DOM class，**不碰 SET**：否则会被 escah_set 记住、还会经 UD 同步到
+   userdata/prefs.json，把用户真机上的设置一起改掉（踩过一次）。
+   调用点在 hydrate 之后 —— applySettings() 会按 SET.msgBox 重设 class，抢在前面会被清掉。 */
+function applyTestMsgBox() {
+  const mb = new URLSearchParams(location.search).get('msgbox');
+  if (mb !== 'box' && mb !== 'soft' && mb !== 'bare') return;
+  const w = $('#msgWindow');
+  if (!w) return;
+  w.classList.toggle('wb-soft', mb === 'soft');
+  w.classList.toggle('wb-bare', mb === 'bare');
+}
 updateLangBtn();                      // 按钮先显示当前语言（不等 ui.json）
 L10N.ready.then(() => {               // ui.json 到位后再刷一遍静态文案
   L10N.applyDom();
@@ -3365,7 +3417,10 @@ if (UD && UD.hydrate) {
   UD.hydrate().then(r => {
     if (r && r.prefs) applyRemotePrefsToUI();
     if (r && r.marks) renderSidebar(($('#search') || {}).value || '');
+    applyTestMsgBox();               // 必须排在 applyRemotePrefsToUI 之后（它会重套设置）
   });
+} else {
+  applyTestMsgBox();
 }
 // 恢复历史面板展开状态
 (() => {
