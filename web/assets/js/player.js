@@ -2521,6 +2521,17 @@ let advAll = [], advCursor = 0;
     no<=0 的两组（0 投票说明 / -1 未归类）没有游戏横幅，靠 hasBnr 自动跳过。 */
 const OTHER_OPEN = new Set();      // 展开的入口号（内存态，刷新后默认全收起）
 
+/* 这一话有没有语音。
+   优先用 othereps.js 里写好的**段级**条数（e.v，构建期从包数据里数出来）；
+   老清单没有这个字段时退回 advindex 的整包语音数（voices 剧本引用数 /
+   voiceRes 本地文件数）。「其他」里绝大多数包官方本来就没配语音轨，
+   列表上必须写出来 —— 不然用户点进去一句都没声音，只会以为播放器坏了。 */
+function epHasVoice(e) {
+  if (Number.isInteger(e.v)) return e.v > 0;
+  const a = advByKey(e.k);
+  return !!(a && ((a.voices || 0) > 0 || (a.voiceRes || 0) > 0));
+}
+
 function renderOtherGroups(box, filter = '', opt = {}) {
   const f = (filter || '').trim().toLowerCase();
   const groups = window.__OTHER_EPS || [];
@@ -2582,16 +2593,23 @@ function renderOtherGroups(box, filter = '', opt = {}) {
     eps.forEach(e => {
       const d = document.createElement('div');
       const on = (S.key === e.k) && (ST.part === e.i);
-      d.className = 'char-btn ep' + (on ? ' on' : '');
+      const hv = epHasVoice(e);
+      // .nov = 本话没有语音：挂徽标，并让 CSS 允许这一行的「句数 / 无语音」折行
+      d.className = 'char-btn ep' + (on ? ' on' : '') + (hv ? '' : ' nov');
       d.dataset.key = e.k;
       d.dataset.part = e.i;
       // 「其他」的一话才是用户点的那一项，所以收藏/进度都按"包 + 段"算
       const fid = favIdStory(e.k, e.i);
-      // 一行：话名左对齐（超长省略）＋ 句数右对齐 ＋ 复制
+      // 一行：话名左对齐（超长省略）＋ 句数 ＋ 无语音 ＋ 复制；塞不下时 CSS 让
+      // 「句数 / 无语音」整体折到第二行（侧栏只有 300px，硬挤会把「その1」吃掉）
       d.innerHTML = `<span class="info"><span class="nm">${esc(e.t)}</span>`
         + `<span class="sub">${e.m ? `<span>#${e.i + 1}</span>` : ''}`
         + progHTML(e.k, e.i)
-        + `<span>${e.n} 句</span></span>`
+        + `<span>${e.n}句</span>`
+        // 和资源管理页的安装列表同一个说法：官方没配语音轨的话就直接写「无语音」
+        + (hv ? '' : `<span class="badge soft" title="这一话官方没有配音">`
+          + L10N.t('adv.noVoice', '无语音') + `</span>`)
+        + `</span>`
         + `<span class="cpy" title="复制">⧉</span>`
         + favHTML(fid) + `</span>`;
       bindFav(d, fid, refilterIfFav);
@@ -2604,6 +2622,7 @@ function renderOtherGroups(box, filter = '', opt = {}) {
         const rec = UD && UD.prog(e.k);
         return `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
           + `<dl><dt>段</dt><dd>#${e.i + 1}</dd><dt>句数</dt><dd>${e.n}</dd>`
+          + `<dt>语音</dt><dd>${hv ? '有语音' : '无语音（官方没配）'}</dd>`
           + `<dt>首句</dt><dd>${esc(e.t)}</dd>`
           + `<dt>主要人物</dt><dd>${esc(e.c || '—')}</dd>`
           + ((rec && rec.p === e.i)
@@ -2772,7 +2791,10 @@ function appendAdvChunk() {
 }
 
 function advItem(a) {
-  const vnote = a.voiceRes ? `${a.voiceRes} 语音` : '无语音';
+  /* 三种情况要分开：有语音文件 / 剧本里有语音但这台机器没下音频包 / 官方就没配。
+     以前只看 voiceRes，后两种一律写「无语音」，用户会以为剧本身就是哑的。 */
+  const vnote = a.voiceRes ? `${a.voiceRes} 语音`
+    : (a.voices ? '语音未下载' : '无语音');
   const st = window.PACKSTATE ? PACKSTATE.status(a.key) : 'unknown';
   // 同一部剧情的多个条目（如 adv_op 里的三部序章）共用 key，靠 part 区分：
   // 标题优先用条目自带的 title，起始段用 a.part。

@@ -338,13 +338,16 @@ PROTECTED_PREFIXES = (
 )
 
 
-def install_base(job=None, workers: int = 48,
-                 parts=("bg", "bgm", "sfx", "avatar")) -> dict:
-    """下载并解包「公共素材」：背景 / BGM / 音效。
+def install_base(job=None, workers: int = 48, parts=None) -> dict:
+    """下载并解包「公共素材」：背景 / 音乐 / 音效 / 头像 / 剧情横幅。
+
+    默认类别取 :data:`server.facts.PUBLIC_PARTS` 的键 —— 以前把默认值抄成
+    ``("bg","bgm","sfx","avatar")``，漏了 banner，跟 ``/api/install/base`` 的
+    白名单与界面上写的类别对不上；现在只有一处真源，加类别不会再漏。
 
     为什么值得单独做一个入口
     ------------------------
-    这三类是**跨剧情共享**的：每部剧情都会用到背景和 BGM，按剧情重复下载
+    这些是**跨剧情共享**的：每部剧情都会用到背景和 BGM，按剧情重复下载
     既慢又占地方。而且剧本里的 ``PlayMusic {"Music": "89B98A79_..."}``
     能精确反查到 ``bundle_music_89b98a79_...``（实测 10/10 命中），
     所以**全量下齐之后，所有剧情的 BGM 都能响**——这是"没音乐"的根治办法。
@@ -354,14 +357,17 @@ def install_base(job=None, workers: int = 48,
     "约 835 MB"和这里算的是同一份数据。相对全量素材只占几个百分点，
     但之后装任何剧情都不用再补。
 
-    关于头像（avatar）
+    关于头像与剧情横幅
     ------------------
-    侧栏头像来自 ``bundle_chara_c-panel_<cid>``（角色面板的半身像）。剧本**不引用**
-    它，所以按剧本引用下载是拿不到的；但它只有 384 个 / 19.8 MB，且 dependencies 为空
-    （不跟任何包绑定），因此归入公共素材最合适：
+    侧栏头像来自 ``bundle_chara_c-panel_<cid>``（角色面板的半身像）、剧情列表的
+    标题横幅来自 ``bundle_episodeicons_episode_character_<cid>``。剧本**都不引用**
+    它们，所以按剧本引用下载是拿不到的；但数量固定、体积小（头像 ~20 MB、
+    横幅 ~40 MB）、dependencies 为空（不跟任何包绑定），因此归入公共素材最合适：
        · 体积可以忽略
-       · **没装的角色也能显示头像**，方便认人（若按剧情下载，未装角色就是空白）
+       · **没装的角色也能显示头像与横幅**，方便认人（若按剧情下载，未装角色就是空白）
     """
+    parts = tuple(parts) if parts else tuple(PUBLIC_PARTS)
+
     config.ensure_dirs()
     mf = select.Manifest(ensure_manifest(job))
     out: dict = {"bytes": 0}
@@ -680,6 +686,120 @@ def new_public() -> dict:
     return out
 
 
+def _public_img_ok(folder: str, base: str) -> bool:
+    for ext in (".png", ".webp", ".jpg"):
+        if os.path.exists(os.path.join(folder, base + ext)):
+            return True
+    return False
+
+
+def public_deficit() -> dict:
+    """清单里有、但**磁盘上还没有对应图**的公共素材包（精确到包名）。
+
+    为什么不能只靠 :func:`new_public`：那套是拿 stamp（上次补完时的包数）跟现在的
+    清单比。而**纯净全量包**里的 ``web/media`` 是预装的、从没"补全"过 → 没有 stamp
+    → ``new_public()`` 永远返回空。于是官方一上新角色（1.0.9 带进来 char_416），
+    侧栏头像与剧情横幅直接 404，而程序完全不知道（用户 2026-11-04 反馈）。
+
+    这里改成按"包 ↔ 期望落盘的图"一对一核对，只认**一包一图**的两类：
+      · ``bundle_chara_c-panel_<n>``              → ``media/img/avatar/<n>.png``
+      · ``bundle_episodeicons_episode_character_<n>`` → ``media/img/story/char_<cid>.webp``
+    章节横幅（``bundle_image_story_*``，一个包里一批图）另按"应有张数"登记核对。
+
+    → ``{"avatar": [包名…], "banner": [包名…]}``（没有缺口的类目不出现在结果里）
+    """
+    idx = config_manifest_index()
+    if not idx:
+        return {}
+    adir = os.path.join(config.IMG, "avatar")
+    sdir = os.path.join(config.IMG, "story")
+    out = {"avatar": [], "banner": []}
+    for n in idx:
+        if n.startswith("bundle_chara_c-panel_"):
+            # 包名是**补零**的（_001 / _0416），落盘的图是**不补零**的（1.png / 416.png），
+            # 直接比字符串会认为全都缺（实测 dev 环境误报 98 个）。
+            try:
+                tail = str(int(n.rsplit("_", 1)[-1]))
+            except ValueError:
+                continue
+            if not _public_img_ok(adir, tail):
+                out["avatar"].append(n)
+        elif n.startswith("bundle_episodeicons_episode_character_"):
+            try:
+                cid = int(n.rsplit("_", 1)[-1])
+            except ValueError:
+                continue
+            if not _public_img_ok(sdir, "char_%d" % cid):
+                out["banner"].append(n)
+    inv = _banner_inventory()
+    if inv:
+        try:
+            have = {x for x in os.listdir(sdir)
+                    if x.lower().endswith((".webp", ".png", ".jpg"))}
+        except OSError:
+            have = set()
+        if inv - have:
+            out["banner"] += [n for n in idx if n.startswith("bundle_image_story_")]
+    return {k: v for k, v in out.items() if v}
+
+
+#: 自动补公共素材的上限（个包）。超过它就只在日志里提示去「资源管理」补全 ——
+#: 全新环境一次缺几百个包，那等于把 800 MB 全下一遍，不能替用户决定。
+PUBLIC_AUTO_LIMIT = 12
+
+
+def install_public_delta(job, delta: dict) -> dict:
+    """只补 ``delta`` 里列出的那几个公共素材包（下载 → 导出对应图）。
+
+    与 :func:`install_base` 的区别：那个按**类别**全量重做（385 个头像 force 重导，
+    要几分钟），这里只处理缺的那几个 —— 官方新增一个角色只是 2 个包。
+    """
+    names = list(delta.get("avatar") or []) + list(delta.get("banner") or [])
+    if not names:
+        return {"packs": 0}
+    mf = index_manifest()
+    ents = _entries(mf, names)
+    if job is not None:
+        job.log("公共素材补 %d 个包（头像 %d / 横幅 %d）…" % (
+            len(names), len(delta.get("avatar") or []),
+            len(delta.get("banner") or [])))
+    stages.fetch(ents, 16, "公共素材", skip=True, pause_event=_pe(job), job=job)
+    n_av = n_bn = 0
+    for n in delta.get("avatar") or []:
+        try:
+            if stages.export_avatar(int(n.rsplit("_", 1)[-1]), force=True):
+                n_av += 1
+        except Exception:                                      # noqa: BLE001
+            pass
+    cids = []
+    story_pkgs = False
+    for n in delta.get("banner") or []:
+        if n.startswith("bundle_episodeicons_episode_character_"):
+            try:
+                cids.append(int(n.rsplit("_", 1)[-1]))
+            except ValueError:
+                pass
+        else:
+            story_pkgs = True                 # bundle_image_story_*：章节横幅
+    if cids:
+        try:
+            n_bn = (stages.export_char_banners(only=cids) or {}).get("new", 0)
+        except Exception:                                      # noqa: BLE001
+            pass
+    if story_pkgs:
+        try:
+            stages.export_story_topics()
+        except Exception:                                      # noqa: BLE001
+            pass
+    try:
+        stages.regen_imgmap()
+    except Exception:                                          # noqa: BLE001
+        pass
+    if job is not None:
+        job.log(f"   公共素材补齐：头像 {n_av}、角色横幅 {n_bn}")
+    return {"packs": len(names), "avatars": n_av, "banners": n_bn}
+
+
 #: 章节横幅"应有张数"的兜底种子（随仓库分发）。导出横幅时会另写一份到
 #: ``userdata/cdn/story_banners.json``（官方新增章节后由它更新）；种子只用于
 #: "图早就导出过、但没登记"的老用户 —— 否则界面会显示「章节 0/0」。
@@ -804,6 +924,10 @@ def public_status() -> dict:
             #   backUnused  = 清单里有、但没有任何已装剧情引用的包（导出时不会有图）
             "backPacks": back_packs, "backRefMiss": back_ref_miss,
             "backUnused": max(0, back_packs - back_ref_total) if has_miss else 0,
+            # 背景是否已按"引用视角"核对过（读过 imgmap_miss.json）。
+            # 没核对过时分子分母都是**包数口径**（601/612），差的那几张其实
+            # 是"没有任何已装剧情引用"的包 —— 前端据此决定要不要按 1:1 严格判齐。
+            "backVerified": has_miss,
             "music": min(n_music, music_total), "musicTotal": music_total,
             "sfx": min(n_sfx, sfx_total), "sfxTotal": sfx_total,
             "avatar": min(n_avatar, avatar_total), "avatarTotal": avatar_total,
@@ -817,10 +941,11 @@ def public_status() -> dict:
             "bannerImg": n_banner_img,
             # 结构版本：前端据此判断"后端是不是还没重启/还是旧代码"。
             # 2 = 加了 banner 字段；3 = 横幅改成按图数（角色/章节分开）；
-            # 4 = 背景改成"按引用算" + backPacks/backRefMiss/backUnused。
+            # 4 = 背景改成"按引用算" + backPacks/backRefMiss/backUnused；
+            # 5 = 加 backVerified（前端据此对"已核对过"的背景按 1:1 严格判齐）。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
-            "v": 4,
+            "v": 5,
             "bytes": 0}
 
 
@@ -1297,6 +1422,22 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
         stages.fetch(cp_ents, workers, "角色头像", skip=True,
                      pause_event=_pe(job), job=job)
     stages.export_avatar(cid)
+
+    # 角色剧情的**横幅**（游戏「角色剧情」入口那张图）也在公共素材里：
+    # `bundle_episodeicons_episode_character_<cid:05d>` → media/img/story/char_<cid>.webp。
+    # 以前装剧情只拿头像、不拿横幅，于是官方新实装的角色装完剧情后，侧栏横幅
+    # 还是 404（用户 2026-11-04 报「纯净全量包更新后横幅和头像都 404」）。
+    # 名字是 5 位补零，和 c-panel 的 3 位补零不是一回事。
+    bn_name = f"bundle_episodeicons_episode_character_{int(cid):05d}"
+    bn_ents = _entries(mf, [bn_name] if bn_name in mf.index else [])
+    if bn_ents:
+        stages.fetch(bn_ents, workers, "角色横幅", skip=True,
+                     pause_event=_pe(job), job=job)
+    try:
+        stages.export_char_banners(only=[cid])
+    except Exception as e:                                     # noqa: BLE001
+        if job is not None:
+            job.log(f"   角色横幅导出失败（不影响播放）：{str(e)[:80]}")
 
     nums = set()
     assets = {"stand": set(), "back": set(), "cg": set()}

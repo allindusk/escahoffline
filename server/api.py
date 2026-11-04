@@ -425,23 +425,81 @@ def _refresh_manifest(job) -> dict:
             + (f"，新增 {len(new)} 部" if new else "，没有新增"))
 
     # 公共素材是必选包：清单变了就顺手补齐，用户不用再跑一趟
+    add = _auto_fill_public(job)
+
+    return {"newUnits": new, "total": len(alln), "publicAdded": add}
+
+
+def _auto_fill_public(job) -> dict:
+    """清单刚刷新完，把公共素材的缺口自动补齐。→ ``new_public()`` 的结果。
+
+    两条互补的路，缺一不可：
+
+    1. **``new_public()``**：拿 stamp（上次补完时的包数）跟清单比 —— 只有"曾经
+       补全过"的用户才有 stamp。背景 / 音乐 / 音效只能靠它发现新增（它们的落盘
+       不是一包一图，没法逐个核对）。
+    2. **``public_deficit()``**：按"包 ↔ 图"逐个核对头像与剧情横幅。这条解决了
+       纯净全量包的盲区 —— 那种包的 ``web/media`` 是预装的、从没补全过 → 没有
+       stamp → 第 1 条永远返回空，于是官方一上新角色（1.0.9 带进 char_416），
+       侧栏头像与剧情横幅整批 404 而程序毫无反应（用户 2026-11-04 反馈）。
+
+    优先级：缺口小（新角色通常就 2 个包）先走**精确补**（只下那几个包 + 只导出
+    那几张图，秒级）；缺口大说明用户压根没下过公共素材，才退回按类别整批补
+    （那条会把 385 个头像 force 重导，慢），并且只在有 stamp 时才自动下 ——
+    否则等于替用户静默下 800 MB。
+    """
     try:
         add = cdn_install.new_public()
     except Exception as e:                                     # noqa: BLE001
         job.log(f"（公共素材差异检查跳过：{e}）")
         add = {}
-    if add and not job.cancelled:
-        desc = "、".join(f"{k} +{v} 个" for k, v in add.items())
+    try:
+        deficit = cdn_install.public_deficit()
+    except Exception as e:                                     # noqa: BLE001
+        job.log(f"（公共素材缺图检查跳过：{e}）")
+        deficit = {}
+    n_def = sum(len(v) for v in deficit.values())
+
+    if job.cancelled:
+        if add or n_def:
+            job.log("公共素材有缺口，但任务已取消，未自动下载")
+        return add
+
+    # 背景 / 音乐 / 音效：没有"一包一图"的对应关系，只能按类别整批补
+    bulk = {k: v for k, v in add.items() if k in ("bg", "bgm", "sfx")}
+    if bulk:
+        desc = "、".join(f"{k} +{v} 个" for k, v in bulk.items())
         job.log(f"公共素材有新增：{desc}，开始自动补下（已有的会跳过）…")
+
+    if n_def and n_def <= cdn_install.PUBLIC_AUTO_LIMIT:
+        job.log(f"公共素材缺 {n_def} 个包（头像 {len(deficit.get('avatar') or [])}"
+                f" / 横幅 {len(deficit.get('banner') or [])}），只补这几个…")
         try:
-            cdn_install.install_base(job, parts=tuple(add))
+            got = cdn_install.install_public_delta(job, deficit)
+            job.log(f"公共素材已补齐（{got.get('packs')} 个包，"
+                    f"头像 {got.get('avatars', 0)} / 横幅 {got.get('banners', 0)} 张）")
+        except Exception as e:                                 # noqa: BLE001
+            job.log(f"公共素材补下失败（不影响剧情列表）：{e}")
+    elif n_def:
+        # 大缺口：只有当用户确实"补全过"（有 stamp，add 里带着 avatar/banner）
+        # 才按类别整批补；否则只提示，不替他下 800 MB。
+        big = [k for k in ("avatar", "banner") if add.get(k)]
+        if big:
+            bulk.update({k: add[k] for k in big})
+            job.log(f"公共素材缺 {n_def} 个包，按类别整批补齐"
+                    f"（这里会重做一个头像批，需要几分钟）…")
+        else:
+            job.log(f"公共素材缺 {n_def} 个包（头像 {len(deficit.get('avatar') or [])}"
+                    f" / 横幅 {len(deficit.get('banner') or [])}），"
+                    "去「资源管理 → 公共素材」点「补全」即可")
+
+    if bulk:
+        try:
+            cdn_install.install_base(job, parts=tuple(bulk))
             job.log("公共素材已补齐")
         except Exception as e:                                 # noqa: BLE001
             job.log(f"公共素材补下失败（不影响剧情列表）：{e}")
-    elif add:
-        job.log("公共素材有新增，但任务已取消，未自动下载")
-
-    return {"newUnits": new, "total": len(alln), "publicAdded": add}
+    return add
 
 
 class _LegacyNote:
@@ -969,7 +1027,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._err("没有选择要下载的公共素材")
             workers = max(1, min(64, int(b.get("threads") or 32)))
             job = jobs.submit(
-                "base", "下载公共素材（背景 / BGM / 音效）",
+                # 标题要写全类别：任务条/操作记录里显示的这句，以前只写
+                # 「背景 / BGM / 音效」，用户以为头像和剧情横幅不在这条流程里
+                # （2026-11-04 反馈：更新页文案与安装页对不上）。
+                "base", "下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅）",
                 lambda j: cdn_install.install_base(j, workers, tuple(parts)))
             return self._json({"job": job.snapshot()})
         if path == "/api/uninstall":

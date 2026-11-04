@@ -16,7 +16,7 @@
     updShown: false,          // 启动检查的结果只回显一次
     // 云端可安装的单元与它们的本地状态（由 /api/cdn/units 提供）
     units: { char: [], adv: [], state: {}, loaded: false, at: 0, needManifest: false },
-    pub: null,          // 公共素材（背景/BGM/音效）已下载数量
+    pub: null,          // 公共素材（背景/音乐/音效/头像/剧情横幅）已导出数量
   };
 
   // ---------------------------------------------------------------- 工具
@@ -450,8 +450,15 @@
     const ready = !!cdn.manifestReady;
 
     const pub = ST.pub || {};
-    // 背景允许 2% 缺口：官方源本身有 11 个 bgimage 包里没有图
-    const near = (a, b) => (b ? (a || 0) >= b * 0.98 : true);
+    /* 「已就绪」的判齐口径（2026-11-04 用户反馈：头像 384/385、横幅 556/557 还写已就绪）：
+       · 音乐 / 音效 / 头像 / 横幅 都是「一个包一张（批）图」的 1:1 关系 →
+         必须**严格相等**。以前统一给 2% 余量，385 里差 1 个只有 0.26%，直接被当成齐了，
+         于是新角色的头像/横幅没下也显示"已就绪"，「补全」按钮还被藏起来。
+       · 背景例外：没核对过引用时分子分母是"包数口径"（601/612 —— 差的 11 个是
+         没有任何已装剧情引用的包），这种差是正常的，所以未核对时保留 2% 余量；
+         一旦后端按"引用视角"核对过（backVerified），也改成严格相等。 */
+    const exact = (a, b) => (b ? (a || 0) >= b : true);
+    const nearBg = (a, b) => (b ? (a || 0) >= b * 0.98 : true);
     const pubAny = (pub.back || 0) + (pub.music || 0) + (pub.sfx || 0)
       + (pub.avatar || 0) + (pub.banner || 0) > 0;
     // 后端结构版本：v<2 说明这个服务进程还是加 banner 之前的旧代码
@@ -464,13 +471,13 @@
     const cnt = (have, total) => (total == null ? '—'
       : (have || 0) + '/' + (total || 0));
     /* 「已就绪」还要求**引用到的图都不缺**：分母已经按引用算（见后端 public_status），
-       但被引用却缺失的图会体现在分子上；单看 near() 的比例还不够严，
+       但被引用却缺失的图会体现在分子上；单看比例还不够严，
        这里再卡一道 backRefMiss —— 缺一张就不该说"已就绪"。 */
     const backRefMiss = +(pub.backRefMiss || 0);
-    const pubAll = ready && !pubStale && near(pub.back, pub.backTotal)
-      && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal)
-      && near(pub.avatar, pub.avatarTotal) && near(pub.banner, pub.bannerTotal)
-      && backRefMiss === 0;
+    const bgOk = (pub.backVerified ? exact : nearBg)(pub.back, pub.backTotal);
+    const pubAll = ready && !pubStale && bgOk && backRefMiss === 0
+      && exact(pub.music, pub.musicTotal) && exact(pub.sfx, pub.sfxTotal)
+      && exact(pub.avatar, pub.avatarTotal) && exact(pub.banner, pub.bannerTotal);
 
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');

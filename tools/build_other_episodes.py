@@ -66,6 +66,10 @@ def main() -> int:
                 "i": i,
                 "t": title,
                 "n": len(messages(p)),
+                # 这一段的语音条数（0 = 官方本来就没配语音）。
+                # 侧栏「其他」要在话行上标「无语音」，否则用户点进去听不到声音
+                # 只会以为播放器坏了。段级而非整包：同一个包可能只有几段有语音。
+                "v": len(p.get("voices") or []),
                 "c": (cast_of(p) or [""])[0],
             })
         groups.append({"no": entry, "name": ENTRIES[entry], "eps": eps})

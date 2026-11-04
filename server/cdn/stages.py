@@ -561,8 +561,10 @@ def sync_othereps(job=None) -> int:
             part = _parts(no)[i]
         except Exception:                                      # noqa: BLE001
             continue
+        # v = 这一段的语音条数（0 = 官方没配语音），播放器侧栏据此标「无语音」
         g["eps"].append({"k": "adv_other_%d" % no, "i": i, "t": title,
-                         "n": len(OT.messages(part)), "c": _cast(part)})
+                         "n": len(OT.messages(part)), "v": len(part.get("voices") or []),
+                         "c": _cast(part)})
         added += 1
     if not added:
         return 0

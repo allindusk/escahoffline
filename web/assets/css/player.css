@@ -620,7 +620,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #charList .og-head .cnt{color:var(--fg3);font-size:14px;flex:0 0 auto}
 #charList .og-head .arw{color:var(--fg3);flex:0 0 auto}
 
-/* 话：**一行**——话名左对齐（超长省略）、句数右对齐；带边框，免得一章挨一章分不清 */
+/* 话：一行——话名左对齐（超长省略）、句数右对齐；带边框，免得一章挨一章分不清。 */
 #charList .char-btn.ep{padding:5px 8px;gap:6px;margin:0 0 3px 8px;
   border:1px solid #1f2733;border-radius:6px;background:#121820}
 #charList .char-btn.ep:hover{border-color:#3a4a5e;background:#181f2a}
@@ -630,6 +630,14 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #charList .char-btn.ep .info .nm{flex:1;min-width:0;font-size:14px}
 #charList .char-btn.ep .info .sub{flex:0 0 auto;white-space:nowrap;gap:6px}
 #charList .char-btn.ep .info .cpy{flex:0 0 auto}
+/* 「无语音」（.nov）这一行多了个徽标，侧栏 300px 放不下话名 + 句数 + 徽标：
+   让 .sub 整块折到第二行 —— 宁可这一行高点，也不能把「その1 / その2」省略掉，
+   那是同组几话之间唯一的区别。有语音的行不受影响，照旧一行。 */
+#charList .char-btn.ep.nov .info{flex-wrap:wrap;row-gap:2px}
+#charList .char-btn.ep.nov .info .nm{flex:1 1 auto}
+#charList .char-btn.ep.nov .info .sub{gap:4px}
+/* 话行里的徽标缩一圈内边距：这一行寸土寸金（整站最小字号 14px 不能降） */
+#charList .char-btn.ep.nov .info .sub .badge{padding:0 4px;margin-left:2px}
 
 /* 局域网访问浮层（含二维码） */
 #lanPanel{position:fixed;z-index:9999;display:none;width:260px;padding:14px;
