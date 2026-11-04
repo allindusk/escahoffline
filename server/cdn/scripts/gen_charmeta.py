@@ -49,6 +49,7 @@ for k in meta_by_name:
 out = {}
 miss_meta = 0
 miss_list = []
+used = set()
 for cid, nm in NAMES.items():
     base = re.sub(r"\s*\(\d+\)$", "", nm)          # 去掉重名后缀
     key = base if base in meta_by_name else _norm_index.get(_nk(base))
@@ -59,10 +60,12 @@ for cid, nm in NAMES.items():
                 (_nk(base) in _nk(k) or _nk(k) in _nk(base))]
         if len(cand) == 1:
             m = meta_by_name[cand[0]]
+            key = cand[0]
     if not m:
         miss_meta += 1
         miss_list.append((cid, base))
         continue
+    used.add(key)
     # 只放行合法稀有度。游戏里角色只有 SSR / SR / R 三档：
     # 「サポーター」是职业、NPC 不是稀有度，都不能随包分发出去。
     _r = m.get("r", "")
@@ -79,3 +82,12 @@ print(f"charmeta.js {os.path.getsize(CHARMAP_OUT) / 1024:.0f} KB")
 from collections import Counter
 print("稀有度分布:", dict(Counter(v["r"] for v in out.values())))
 print("类型(所属)分布:", dict(Counter(v["t"] for v in out.values()).most_common(10)))
+
+# 反方向的缺失（Wiki 有、names.js 没有）必须报出来：
+# 新角色一实装 Wiki 就有，但 names.js 是本地解包剧本的产物，没解包就没这一条。
+# 以前这里静默丢弃 —— 2026-11-04 新角色 メイドハータン 就是这样"抓到了却没上站"，
+# 日志里只有"元数据 384 条，缺 meta 0"，看不出漏了谁。
+unused = [k for k in meta_by_name if k not in used]
+if unused:
+    print(f"⚠ Wiki 有、names.js 没有 {len(unused)} 个（未解包/未对上 id）："
+          + "、".join(unused[:8]) + ("…" if len(unused) > 8 else ""))

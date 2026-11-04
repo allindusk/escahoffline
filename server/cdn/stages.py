@@ -478,6 +478,110 @@ def sync_advindex() -> int:
     return len(merged)
 
 
+def sync_othereps(job=None) -> int:
+    """装完一部「其他」剧情后，按**剧本内容**判定它属于哪个游戏入口，补进 othereps.js。
+
+    为什么要在运行时做：``web/data/othereps.js`` 是构建期产物
+    （``tools/build_other_episodes.py``），里面只有"发版时已经存在"的包。官方新上
+    ``adv_other_77`` 之后，用户装上了它，侧栏「其他」里要么看不到、要么只能挂在
+    「未归类」。
+
+    而**归属其实不需要关联表**：``tools/other_taxonomy.py`` 的 ``classify_pack()``
+    本来就是纯内容规则 ——
+      · 2 段包 + 正文出现 BOSS 名（按出现次数取最高）→ 该 RAID 入口，来襲/退場 そのN；
+      · 2 段包 + 「殲滅 / 敵の集団 / 侵略者」→ 殲滅戦 -STAMPEDE-（そのN 顺延）；
+      · 正文写「4月1日 / エイプリル」→ エイプリルフール；自报「N周年」→ 記念イベント；
+      · 多段包 + 立绘职种单色（≥2 票且全票一致）→ 広域戦 对应职种；
+      · 都不匹配 → 入口 -1「未归类（新剧情）」，可播、不丢、也不塞错。
+    所以这里直接复用同一张规则表（同一份代码、同一套判定），**不需要人工维护
+    "包号 → 入口"的关联表**。下次 ``adv_other_78`` 是殲滅戦还是周年，照样按正文判。
+
+    只做**增量合并**：已装、这次新认出来的包才补进去；``othereps.js`` 里原有条目
+    （包括用户没装的包、人工校对过的话名）一律不动。
+    """
+    out = os.path.join(DATA, "othereps.js")
+    groups = _read_js_list(out)
+    covered = set()
+    for g in groups:
+        for e in (g.get("eps") or []):
+            k = str(e.get("k") or "")
+            if k.startswith("adv_other_") and k[10:].isdigit():
+                covered.add(int(k[10:]))
+    local = set()
+    try:
+        for fn in os.listdir(DATA):
+            if fn.startswith("adv_other_") and fn.endswith(".js") \
+                    and fn[10:-3].isdigit():
+                local.add(int(fn[10:-3]))
+    except OSError:
+        return 0
+    todo = sorted(local - covered)
+    if not todo:
+        return 0                      # 常态：没有新包就不碰文件（零开销）
+
+    tools_dir = os.path.join(ROOT, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    try:
+        import other_taxonomy as OT
+    except Exception as e:                                     # noqa: BLE001
+        print(f"  [othereps] 无法载入归类规则（{e}），跳过")
+        return 0
+    # plan() 里已经包含"表里没有的包"的自动归类结果（_auto_rows → classify_pack）
+    rows = OT.plan()
+
+    parts_cache: dict = {}
+
+    def _parts(no: int):
+        if no not in parts_cache:
+            path = os.path.join(OT.DATA, "adv_other_%d.js" % no)
+            parts_cache[no] = OT.read_js(path)["parts"]
+        return parts_cache[no]
+
+    def _cast(part) -> str:
+        """该段出场最多的立绘组（悬停提示里的「主要人物」）"""
+        import collections
+        c = collections.Counter(
+            str(m["GroupId"]) for m in part["methods"]
+            if m.get("GroupId") and m.get("Method") == "ShowStand"
+            and str(m["GroupId"]) != "タイトルロゴ")
+        return (c.most_common(1) or [("", 0)])[0][0]
+
+    added = 0
+    by_no = {g.get("no"): g for g in groups}
+    for no, i, entry, title in rows:
+        if no not in todo:
+            continue
+        g = by_no.get(entry)
+        if g is None:
+            g = {"no": entry, "name": OT.ENTRIES.get(entry, "其他"), "eps": []}
+            groups.append(g)
+            by_no[entry] = g
+        try:
+            part = _parts(no)[i]
+        except Exception:                                      # noqa: BLE001
+            continue
+        g["eps"].append({"k": "adv_other_%d" % no, "i": i, "t": title,
+                         "n": len(OT.messages(part)), "c": _cast(part)})
+        added += 1
+    if not added:
+        return 0
+
+    order = list(OT.ORDER)
+    groups.sort(key=lambda g: order.index(g["no"]) if g["no"] in order
+                else len(order))
+    _write_js_obj(out, "__OTHER_EPS", groups)
+    names = "、".join(g["name"] for g in groups
+                      if any(str(e.get("k") or "")[10:].isdigit()
+                             and int(str(e["k"])[10:]) in todo
+                             for e in (g.get("eps") or [])))
+    msg = "其他剧情：新归入 {} 话（{}）".format(added, names or "未归类")
+    if job is not None:
+        job.log("   " + msg)
+    _note(msg, tag="other")          # _note 自己会 print + 写 app.log
+    return added
+
+
 def _hex_label(seg: str) -> str:
     """CG 文件名里的十六进制段 → 人类可读标签。
 
@@ -1237,6 +1341,17 @@ def _read_js_obj(path: str) -> dict:
         return {}
 
 
+def _read_js_list(path: str) -> list:
+    """读 ``window.__XXX=[...];``（数组型，如 othereps.js）。"""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            raw = f.read()
+        d = json.loads(raw[raw.index("["): raw.rindex("]") + 1])
+        return d if isinstance(d, list) else []
+    except Exception:                                          # noqa: BLE001
+        return []
+
+
 def _write_js_obj(path: str, marker: str, data: dict) -> None:
     """按生成脚本的排版写回（紧凑、无空格），先写临时文件再替换。"""
     body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
@@ -1419,6 +1534,139 @@ def _load_names() -> dict:
     return {}
 
 
+#: ``names.js`` 为消歧义加的「(id)」后缀（重名角色才有）
+_NAME_SUFFIX_RE = re.compile(r"\s*\(\d+\)$")
+#: 出厂元信息表（CI 每天写，随程序更新）；``server/cdn/data`` 与 ``WS`` 是同一份结构
+FACTORY_META = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "data", "char_meta.json")
+
+
+def _base_name(nm) -> str:
+    return _NAME_SUFFIX_RE.sub("", str(nm or "")).strip()
+
+
+def _name_key(nm) -> str:
+    """名字比对口径：与 ``gen_charmeta.py`` 的 ``_nk`` 一致 ——
+    NFKC（全角数字/字母转半角）+ 去掉空白、中点、括号。
+    不归一的话「妹の１０２４」和「妹の1024」会被当成两个角色。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", _base_name(nm))
+    return re.sub(r"[\s・·（）()]", "", s)
+
+
+def _read_char_meta() -> dict:
+    """名字 → ``{r,d,t,…}``：**出厂表打底、工作区表覆盖**。
+
+    为什么要合并两份：出厂表是每日 CI 从 Wiki 抓的（新角色一实装就有名字和
+    实装日），工作区表是本机陆续合并/推定出来的（有 ``dEst`` 等本地字段）。
+    只读工作区会漏掉出厂表刚抓到的新角色 —— 那正是「Wiki 有、列表里没有」的成因。
+    """
+    out: dict = {}
+    for p in (FACTORY_META, os.path.join(WS, "char_meta.json")):
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                out.update(json.load(f) or {})
+        except Exception:                                      # noqa: BLE001
+            continue
+    return out
+
+
+def _manifest_char_ids() -> list:
+    """官方清单里全部角色 id（升序）。清单没下过 / 解不开就返回空。"""
+    try:
+        from . import install as cdn_install
+        units = (cdn_install.list_units() or {}).get("char") or []
+    except Exception:                                          # noqa: BLE001
+        return []
+    out = []
+    for k in units:
+        s = str(k)
+        if s.startswith("char_") and s[5:].isdigit():
+            out.append(int(s[5:]))
+    return sorted(out)
+
+
+def adopt_new_names() -> list:
+    """给「清单里有、名单里没有」的新角色补上名字（自动配对，不维护人工表）。
+
+    为什么需要（2026-11-04 实测「メイドハータン 没上站」）：
+    新角色一实装，官方清单里立刻有 ``char_416``，Wiki 也立刻有名字 + 实装日
+    （每日 CI 已经抓进 ``char_meta.json``），但 ``names.js`` 是**本地解包剧本**
+    的产物 —— 没解包就没有这一条，于是整条链路全断：
+      · 列表没名字，退回「ID 416」；
+      · ``gen_charmeta.py`` 按名字查表，查不到 → 没稀有度 / 没实装日，
+        按「实装日期」排序直接沉底（用户看到的就是"没排序"）。
+    ``char_meta.json`` 里其实早就有这一条，只是没人把它和 id 挂起来。
+
+    自动挂法：两边各算一次"新的"，**数量相等才动手** ——
+      · 新 id   = 清单里有、``names.js`` 里没有；
+      · 新名字 = ``char_meta.json`` 里有、``names.js`` 里没有（且稀有度合法 = 真角色）。
+    按「实装日升序 ↔ id 升序」一一配对（游戏按实装顺序发 id）。数量对不上就
+    原样留着（继续显示 ID NNN）—— 宁可不猜，也不猜错。
+    """
+    from .wiki import VALID_RARITIES            # 与抓取端共用一份定义，避免飘
+
+    names = _load_names()
+    ids = _manifest_char_ids()
+    if not names or not ids:
+        return []
+    valid = set(VALID_RARITIES)
+    known = {_name_key(n) for n in names.values()}
+    new_ids = sorted(i for i in ids if str(i) not in names)
+    meta = _read_char_meta()
+    # 只认「比现有角色都晚实装」的未登记名字：
+    # char_meta 里长期躺着几条对不上 id 的老名字（妹の1024 / FM77 / Ms.ライトニング…），
+    # 不按日期卡住就会被当成本次的新角色，反而把数量凑错。
+    latest = max([str((m or {}).get("d") or "") for nm, m in meta.items()
+                  if _name_key(nm) in known] or [""])
+    fresh = []
+    for nm, m in meta.items():
+        d = str((m or {}).get("d") or "")
+        if _name_key(nm) in known or (m or {}).get("r") not in valid:
+            continue
+        if d and d > latest:
+            fresh.append((nm, d))
+    if not new_ids:
+        # 官方**还没发包**、Wiki 先收录（常见：Wiki 抢跑一两天）：清单里没有新 id，
+        # 配不了也无需配 —— 等 CDN 有包、用户再点一次「更新」就会自动对上。
+        if fresh:
+            _note("名字：Wiki 已收录 {} 个新名字（{}），但官方清单里还没有对应的"
+                  "新角色 → 等发包后再点一次更新即可自动补上".format(
+                      len(fresh), "、".join(n for n, _d in fresh[:3])))
+        return []
+    if not fresh:
+        _note("名字：清单里有 {} 个新角色（{}），Wiki 还没收录对应名字"
+              "→ 先显示 ID，Wiki 更新后再点一次更新即会自动补上".format(
+                  len(new_ids), ", ".join("ID %d" % i for i in new_ids[:5])))
+        return []
+    if len(fresh) != len(new_ids):
+        _note("名字：清单里有 {} 个新角色（{}），Wiki 里比现有角色更新的名字有 {} 个"
+              "（{}）→ 数量对不上，不猜，先留 ID".format(
+                  len(new_ids), ", ".join("ID %d" % i for i in new_ids[:5]),
+                  len(fresh), ", ".join(n for n, _d in fresh[:5])))
+        return []
+    fresh.sort(key=lambda t: (t[1], t[0]))          # 实装日升序（同日按名字）
+    pairs = list(zip(sorted(new_ids), fresh))
+    merged = dict(names)
+    for cid, (nm, _d) in pairs:
+        merged[str(cid)] = nm
+    _write_names_file(merged)
+    _note("名字：新增 {} 个角色 → {}".format(
+        len(pairs), "、".join("{} {}".format(c, n) for c, (n, _d) in pairs)))
+    return [(cid, nm) for cid, (nm, _d) in pairs]
+
+
+def _write_names_file(names: dict) -> None:
+    """写 ``names.js``（保持原有 key 顺序，新 id 追加在后面）。"""
+    out = os.path.join(DATA, "names.js")
+    merged = {str(k): v for k, v in names.items()}
+    if merged == _read_js_obj(out):
+        return
+    _write_js_obj(out, "__NAMES", merged)
+
+
 def sync_wiki(job=None, proxy: str | None = None) -> dict:
     """拉角色元信息（稀有度/类型/实装日），合并进本机 ``userdata/char_meta.json``
     并重建成 ``charmeta.js``。
@@ -1452,13 +1700,9 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
             job.log(f"GitHub 各线路均失败（{route}），改直连 Wiki（需代理）")
         scraped = wiki_mod.scrape(proxy=proxy)
     path = os.path.join(WS, "char_meta.json")
-    existing = {}
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                existing = json.load(f) or {}
-        except Exception:                                      # noqa: BLE001
-            existing = {}
+    # 出厂表（CI 每天从 Wiki 抓）**也参与合并**：新角色先出现在出厂表里，
+    # 只读工作区表的话它永远进不来（工作区表是"从 Wiki 按 id 映射"落下的）。
+    existing = _read_char_meta()
     merged = wiki_mod.merge_meta(existing, scraped)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -1466,6 +1710,10 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
     if job is not None:
         n_r = sum(1 for v in scraped.values() if v.get("r"))
         job.log(f"角色信息（来源 {source}）：合并 {len(scraped)} 条（含稀有度 {n_r}）")
+    adopted = adopt_new_names()
+    if adopted and job is not None:
+        job.log("新角色名字已补上：" + "、".join(
+            "{} {}".format(c, n) for c, n in adopted))
     regen_charmeta()
     return {"merged": len(merged), "scraped": len(scraped),
             "with_rarity": sum(1 for v in merged.values() if v.get("r")),

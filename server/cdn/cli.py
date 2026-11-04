@@ -336,6 +336,7 @@ def cmd_adv(a) -> int:
     if not a.no_map:
         print("\n--- 刷新映射表 ---")
         stages.sync_advindex()
+        stages.sync_othereps()
         stages.regen_maps()
 
     print(f"\n完成，用时 {time.time() - t0:.0f}s")
@@ -417,6 +418,7 @@ def cmd_adv_all(a) -> int:
     if not a.no_map:
         print("\n--- 刷新索引 ---")
         stages.sync_advindex()
+        stages.sync_othereps()
         stages.regen_maps()
 
     print(f"\n完成，用时 {(time.time() - t0) / 60:.1f} 分钟")

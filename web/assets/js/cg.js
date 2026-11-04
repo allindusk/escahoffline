@@ -171,12 +171,16 @@ function cmpDate(a, b, asc) {
   return asc ? da.localeCompare(db) : db.localeCompare(da);
 }
 
-/* 只保留真正有 CG 的角色。
+/* 角色清单的两个口径（2026-11-04 用户反馈：剧情页写 385、CG 页只有 384，像角色丢了）：
+     allCharList = 认得的**全部**角色（names / charmeta 里有就列）——
+                   包括刚实装、还没装、cgmap 里自然没有 CG 组的新角色；
+     withCG      = 其中**已经有 CG 组**的 —— 导出接口与统计只认这个，
+                   别把 0 组的空角色送去导出。
    **必须剔除 -1/-2/-3 三个分类桶**：它们是"主线/活动/其他的剧情 CG"，
-   跟角色不是一回事，混进来会变成"全部角色（387）"（角色实际 384 个）。 */
-const allWithCG = [...chars.values()].filter(c => c.groups.length > 0)
+   跟角色不是一回事，混进来会变成"全部角色（387）"。 */
+const allCharList = [...chars.values()].filter(c => !isCat(c.id))
   .sort((a, b) => a.id - b.id);
-const withCG = allWithCG.filter(c => !isCat(c.id));
+const withCG = allCharList.filter(c => c.groups.length > 0);
 /* 分类桶：-1 主线 / -2 活动 / -3 其他，各自按"哪部剧情"再分组 */
 const catUnits = {};      // -1 -> [{u, title, groups:[gi], imgs}]
 for (const id of Object.keys(CATS).map(Number)) {
@@ -278,17 +282,17 @@ function renderChars() {
   return renderCatList(box, scope);
 }
 
-/** 角色范围：384 个角色（不含 -1/-2/-3 剧情桶） */
+/** 角色范围：allCharList 个角色（不含 -1/-2/-3 剧情桶） */
 function renderCharList(box) {
   const favMode = favOnlyMode();
   const all = el('div', 'char-btn all' + (curChar === null ? ' on' : ''));
   all.textContent = favMode
     ? `全部（已收藏 ${favGroupCount()} 组）`
-    : `全部角色（${withCG.length}）`;
+    : `全部角色（${allCharList.length}）`;
   all.onclick = () => { curChar = null; renderChars(); renderGrid(); };
   box.appendChild(all);
 
-  let list = withCG;
+  let list = allCharList;
   // 已下载 / 未下载 / 已收藏筛选（同一套口径，和播放器一致）
   const dlf = ($('#dlFilter') || {}).value || '';
   if (dlf === 'have') list = list.filter(c => dlHave(c.id));
@@ -314,6 +318,11 @@ function renderCharList(box) {
   }
   // 未下载的沉底（播放器一直这么做，CG 页以前没有 → 同一个下拉两页结果不同）
   list = ESC.haveFirst(list, c => dlHave(c.id));
+  /* 还没有 CG 组的角色（新实装、没装/没导出）再压到最底：
+     它们在列表里是为了"和剧情页数目一致 + 让用户看到这个角色存在"，
+     不该混在正排序里占位。 */
+  list = list.filter(c => c.groups.length > 0)
+    .concat(list.filter(c => !c.groups.length));
 
   for (const c of list) {
     const d = el('div', 'char-btn' + (curChar === c.id ? ' on' : ''));
@@ -454,6 +463,16 @@ function renderGrid() {
   grid.innerHTML = '';
   shownCount = 0;
   if (!visible.length) {
+    /* 选中的是"还没有 CG 的角色"（新实装但没装/没导出）→ 说清楚怎么办，
+       不要只留一句"没有匹配的 CG"（用户会以为数据丢了）。 */
+    const c = (curChar !== null) ? chars.get(curChar) : null;
+    if (c && !c.groups.length) {
+      const d = el('div');
+      d.id = 'empty';
+      d.textContent = '「' + c.name + '」还没有 CG：在「资源管理」把这部剧情装好后会自动出现';
+      grid.appendChild(d);
+      return;
+    }
     grid.innerHTML = '<div id="empty">没有匹配的 CG</div>';
     return;
   }
@@ -930,9 +949,11 @@ function updateScopeTitles() {
   document.querySelectorAll('#cgScope button').forEach(b => {
     const sc = b.dataset.scope;
     if (sc === 'char') {
+      // 角色数用 allCharList（含还没有 CG 的新角色），与播放器侧栏、剧情列表同一口径；
+      // 组数/张数仍然只统计真有 CG 的（withCG）。
       const g = withCG.reduce((a, c) => a + c.groups.length, 0);
       const i = withCG.reduce((a, c) => a + c.total, 0);
-      b.title = `${withCG.length} 个角色 · ${g} 组 / ${i} 张`;
+      b.title = `${allCharList.length} 个角色 · ${g} 组 / ${i} 张`;
     } else {
       const units = catUnits[+sc] || [];
       const g = units.reduce((a, u) => a + u.groups.length, 0);

@@ -2095,17 +2095,43 @@ function noteProgress() {
   syncRowProg();
 }
 
-/* ================= 云端有、本地没装的角色 =================
- * index.js 是随程序分发的静态索引，不随资源清单更新。
- * 所以官方新上线的角色在控制台能装（那边从清单推导），但播放器侧栏里
- * 根本看不到 —— 用户会以为"没有这个角色"。这里补一次：
- * 拉 /api/cdn/units，把"云端有、index.js 里没有"的角色并进列表并标未下载。
+/* ================= 云端有、本地没装的剧情 =================
+ * index.js / advindex.js 都是随程序分发的静态索引，不随资源清单更新。
+ * 所以官方新上线的角色/章节在控制台能装（那边从清单推导），但播放器侧栏里
+ * 根本看不到 —— 用户会以为"没有这个角色 / 没有这个活动"。这里补一次：
+ * 拉 /api/cdn/units，把"云端有、静态索引里没有"的单元并进列表并标未下载。
+ *
+ * 主线/活动/其他同样处理（2026-11-04 用户要求）：它们**没有 Wiki 可查**，
+ * 名字只能靠 ESC.storyTitle 从编号推算（第N部 第X章 / 活动剧情 第N话），
+ * 段数/句数要装了才知道，所以先显示"未下载"，点了引导去资源管理。
  */
-let CLOUD_ONLY = [];
+let CLOUD_ONLY = [];        // 云端有、本地没装的**角色**（INDEX 里没有）
+let CLOUD_ADV = [];         // 同上，但主线/活动/其他（ADV 里没有）
 let _cloudLoaded = false;
 
 function allChars() {
   return CLOUD_ONLY.length ? INDEX.concat(CLOUD_ONLY) : INDEX;
+}
+
+function allAdv() {
+  return CLOUD_ADV.length ? ADV.concat(CLOUD_ADV) : ADV;
+}
+
+/** 云端单元 key → 侧栏用的"伪 advindex 条目"（结构对齐 advindex.js） */
+function cloudAdvRow(key) {
+  const p = /^adv_(\w+?)(?:_(\d+))?$/.exec(String(key)) || [];
+  const kind = p[1] || '';
+  const no = p[2] ? +p[2] : null;
+  return {
+    key: key, kind: kind, no: no,
+    title: storyTitle(key),           // 推算：第N部 第X章 / 活动剧情 第N话
+    // 活动/其他没有官方顺序（bundle 编号 ≠ 发表顺序）→ 排到本类末尾
+    order: (kind === 'main' && no !== null) ? no : 1000 + (no || 0),
+    // 横幅按约定路径拼（与解包产物同名）；没下过就 404 → onerror 自己收起来
+    cover: (no !== null && kind !== 'tutorial' && kind !== 'op')
+      ? `media/img/story/${kind}_${no}.webp` : '',
+    parts: 0, lines: 0, first: '', voices: 0, voiceRes: 0, cloud: true,
+  };
 }
 
 async function loadCloudChars() {
@@ -2122,10 +2148,24 @@ async function loadCloudChars() {
       const id = +String(k).slice(5);
       if (id && !have.has(id)) extra.push({ id: id, parts: 0, lines: 0, cloud: true });
     });
+    const haveAdv = new Set((ADV || []).map(a => a.key));
+    const extraAdv = [];
+    ((d.units || {}).adv || []).forEach(function (k) {
+      if (!haveAdv.has(String(k))) extraAdv.push(cloudAdvRow(String(k)));
+    });
+    const msgs = [];
     if (extra.length) {
       CLOUD_ONLY = extra;
+      msgs.push(extra.length + ' 个新角色');
+    }
+    if (extraAdv.length) {
+      CLOUD_ADV = extraAdv;
+      msgs.push(extraAdv.length + ' 部新剧情');
+    }
+    if (msgs.length) {
       renderSidebar((($('#search') || {}).value) || '');
-      toast('发现 ' + extra.length + ' 个新角色（未下载）：装完就会出现在这里');
+      updateCnt();                  // 分类按钮上的总数跟着加上这些
+      toast('发现 ' + msgs.join(' · ') + '（未下载）：装完就会出现在这里');
     }
   } catch (e) { /* 纯静态打开时没有服务端，忽略 */ }
 }
@@ -2577,7 +2617,7 @@ function renderOtherGroups(box, filter = '', opt = {}) {
 
   // 教程 / 开场这类没有入口分组的，直接平铺在最后（以前靠 renderAdvList 平铺，
   // 改成分组视图后如果不补，它们就从列表里消失了）
-  const extra = ADV.filter(a => a.kind === 'tutorial' || a.kind === 'op')
+  const extra = allAdv().filter(a => a.kind === 'tutorial' || a.kind === 'op')
     .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f));
   if (extra.length) {
@@ -2597,6 +2637,34 @@ function renderOtherGroups(box, filter = '', opt = {}) {
     box.appendChild(head);
     any = true;
     if (openT) extra.forEach(a => box.appendChild(advItem(a)));
+  }
+
+  /* 没被任何入口组认领的「其他」剧情：两种都要列，否则它们等于不存在 ——
+       · 云端新上、还没装（CLOUD_ADV，只有清单里有）；
+       · 装了、但 `othereps.js` 是构建期产物（tools/build_other_episodes.py），
+         新包还没归类 → 装完反而会从分组视图里"消失"（2026-11-04 用户反馈）。
+     名字只能按编号推算（这一类没有 Wiki 可查），点行会引导去资源管理下载。 */
+  const covered = new Set();
+  groups.forEach(g => (g.eps || []).forEach(e => covered.add(e.k)));
+  const loose = allAdv().filter(a => a.kind === 'other' && !covered.has(a.key))
+    .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
+    .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f));
+  if (loose.length) {
+    const openC = OTHER_OPEN.has('cloud') || !!f || favMode;
+    const head = document.createElement('div');
+    head.className = 'og-head' + (openC ? ' open' : '');
+    head.dataset.key = 'cloud';
+    head.innerHTML = `<span class="row">`
+      + `<span class="nm">${L10N.t('other.cloud', '未归类 / 新上线')}</span>`
+      + `<span class="cnt">${loose.length}</span>`
+      + `<span class="arw">${openC ? '▾' : '▸'}</span></span>`;
+    head.onclick = () => {
+      if (OTHER_OPEN.has('cloud')) OTHER_OPEN.delete('cloud'); else OTHER_OPEN.add('cloud');
+      renderOtherGroups(box, filter, { anchor: 'cloud' });
+    };
+    box.appendChild(head);
+    any = true;
+    if (openC) loose.forEach(a => box.appendChild(advItem(a)));
   }
 
   /* 一条都没画出来：必须给一句话，否则用户看到的是"空白的黑列表"，
@@ -2638,7 +2706,11 @@ function renderAdvList(filter = '') {
       // 缺失就静默降级到「暂不可用」，不再有 <script> 404 刷屏，也不会死循环重试。
       window.__OTHER_EPS_TRIED = true;
       box.innerHTML = '<div class="advEmpty">其他剧情清单加载中…</div>';
-      fetch('data/othereps.js?v=1118a').then(r => r.ok ? r.text() : null)
+      // 缓存要关：这个文件会被**运行时改写**（装上一部新的「其他」剧情后，
+      // 后端 stages.sync_othereps 会把它归进对应入口并补条目）。固定 ?v= 会让
+      // 浏览器一直读旧副本，用户就会觉得"装完还是没归类"。
+      fetch('data/othereps.js?v=1118a', { cache: 'no-store' })
+        .then(r => r.ok ? r.text() : null)
         .then(t => { if (t) { try { (0, eval)(t); } catch (e) { } } })
         .catch(() => { })
         .finally(() => renderSidebar());
@@ -2650,7 +2722,7 @@ function renderAdvList(filter = '') {
   const f = filter.trim().toLowerCase();
   const kinds = ADV_MENU[SRC] || [SRC];
   const favMode = favOnly();
-  advAll = ADV.filter(a => kinds.includes(a.kind))
+  advAll = allAdv().filter(a => kinds.includes(a.kind))
     .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f)
       || String(a.first || '').toLowerCase().includes(f) || a.key.includes(f));
@@ -2716,9 +2788,15 @@ function advItem(a) {
   const L = imgLayer();
   const cover = (L.banners || st === 'ready' || st === 'soft-missing')
     ? bannerOfAdv(a) : '';
+  /* 云端新上、还没接入目录的条目（a.cloud）只有两种状态：
+     · missing      → 官方发了包、本地没装；
+     · 装了但 0 段 0 句 → 官方先放了**空占位包**（正文还没上），
+       这种条目 sync_advindex 会主动剔掉，所以只能从清单里看到。 */
+  const emptyPack = !!(a.cloud && st !== 'missing' && !a.parts);
   d.title = `${title}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
     + (a.first ? `\n${a.first}` : '')
-    + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '');
+    + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '')
+    + (emptyPack ? '\n官方还没放出正文（空占位包）' : '');
   // 两行一项：横幅（没横幅就只留标题，别塞一张假图）
   d.innerHTML =
     (cover
@@ -2734,6 +2812,7 @@ function advItem(a) {
     `<span>${vnote}</span>` +
     progHTML(a.key, null, a.parts) +
     (st === 'missing' ? '<span class="badge nodl">未下载</span>' : '') +
+    (emptyPack ? '<span class="badge soft">空包</span>' : '') +
     `</span>` +
     `<span class="cpy" title="复制剧情名">⧉</span>` +
     favHTML(a.key) + `</span>`;
@@ -3053,13 +3132,17 @@ function updateBanner() {
 /** 总量改为各剧情分类按钮的悬停提示（不再写在标题区）。
  *  每个分类的计数是静态的，所以一次性给四个按钮都算好 */
 function updateCnt() {
+  // 角色数要算上 loadCloudChars() 并进来的「云端有、本地没装」的角色：
+  // INDEX 是随程序分发的静态索引，不含新实装角色 —— 用 INDEX.length 会出现
+  // 列表里已经有 char_416 这一行、悬停却还写着「384 个角色」（2026-11-04 用户反馈）。
   document.querySelectorAll('#srcRow button').forEach(b => {
     const src = b.dataset.src;
     if (src === 'char') {
-      b.title = L10N.t('cnt.char', `${INDEX.length} 个角色`, { n: INDEX.length });
+      const n = allChars().length;
+      b.title = L10N.t('cnt.char', `${n} 个角色`, { n: n });
     } else {
       const kinds = ADV_MENU[src] || [src];
-      const n = ADV.filter(a => kinds.includes(a.kind)).length;
+      const n = allAdv().filter(a => kinds.includes(a.kind)).length;
       b.title = L10N.t('cnt.adv', `${n} 部剧情`, { n });
     }
   });

@@ -131,12 +131,23 @@ window.SL = (() => {
         order: String((a.order == null ? 999 : a.order)).padStart(4, '0'),
       };
     }
-    // advindex 里没有（云端新上、还没接入数据）→ ESC.storyTitle 会加「（未接入）」
+    // advindex 里没有（官方新上、还没装过）→ ESC.storyTitle 会加「（未接入）」。
+    // 横幅：解包/公共素材里就是 media/img/story/<kind>_<no>.webp（与 sync_advindex
+    // 推 cover 的规则完全一致），所以这里按约定直接拼 —— 图没下过时 rowHtml 的
+    // onerror 会把横幅收起来，不会留破图；拼了才有"新活动一更新就带横幅"。
+    // 排序：主线的编号**就是章序**，按它排；**活动/其他不行** —— adv_event_<n> 是
+    // bundle 批次号，和官方发表顺序无关（实测 adv_event_4 是官方第 16 个活动），
+    // 按它排会插错位置，所以一律排到本类末尾（与 sync_advindex 的 1000+n 同口径）。
     const m2 = /^adv_(\w+?)(?:_(\d+))?$/.exec(key) || [];
+    const kind2 = m2[1] || '';
+    const no2 = m2[2] ? +m2[2] : null;
+    const canBnr = no2 !== null && kind2 !== 'tutorial' && kind2 !== 'op';
     return {
       name: ESC.storyTitle(key),
-      rar: '', date: '', cover: '', adv: true, parts: 0, lines: 0,
-      order: String(m2[2] ? +m2[2] : 999).padStart(4, '0'),
+      rar: '', date: '',
+      cover: canBnr ? 'media/img/story/' + kind2 + '_' + no2 + '.webp' : '',
+      adv: true, parts: 0, lines: 0,
+      order: (kind2 === 'main' && no2 !== null ? String(no2) : '9999').padStart(4, '0'),
     };
   }
 

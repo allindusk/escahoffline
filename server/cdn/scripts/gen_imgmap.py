@@ -54,6 +54,10 @@ for fn in os.listdir(os.path.join(WEB, "data")):
 
 out = {"stand": {}, "back": {}, "cg": {}, "avatar": {}}
 miss = {"stand": 0, "back": 0, "cg": 0}
+#: 「引用了、但磁盘上没有图」的 key。写进 ``cdn/imgmap_miss.json``，界面据此按
+#: **引用视角**报缺 —— 否则清单里"没有任何已装剧情引用"的包会被当成缺失
+#: （2026-11-04 用户反馈：背景 601/612 却显示已就绪，到底是缺还是没用上？）。
+miss_list = {"stand": [], "back": [], "cg": []}
 
 # 头像：<角色id>.<扩展名>。导出的是 **.png**，前端以前只硬编码找 .webp，
 # 全新环境 384 个角色会刷出上百个 404。这里从映射里给出真实路径，
@@ -80,6 +84,7 @@ for s in ids["stand"]:
         continue
     # 不再回退到分层 base 部件：那是只有身体的底图，会显示成「没有头」。
     miss["stand"] += 1
+    miss_list["stand"].append(s)
 
 for s in ids["back"]:
     f = s + ".png"
@@ -87,6 +92,7 @@ for s in ids["back"]:
         out["back"][s] = rel_p("back", f)
     else:
         miss["back"] += 1
+        miss_list["back"].append(s)
 
 for s in ids["cg"]:
     f = s + ".jpg"
@@ -94,10 +100,22 @@ for s in ids["cg"]:
         out["cg"][s] = rel_p("cg", f)
     else:
         miss["cg"] += 1
+        miss_list["cg"].append(s)
 
 with open(os.path.join(WEB, "data", "imgmap.js"), "w", encoding="utf-8") as f:
     f.write("window.__IMGMAP=" + json.dumps(out, ensure_ascii=False,
                                             separators=(",", ":")) + ";")
+
+# 「引用视角」的缺图清单：给界面算完成度用（见 install.public_status）。
+# 落点 cdn/imgmap_miss.json（cwd = userdata，与 run_script 的约定一致）。
+try:
+    _mp = os.path.join("cdn", "imgmap_miss.json")
+    os.makedirs(os.path.dirname(_mp) or ".", exist_ok=True)
+    with open(_mp, "w", encoding="utf-8") as f:
+        json.dump({k: sorted(v) for k, v in miss_list.items()},
+                  f, ensure_ascii=False, indent=1)
+except OSError:
+    pass
 
 print("=== 图片映射 ===")
 for k in ("stand", "back", "cg"):

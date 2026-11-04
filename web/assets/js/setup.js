@@ -391,8 +391,11 @@
   let _otherEps = null;
   function ensureOtherEps() {
     if (_otherEps || window.__OTHER_EPS) { _otherEps = window.__OTHER_EPS || _otherEps; return Promise.resolve(); }
-    // 与播放页一致的按需加载：清单没随更新包下来就拉一次，缺失则静默降级
-    return fetch('data/othereps.js?v=1118a').then(r => r.ok ? r.text() : null)
+    // 与播放页一致的按需加载：清单没随更新包下来就拉一次，缺失则静默降级。
+    // cache:'no-store' 同理 —— 装新「其他」剧情后后端会改写这个文件（归组/补话名），
+    // 固定 ?v= 会让页面一直读旧副本。
+    return fetch('data/othereps.js?v=1118a', { cache: 'no-store' })
+      .then(r => r.ok ? r.text() : null)
       .then(t => { if (t) { try { (0, eval)(t); } catch (e) {} } _otherEps = window.__OTHER_EPS || null; })
       .catch(() => {});
   }
@@ -460,9 +463,14 @@
     const pubStale = pubAny && pubVer < 3;
     const cnt = (have, total) => (total == null ? '—'
       : (have || 0) + '/' + (total || 0));
+    /* 「已就绪」还要求**引用到的图都不缺**：分母已经按引用算（见后端 public_status），
+       但被引用却缺失的图会体现在分子上；单看 near() 的比例还不够严，
+       这里再卡一道 backRefMiss —— 缺一张就不该说"已就绪"。 */
+    const backRefMiss = +(pub.backRefMiss || 0);
     const pubAll = ready && !pubStale && near(pub.back, pub.backTotal)
       && near(pub.music, pub.musicTotal) && near(pub.sfx, pub.sfxTotal)
-      && near(pub.avatar, pub.avatarTotal) && near(pub.banner, pub.bannerTotal);
+      && near(pub.avatar, pub.avatarTotal) && near(pub.banner, pub.bannerTotal)
+      && backRefMiss === 0;
 
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');
@@ -478,8 +486,13 @@
 
     /* 下过就报实数；没下过给一个总量预估 —— 总量与分项都来自 facts.PUBLIC_PARTS，
        别在这里手抄"205 + 539 + 31 + 20 + 40"（改一处就漏一处）。 */
+    /* 背景后面跟一句「另有 N 个未引用」：清单里有、但没有任何已装剧情用到的包不会
+       导出成图，它们**不进分母**。不写这句的话，用户看到分母比清单包数小会以为漏了
+       （2026-11-04 反馈：「背景明明有缺失，却显示已就绪」—— 那 11 个正是未被引用的包）。 */
+    const backNote = (+pub.backUnused > 0)
+      ? '（另有 ' + pub.backUnused + ' 个未引用）' : '';
     const pubLine = pubAny
-      ? '背景 ' + cnt(pub.back, pub.backTotal)
+      ? '背景 ' + cnt(pub.back, pub.backTotal) + backNote
       + ' · 音乐 ' + cnt(pub.music, pub.musicTotal)
       + ' · 音效 ' + cnt(pub.sfx, pub.sfxTotal)
       + ' · 头像 ' + cnt(pub.avatar, pub.avatarTotal)
@@ -512,9 +525,11 @@
 
       // ② 公共素材
       '<div class="bp-row"><span class="nm">公共素材（背景图 / 背景音乐 / 音效 / 头像 / 剧情横幅）</span>' +
-      '<span class="dim" title="背景/音乐/音效/头像按「已导出 / 清单里的包」算；'
+      '<span class="dim" title="背景按「已装剧情引用到的张数」算（= 已导出 + 引用但缺图）；'
+      + '音乐/音效/头像按「已导出 / 清单里的包」算；'
       + '横幅按图片张数算（角色一包一张，主线/活动/其他的章节标题图一个包一批）。'
-      + '少数没被任何剧情引用的背景不会导出成图，所以背景张数会比清单包数少几个。'
+      + '清单里有、但没有任何已装剧情引用的背景包不会导出成图 —— 它们不进分母，'
+      + '只在后面标注「另有 N 个未引用」；引用到了却没有图才会显示成缺。'
       + '官方更新后点「补全」只会下新增的，已有的跳过">' +
       pubLine + '</span>' +
       // 已就绪后不再给「更新」入口：公共素材的增量补齐已经并进
@@ -1140,14 +1155,6 @@
     if (!list.length) { bar.innerHTML = ''; return; }
     bar.innerHTML = list.map(j => {
       const pct = j.state === 'done' ? 100 : (j.percent || 0);
-      // 速度单位跟着任务走：下载是字节，截帧是"帧"、安装是"包"、超分是"张"。
-    // 以前一律按字节显示，截帧阶段就会出现 "0 B/s" 这种莫名其妙的信息。
-    const u = j.unit || 'B';
-    const sp = j.speed
-      ? (u === 'B'
-        ? ` · ${human(j.speed)}/s`
-        : ` · ${j.speed.toFixed(1)} ${u}/秒`)
-      : '';
       const eta = (j.eta && j.state === 'running') ? j.eta : 0;
       const cls = [j.state === 'failed' ? 'failed' : '',
         j.state === 'done' ? 'done' : '',
@@ -1160,9 +1167,17 @@
       // 进度条要说清四件事：百分比、已下/总量（字节与个数）、速度、剩余
       const bd = j.bytesDone || 0;
       const bt = j.bytesTotal || 0;
-      const bsp = j.bytesSpeed || 0;
+      /* 字节是否已经下完（剩下的阶段只有解包 / 建索引，不再有网络流量）。
+         下完时：
+           · 不写「38.93 MB / 38.93 MB」—— 它和左边的 47.5% 互相打架，看着像"下完了
+             却卡住"；改成「已下载 38.93 MB」；
+           · 不报网速 —— 以前后端把整段平均速度一直带进索引阶段，数字还在跳，
+             用户会以为程序在偷跑流量（2026-11-04 反馈："像中了木马"）。 */
+      const bDone = bt > 0 && bd >= bt;
+      const bsp = bDone ? 0 : (j.bytesSpeed || 0);
       const line1 = [pct.toFixed(1) + '%',
-        (bt ? `${human(bd)} / ${human(bt)}` : '')].filter(Boolean).join(' · ');
+        (bDone ? `已下载 ${human(bd)}`
+          : (bt ? `${human(bd)} / ${human(bt)}` : ''))].filter(Boolean).join(' · ');
       // 次级行：多单元安装优先显示「第 i/N 部」+ 当前这批「包 x/y」，
       // 这样装 70 部剧情时进度条只从 0 平稳爬到 100%，不再反复冲到 100%。
       const parts = [];

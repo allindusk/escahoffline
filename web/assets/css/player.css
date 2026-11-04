@@ -516,8 +516,16 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 .hItem.on{background:#252b3d;border-left-color:var(--gold);color:#fff}
 .hItem .hw{color:var(--gold);font-size:14px;font-weight:600;display:block;
   margin-bottom:1px}
-.hItem .ht{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
-  overflow:hidden;white-space:pre-wrap}
+/* 台词一律**完整显示**，不截断。
+   以前是 -webkit-line-clamp:3 + overflow:hidden，于是「そんな場所に今日も一人、
+   新たなメイド――否、楽園で戯れる天使が生まれた。」这种三行台词（面板 252px，
+   每行还会再折一次）后面直接被省略号砍掉 —— 而这一栏本来就是"回看全文"的地方，
+   截断没有任何意义（用户 2026-11-04 反馈）。
+   实测 56.6 万条台词：p50=31 字、p90=53、p99=83、最长 221 字；换行最多 5 处。
+   按 252px 面板约 15 字/行算，最长一句 ≈15 行 —— 极端但可接受，
+   列表本身可滚动，所以不设 max-height（不引入"点开才看得到"的二级交互）。
+   white-space:pre-wrap 保留游戏原文里的换行，读起来和对话框一致。 */
+.hItem .ht{display:block;white-space:pre-wrap;overflow-wrap:anywhere}
 .hItem.narr .hw{color:var(--fg3);font-weight:400}
 #hTab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:71;
   background:rgba(18,22,32,.95);border:1px solid var(--line);border-right:none;

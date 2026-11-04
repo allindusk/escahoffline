@@ -458,8 +458,12 @@ details.explain li { margin-bottom: 2px; }
   align-items: center; gap: 12px;
   padding: 8px 0; border-top: 1px solid #2a3520; font-size: 14.3px; }
 .basepack .bp-row .nm { color: #dbe8f6; }
-.basepack .bp-row .dim { min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
+/* 说明列**允许换行**，不截断：公共素材那行要写「背景 601/601（另有 11 个未引用）
+   · 音乐 · 音效 · 头像 · 横幅（角色/章节）」，单行放不下，以前被 ellipsis 砍掉
+   后半截 —— 用户以为"后面的统计没显示"（2026-11-04 反馈）。
+   宁可这一行变两行，也不要把数字藏起来；名称列与状态徽标仍各自对齐。 */
+.basepack .bp-row .dim { min-width: 0; white-space: normal;
+  overflow-wrap: anywhere; line-height: 1.55; }
 .basepack .bp-row > :last-child { justify-self: end; }
 /* 每行末尾统一的状态徽标 */
 .basepack .bp-row .st { font-size: 14px; padding: 2px 9px; border-radius: 10px;

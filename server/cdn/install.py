@@ -722,14 +722,31 @@ def public_status() -> dict:
         return len([n for n in os.listdir(d)
                     if not n.startswith(".") and n.lower().endswith(exts)])
 
-    # 背景：清单里有多少个 bgimage 包，就应该是多少张
+    # 背景：分母按**引用视角**算（见下），先拿清单包数与磁盘图数
     try:
         idx = manifest.load_index()
     except Exception:                                          # noqa: BLE001
         idx = {}
-    back_total = len([n for n in idx if n.startswith("bundle_bgimage_")]) or 612
-    n_back = min(_count(os.path.join(config.IMG, "back"),
-                        (".webp", ".png", ".jpg")), back_total)
+    back_packs = len([n for n in idx if n.startswith("bundle_bgimage_")]) or 612
+    back_files = _count(os.path.join(config.IMG, "back"),
+                        (".webp", ".png", ".jpg"))
+    # 「引用了但没有图」的张数由 gen_imgmap 写进 cdn/imgmap_miss.json。
+    # 为什么要它：清单里的 bgimage 包**不等于**该有的图 —— 少数包没有任何已装
+    # 剧情引用（官方遗留/未使用），导出时不会产生图。以前分母固定用包数，
+    # 界面就是「背景 601/612 … 已就绪」这种自相矛盾的组合（2026-11-04 用户反馈）。
+    # 现在：分母 = 引用到的张数 = 已导出 + 引用但缺 → 缺图会被算成不齐（该补全），
+    # 没被引用的包不进分母，只在提示里说明有几个包没用上。
+    miss_path = os.path.join(config.MANIFEST_DIR, "imgmap_miss.json")
+    back_ref_miss, has_miss = 0, False
+    try:
+        with open(miss_path, encoding="utf-8") as f:
+            back_ref_miss = len(json.load(f).get("back") or [])
+        has_miss = True
+    except Exception:                                          # noqa: BLE001
+        back_ref_miss, has_miss = 0, False
+    back_ref_total = back_files + back_ref_miss
+    back_total = back_ref_total if has_miss else back_packs
+    n_back = min(back_files, back_total)
 
     # BGM / 音效：都在 media/audio/sfx/ 里，用清单的包名反推文件名来区分
     music_total = len([n for n in idx if n.startswith("bundle_music_")]) or 217
@@ -781,6 +798,12 @@ def public_status() -> dict:
     n_banner_img = len(story_files)
 
     return {"back": n_back, "backTotal": back_total,
+            # 背景的三个补充口径：
+            #   backPacks   = 清单里的 bgimage 包数（612）
+            #   backRefMiss = 被已装剧情引用、但磁盘上没有的图（>0 才是真缺）
+            #   backUnused  = 清单里有、但没有任何已装剧情引用的包（导出时不会有图）
+            "backPacks": back_packs, "backRefMiss": back_ref_miss,
+            "backUnused": max(0, back_packs - back_ref_total) if has_miss else 0,
             "music": min(n_music, music_total), "musicTotal": music_total,
             "sfx": min(n_sfx, sfx_total), "sfxTotal": sfx_total,
             "avatar": min(n_avatar, avatar_total), "avatarTotal": avatar_total,
@@ -793,10 +816,11 @@ def public_status() -> dict:
             "bannerStoryTotal": story_total,
             "bannerImg": n_banner_img,
             # 结构版本：前端据此判断"后端是不是还没重启/还是旧代码"。
-            # 2 = 加了 banner 字段；3 = 横幅改成按图数（角色/章节分开）。
+            # 2 = 加了 banner 字段；3 = 横幅改成按图数（角色/章节分开）；
+            # 4 = 背景改成"按引用算" + backPacks/backRefMiss/backUnused。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
-            "v": 3,
+            "v": 4,
             "bytes": 0}
 
 
@@ -1422,6 +1446,10 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
         if job is not None:
             job.log("⑤ 刷新索引与映射表")
         stages.sync_advindex()
+        # 「其他」剧情：刚装上的这一包按**正文内容**判定属于哪个游戏入口
+        # （殲滅戦 / RAID / 広域戦 / 纪念活动…），补进 othereps.js —— 不依赖人工
+        # 关联表，官方下次更新照样能归（判定规则见 stages.sync_othereps）。
+        stages.sync_othereps(job=job)
         stages.sync_index()
         stages.regen_maps()
         stages.regen_names()

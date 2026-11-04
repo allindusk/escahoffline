@@ -265,6 +265,11 @@ class Job:
         # 而那时根本没有在下载。
         if not self.bytes_total:
             return 0.0
+        # 字节已经下完 → 后面只剩解包 / 索引重建，**一个字节都不在传**。
+        # 不加这条：整段平均速度会一路带着跑到最后，任务条上"38.93 MB / 38.93 MB"
+        # 旁边还挂着 390 KB/s 在跳，用户会以为程序在偷跑流量（2026-11-04 反馈）。
+        if self.bytes_done >= self.bytes_total:
+            return 0.0
         dt = (self.ended or time.time()) - (self.started or self.created)
         if dt < 1 or self.bytes_done <= 0:
             return 0.0
