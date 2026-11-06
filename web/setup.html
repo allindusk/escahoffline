@@ -453,6 +453,9 @@
         <p class="dim">
           点一下，程序会去问官方"有没有新剧情"，大约 <b data-fact="secCatalog">…</b>。顺便把角色的稀有度、实装日期也刷新一遍。公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅）<b>少了哪几个会自动补上</b>——新角色的头像和剧情横幅也在里面，只下缺的，已有的跳过。
         </p>
+        <p class="dim" style="margin-top:8px">
+          <b>更新剧情时建议等官方开服满 1 小时以后再点。</b>
+        </p>
         <div class="optrow">
           <button id="btnRefreshManifest">更新剧情目录</button>
           <span id="manResult" class="dim"></span>
@@ -591,7 +594,8 @@
           <button data-clean="downloads">清残留</button>
         </div>
         <p class="dim smallnote">
-          日志只用于排错，随便删（正在写的那个文件会被占用，跳过即可）；下载残留是中断下载留下的临时文件与视频导出的临时上传文件。
+          日志只用于排错，随便删（正在写的那个文件会被占用，跳过即可）；下载残留是没下完的下载留下的临时文件，
+          以及导出视频时传了一半就断掉的录制文件 —— 都是临时文件，删了不影响已装的剧情，也不影响已经导出好的视频。
         </p>
 
         <div id="cleanResult" class="dim" style="margin-top:10px"></div>
@@ -821,9 +825,25 @@
     <label class="apChk" id="apAutoWrap" title="关掉后：有新消息会展开并一直留着，由你手动收起">
       <input type="checkbox" id="apAuto"> 自动收起</label>
     <button class="apBtn" id="apToggle" title="展开 / 收起">展开</button>
+    <button class="apBtn" id="apFeedback"
+      title="把最近几条错误和运行环境一起复制到剪贴板">复制错误信息</button>
     <button class="apBtn" id="apClear" title="清空记录">清空</button>
   </div>
   <div class="apBody" id="apBody"></div>
+</div>
+
+<!-- 报错详情浮窗：操作记录里只留一行摘要，完整内容在这里查看/选中 -->
+<div id="apDetailMask" hidden>
+  <div id="apDetail" role="dialog" aria-modal="true" aria-labelledby="apDetailTitle">
+    <div class="apDHead">
+      <b id="apDetailTitle">报错详情</b>
+      <span class="apDCode" id="apDetailCode"></span>
+      <button class="apBtn" id="apDCopy" title="把这段完整文字复制到剪贴板">复制这段</button>
+      <button class="apBtn" id="apDClose" title="关闭（Esc）">关闭</button>
+    </div>
+    <div class="apDBody" id="apDetailBody"></div>
+    <div class="apDFoot" id="apDetailFoot"></div>
+  </div>
 </div>
 
 <!-- 角色名与章节标题：安装列表要用它显示人话名字（纯索引，很小） -->

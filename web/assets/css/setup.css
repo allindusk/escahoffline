@@ -319,6 +319,61 @@ details.explain li { margin-bottom: 2px; }
 .apRow b { flex: 0 0 auto; color: #6b8299; font-weight: 500;
   font-variant-numeric: tabular-nums; }
 .apRow span { min-width: 0; word-break: break-word; }
+/* 报错正文可能很长（原因 + 怎么办 + 原始错误）：记录里只留一行摘要，
+   全文去「详情」浮窗看（截图/复制都更方便，也不挤掉别的记录）。 */
+.apMsg { flex: 1; min-width: 0; }
+.apText { display: block; word-break: break-word; }
+.apBtns { display: flex; gap: 6px; margin-top: 3px; }
+.apMini {
+  padding: 0 7px;
+  background: #16283a; border: 1px solid var(--line2); color: var(--fg3);
+  border-radius: 5px; font-size: 14px; line-height: 1.6; cursor: pointer;
+}
+.apMini:hover { color: var(--fg); border-color: #35618c; }
+
+/* ---------------- 报错详情浮窗 ----------------
+   独立一层：宽度够、可选中文本，方便截图与整段复制。
+   层级要高于 #actPanel（9400），低于顶部 toast（9800）。 */
+#apDetailMask {
+  position: fixed; inset: 0; z-index: 9700;
+  background: rgba(2, 7, 12, .62);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+#apDetailMask[hidden] { display: none; }
+#apDetail {
+  width: min(760px, 94vw); max-height: 80vh;
+  display: flex; flex-direction: column;
+  background: #0b131d; border: 1px solid var(--line2); border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .6); overflow: hidden;
+}
+.apDHead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: #0e1a26; border-bottom: 1px solid var(--line);
+}
+.apDHead b { flex: 0 0 auto; color: var(--fg); font-size: 15px; }
+.apDCode {
+  flex: 1; color: #7c94aa; font-size: 14px;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+}
+.apDBody {
+  padding: 12px 14px; overflow: auto; user-select: text;   /* 可选中好复制 */
+}
+.apDText {
+  white-space: pre-wrap; word-break: break-word;
+  color: #ffb3ba; font-size: 15px; line-height: 1.7;
+}
+.apDLabel { margin: 12px 0 4px; color: #7c94aa; font-size: 14px; }
+.apDSub {
+  padding: 8px 10px; border-radius: 8px; background: #0f1c28;
+  border: 1px solid var(--line);
+  color: #cfe0ee; font-size: 14px; line-height: 1.6; word-break: break-word;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+}
+.apDFoot {
+  padding: 8px 14px 12px; color: #6b8299; font-size: 14px; line-height: 1.6;
+  border-top: 1px solid var(--line);
+}
 .apRow.ok span { color: #7fd6a0; }
 .apRow.warn span { color: #e5c07b; }
 .apRow.err span { color: #e79090; }

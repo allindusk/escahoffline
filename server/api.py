@@ -198,7 +198,19 @@ def run_install(job, units: list[str], workers: int = 32,
     else:
         # 一部都没装上：必须标失败。以前这里什么都不做，runner 兜底调 finish()，
         # 于是"全部失败"在界面上显示为"完成"。
-        job.fail("全部失败：" + (failed[0]["error"] if failed else ""))
+        # 一次装多部时**只贴第一条错误**会把其它原因吞掉（用户看到的永远是同一句），
+        # 所以原因不止一种时要说清"有几种、明细在日志里"。
+        errs = [str(f.get("error") or "") for f in failed] or [""]
+        kinds = len(set(errs))
+        if len(errs) == 1:
+            # 只装一部：直接给原因，别套一层"全部失败"（操作记录里会读成
+            # "失败：安装 1 部剧情：全部失败：…"，同一个词出现两遍）
+            job.fail(errs[0])
+        elif kinds > 1:
+            job.fail(f"{len(errs)} 部都失败（{kinds} 种不同原因，"
+                     f"逐条明细见任务日志）：{errs[0]}")
+        else:
+            job.fail(f"{len(errs)} 部都失败：{errs[0]}")
     job.detail["failed"] = failed
     job.detail["skipped"] = skipped
     return {"installed": ok, "failed": failed, "skipped": skipped}
@@ -324,6 +336,106 @@ def _installed_char_units() -> list[str]:
         return [k for k in (cdn_install.local_units() or {}) if k.startswith("char_")]
     except Exception:                                          # noqa: BLE001
         return []
+
+
+#: 会**写** ``userdata/char_story/files`` 等 bundle 缓存的任务类型。
+#: 清理类任务与它们互斥：安装是"下载 → 解包"两段式，包里刚落盘的文件如果被
+#: 同时跑的「清理空间 / 清理资源包」删掉，解包阶段就只剩一句"剧本解析失败"
+#: （2026-11-06 用户反馈的正是这种没头没尾的失败）。
+_BUNDLE_WRITERS = ("install", "base")
+
+
+def _bundle_writer() -> dict | None:
+    """正在下载/安装的任务（有就返回它），供清理类接口拦一下。"""
+    for j in jobs.active():
+        if j.get("kind") in _BUNDLE_WRITERS:
+            return j
+    return None
+
+
+def _scrub(text: str) -> str:
+    """把 ``C:\\Users\\张三`` 这类个人路径打码 —— 用户才愿意整段复制出来。"""
+    try:
+        return re.sub(r"(?i)(\\\\?users\\\\?)[^\\\\/\r\n]+", r"\1***", str(text))
+    except Exception:                                          # noqa: BLE001
+        return str(text)
+
+
+def _diag_text(log_lines: int = 60) -> str:
+    """拼一段**可直接复制**的运行信息（对应「操作记录」里的「复制错误信息」）。
+
+    **只是一份"看错误"的文本，页面上不做任何"来找作者"的引导**：
+    提示用户去求助会让不少人跳过自己能解决的那一步（用户 2026-11-06 明确要求）。
+    功能本身仍然保留 —— 想核对、想留档、想自己贴到笔记里的人可以直接复制。
+
+    内容取舍（都能独立定位一大类问题）：
+    · 版本 / 系统 / Python —— 老版本已知问题一眼排除；
+    · 程序路径长度与是否含中文 —— 长路径、中文路径、OneDrive 目录；
+    · 磁盘余量 —— 磁盘满；
+    · 清单时间 —— "装一半失败"最常见的根因是清单过期；
+    · 最近失败任务：错误码 + 原因 + 卡在哪一步；
+    · 日志尾部 —— 子进程输出的关键决策（落点/包名/异常）。
+    """
+    from . import log as applog
+    from . import paths as _paths
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    root = _paths.ROOT
+    out = ["=== ESCAH 运行信息 ==="]
+    out.append(f"时间：{now}")
+    out.append(f"程序版本：{_paths.app_version()}")
+    try:
+        import platform
+        out.append(f"系统：{platform.system()} {platform.version()} · "
+                   f"Python {platform.python_version()}")
+    except Exception:                                          # noqa: BLE001
+        pass
+    try:
+        out.append(f"程序路径：{_scrub(root)}"
+                   f"（{len(root)} 字{'，含中文' if any(ord(c) > 127 for c in root) else ''}）")
+    except Exception:                                          # noqa: BLE001
+        pass
+    try:
+        import shutil
+        free = shutil.disk_usage(root).free / 1073741824
+        out.append(f"磁盘余量：{free:.0f} GB")
+    except Exception:                                          # noqa: BLE001
+        pass
+    try:
+        from .cdn import config as cdn_cfg
+        for n in ("Manifest1Ex.json", "Manifest2Ex.json"):
+            p = os.path.join(cdn_cfg.MANIFEST_DIR, n)
+            if os.path.exists(p):
+                mt = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p)))
+                out.append(f"资源清单 {n}：{mt}")
+            else:
+                out.append(f"资源清单 {n}：缺失")
+    except Exception:                                          # noqa: BLE001
+        pass
+
+    out.append("")
+    out.append("--- 最近的失败任务 ---")
+    fails = [j for j in jobs.all_jobs() if j.get("state") == "failed"]
+    if not fails:
+        out.append("（没有失败记录）")
+    for j in fails[:8]:
+        at = time.strftime("%m-%d %H:%M:%S",
+                           time.localtime(j.get("ended") or j.get("created") or 0))
+        unit = j.get("unit") or ""
+        out.append(f"[{at}] {j.get('title') or j.get('kind')}"
+                   + (f"（{unit}）" if unit else ""))
+        out.append("  错误：" + _scrub(j.get("error") or "（无）"))
+        d = (j.get("detail") or {}).get("diag")
+        if d and d.get("text"):
+            out.append("  环境：" + _scrub(d["text"]))
+        tb = (j.get("detail") or {}).get("traceback")
+        if tb:
+            tail = _scrub(tb).strip().splitlines()[-6:]
+            out.append("  堆栈尾部：" + " ⏎ ".join(x.strip() for x in tail)[:900])
+
+    out.append("")
+    out.append(f"--- 日志尾部（最近 {log_lines} 行）---")
+    out.append(_scrub(applog.tail(log_lines)))
+    return "\n".join(out)
 
 
 def run_video_export(job, units: list[str], parts: list[int],
@@ -796,6 +908,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"jobs": jobs.all_jobs(),
                                "boot": BOOT_ID,
                                "version": paths.app_version()})
+        if path == "/api/diag":
+            # 「操作记录 → 复制错误信息」的数据源：一段可直接复制的纯文本。
+            # 定位用途：用户不想翻日志文件时，也能把当时的运行信息留档/核对。
+            try:
+                n = max(0, min(400, int(q.get("log") or 60)))
+            except (TypeError, ValueError):
+                n = 60
+            return self._json({"text": _diag_text(n)})
         if path == "/api/jobs/stream":
             return self._sse()
         if path == "/api/stats":
@@ -932,8 +1052,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._err("没有选择要安装的剧情")
             miss = cdn_install.missing_deps()
             if miss:
-                return self._err("缺少依赖：" + "、".join(miss)
-                                 + "。请先运行 pip install -r requirements.txt")
+                return self._err("缺少安装组件：" + "、".join(miss)
+                                 + "。到「剧情安装」页点「自动安装依赖」，装完再重试")
             workers = int(b.get("threads") or 32)
             workers = max(1, min(64, workers))
             voice = bool(b.get("voice", True))
@@ -1010,6 +1130,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             what = (b.get("what") or "").strip()
             if what not in space.ACTIONS:
                 return self._err("不支持的清理类型：" + (what or "(空)"))
+            # 删资源包缓存会连"正在安装的那一部"刚下好的包一起删掉 →
+            # 安装必然报"剧本解析失败"。安装期间直接拦住，并说清在等什么。
+            if what == "bundles":
+                busy = _bundle_writer()
+                if busy:
+                    return self._err(
+                        f"现在正在{busy.get('title') or '下载剧情'}。这时候清理资源包"
+                        "会把刚下好的文件一起删掉，那部剧情就会装失败。"
+                        "等它结束（或先点「取消」）再清理。")
             dry = bool(b.get("dry", False))
             label = space.ACTIONS[what][0]
             job = jobs.submit("cleanup",
@@ -1054,6 +1183,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/cdn/prune":
             b = self._body()
             dry = b.get("dry", True) is not False
+            # 真删也一样会误伤：正在安装的剧情此刻还没有 char_N.js，
+            # 它刚下好的包在引用表里就是"没人用" → 被删 → 解包阶段报错。
+            if not dry:
+                busy = _bundle_writer()
+                if busy:
+                    return self._err(
+                        f"现在正在{busy.get('title') or '下载剧情'}。它会边下边解包，"
+                        "这时候删「没被引用」的包，会把它刚下好的包当垃圾删掉。"
+                        "等它结束（或先点「取消」）再清理。")
 
             def _prune(j):
                 out = cdn_install.prune_cache(j, dry=dry)

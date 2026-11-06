@@ -148,24 +148,142 @@
     clearTimeout(ACT.hideTimer);
   }
 
+  /** 操作记录里只放**一行摘要**：错误码和前几十个字，够看出"是什么错"。
+   *  想看全文/截图/复制 → 点「详情」开浮窗（用户 2026-11-06 的建议：
+   *  一条长报错铺在记录里，会把好几条历史挤走，截图也不完整）。 */
+  const AP_BRIEF = 62;
+  function actBrief(r) {
+    const s = String(r.text || '');
+    return s.length > AP_BRIEF ? s.slice(0, AP_BRIEF) + '…' : s;
+  }
+  function actHasDetail(r) {
+    return r.lv === 'err' || !!r.sub || String(r.text || '').length > AP_BRIEF;
+  }
+
   function renderAct() {
     if (!apBody) return;
     apBody.innerHTML = ACT.rows.length
-      ? ACT.rows.map(function (r) {
-        return '<div class="apRow ' + r.lv + '"><b>' + r.at + '</b><span>' +
-          esc(r.text) + '</span></div>';
+      ? ACT.rows.map(function (r, i) {
+        return '<div class="apRow ' + r.lv + '">'
+          + '<b>' + r.at + '</b><div class="apMsg">'
+          + '<span class="apText">' + esc(actBrief(r)) + '</span>'
+          + (actHasDetail(r) ? '<div class="apBtns">'
+            + '<button class="apMini apDetail" data-i="' + i
+            + '" title="查看完整错误信息">详情</button>'
+            + (r.lv === 'err' ? '<button class="apMini apCopy" data-i="' + i
+              + '" title="复制这条完整的错误文字">复制</button>' : '')
+            + '</div>' : '')
+          + '</div></div>';
       }).join('')
       : '<div class="apRow"><span>暂无记录</span></div>';
     apBody.scrollTop = apBody.scrollHeight;
   }
 
-  /** 记一条操作/提示。level: info | ok | warn | err */
-  function notify(text, level) {
+  /** 一条记录 → 可粘贴的纯文本（错误 + 运行环境）。只做"复制文字"，不做任何引导。 */
+  function actOneText(r) {
+    const L = ['【ESCAH 报错】' + (r.at || ''), String(r.text || '')];
+    if (r.sub) L.push('环境：' + r.sub);
+    return L.join('\n');
+  }
+
+  function copyText(text, msg) {
+    const done = function () { toastMsg(msg || '已复制', false); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { fb(); });
+    } else { fb(); }
+    function fb() {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); }
+      catch (e) { toastMsg('复制失败，请手动选中这段文字复制', true); }
+      ta.remove();
+    }
+  }
+
+  /* ---------------- 报错详情浮窗 ----------------
+   * 独立一层（不挤在右下角小框里）：宽度够、字号够、可选中文本，
+   * 用户想截图或整段复制都会舒服很多。Esc / 点空白 / 「关闭」都能收起。 */
+  const apMask = $('#apDetailMask');
+  const apDBody = $('#apDetailBody');
+  const apDFoot = $('#apDetailFoot');
+  const apDCode = $('#apDetailCode');
+  let ACT_DETAIL = null;                 // 当前打开的那条（复制用）
+
+  function openActDetail(i) {
+    const r = ACT.rows[i];
+    if (!r || !apMask) return;
+    ACT_DETAIL = r;
+    if (apDCode) {
+      apDCode.textContent = (r.at || '') + (r.lv === 'err' ? ' · 报错' : '');
+    }
+    if (apDBody) {
+      apDBody.innerHTML = '<div class="apDText">' + esc(r.text) + '</div>'
+        + (r.sub
+          ? '<div class="apDLabel">运行环境</div>'
+            + '<div class="apDSub">' + esc(r.sub) + '</div>'
+          : '');
+    }
+    if (apDFoot) {
+      apDFoot.textContent = '上面是程序记录的原始错误内容，可选中文字或点「复制这段」。';
+    }
+    apMask.hidden = false;
+    // 操作记录本身收起来，免得挡住浮窗
+    if (apPanel) actCollapse();
+  }
+
+  function closeActDetail() {
+    if (apMask) apMask.hidden = true;
+    ACT_DETAIL = null;
+  }
+
+  if (apMask) {
+    apMask.addEventListener('click', function (e) {
+      if (e.target === apMask) closeActDetail();     // 点空白处关闭
+    });
+  }
+  const apDClose = $('#apDClose');
+  if (apDClose) apDClose.onclick = closeActDetail;
+  const apDCopy = $('#apDCopy');
+  if (apDCopy) {
+    apDCopy.onclick = function () {
+      if (ACT_DETAIL) copyText(actOneText(ACT_DETAIL), '已复制');
+      else closeActDetail();
+    };
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && apMask && !apMask.hidden) closeActDetail();
+  });
+
+  /** 行内「详情」「复制」：委托绑定一次，别每次渲染重新挂。 */
+  if (apBody) {
+    apBody.addEventListener('click', function (e) {
+      const t = e.target;
+      if (!t || !t.classList || !t.dataset) return;
+      if (t.classList.contains('apDetail')) {
+        openActDetail(+t.dataset.i);
+        return;
+      }
+      if (t.classList.contains('apCopy')) {
+        const r = ACT.rows[+t.dataset.i];
+        if (r) copyText(actOneText(r), '已复制');
+      }
+    });
+  }
+
+  /** 记一条操作/提示。level: info | ok | warn | err
+   *  sub：附加的「环境指纹」行（版本/系统/路径/盘余/卡在哪一步），
+   *      失败时由后端 jobs._diag() 给 —— 用户截图就能带上排错线索。 */
+  function notify(text, level, sub) {
     if (!text) return;
     const t = new Date();
     const at = [t.getHours(), t.getMinutes(), t.getSeconds()]
       .map(function (n) { return String(n).padStart(2, '0'); }).join(':');
-    ACT.rows.push({ at: at, text: String(text), lv: level || 'info' });
+    ACT.rows.push({ at: at, text: String(text), lv: level || 'info',
+      sub: sub || '' });
     if (ACT.rows.length > ACT.max) ACT.rows = ACT.rows.slice(-ACT.max);
     ACT.unread++;
     renderAct();
@@ -203,6 +321,26 @@
       ACT.rows = [];
       renderAct();
       actCollapse();
+    };
+  }
+  /* 「复制错误信息」：把版本 / 系统 / 路径特征 / 清单时间 / 最近的失败任务 +
+     日志尾部拼成一段文本，一键复制。纯"看错误"的工具，不做任何引导。 */
+  const apFb = $('#apFeedback');
+  if (apFb) {
+    apFb.onclick = function (e) {
+      e.stopPropagation();
+      if (apFb.disabled) return;
+      const old = apFb.textContent;
+      apFb.disabled = true;
+      apFb.textContent = '收集中…';
+      api('diag?log=60').then(function (d) {
+        copyText(d.text || '', '已复制');
+      }).catch(function (err) {
+        toastMsg('复制失败：' + (err.message || err), true);
+      }).then(function () {
+        apFb.disabled = false;
+        apFb.textContent = old;
+      });
     };
   }
   // 「自动收起」开关：默认开。关掉后新消息只展开、不再自动收。
@@ -911,7 +1049,11 @@
       } catch (e) {
         // 连续取不到任务：更新期间会短暂这样（主进程退出、新进程还没起来）。
         // 超过约 15 秒仍不恢复，就明确告诉用户该手动重启，而不是让页面干等。
+        // console 也留一条：以前这里静默吞异常，界面不动、日志里也没有，
+        // 排查只能靠猜（"操作记录不刷新"就是这样被埋掉的）。
+        try { console.error('[jobs] 轮询失败：', e); } catch (e2) { }
         ST._fail = (ST._fail || 0) + 1;
+        if (ST._fail === 1) console.warn('[jobs] 第一次轮询就失败，界面可能不刷新');
         if (ST._fail === 13) {
           notify('本地服务已停止。若一直不恢复，请关掉启动窗口后重新双击「启动.bat」',
             'warn');
@@ -1015,9 +1157,17 @@
       ST._jobSeen[j.id] = j.state;
       if (prev === undefined) {
         // 首次见到：只有"正在跑"的才记为本次操作（页面打开时列表里那些历史
-        // 已完成的任务不再回顾，否则一进页面就刷一屏）
+        // 已完成的任务不再回顾，否则一进页面就刷一屏）。
+        // 但**刚刚失败的必须补一条**：清单过期 / 缺依赖 / 找不到这个角色的包
+        // 这类错误是秒级结束的，页面两次轮询之间就失败了 —— 只认 running 的话，
+        // 用户会遇到"报错了，但操作记录里一个字都没有"（2026-11-06 反馈）。
         if (j.state === 'running' || j.state === 'queued') {
           notify('开始：' + (j.title || j.kind || '任务'), 'info');
+        } else if (j.state === 'failed' && j.ended
+          && (Date.now() / 1000 - j.ended) < 90) {
+          notify('失败：' + (j.title || j.kind || '任务')
+            + (j.error ? '：' + j.error : ''), 'err',
+            (j.detail && j.detail.diag && j.detail.diag.text) || '');
         }
         continue;
       }
@@ -1041,7 +1191,12 @@
         }
       }
       else if (j.state === 'failed') {
-        notify('失败：' + ttl + (j.error ? '：' + j.error : ''), 'err');
+        // 失败时把后端生成的「环境指纹」一起写进操作记录：
+        // 版本 / 系统 / 路径特征 / 盘余 / 卡在哪一步 —— 截图就能判断方向，
+        // 不必再让用户去翻日志文件。
+        const dg = (j.detail && j.detail.diag) || null;
+        notify('失败：' + ttl + (j.error ? '：' + j.error : ''), 'err',
+          (dg && dg.text) || '');
       }
       if (j.state === 'done' && isExp) afterExportDone(j);
     }
@@ -1884,8 +2039,8 @@
     logs: () => '清理日志文件？\n\n只用于排错，删了不影响任何功能。'
       + '正在写的那个文件会被系统占用，会自动跳过。\n\n确定清理？',
     downloads: () => '清理下载残留？\n\n'
-      + '中断下载留下的临时文件与视频导出的临时上传文件，删了不影响已装剧情。'
-      + '\n\n确定清理？',
+      + '没下完的下载留下的临时文件，以及导出视频时传了一半就断掉的录制文件。'
+      + '删了不影响已装的剧情，也不影响已经导出好的视频。\n\n确定清理？',
     backup: () => '清理旧备份目录？\n\n确定清理？',
   };
 

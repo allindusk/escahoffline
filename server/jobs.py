@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import sys
 import threading
 import time
@@ -49,6 +50,9 @@ class Job:
         self.meta = meta
         self.state = "queued"          # queued | running | done | failed | cancelled
         self.message = ""
+        #: 最后一句"阶段描述"（如「② 解析剧本 → data/char_306.js」），
+        #: 失败时进排错指纹：光有错误信息不知道卡在哪一步，定位会慢一半。
+        self.stage = ""
         self.error = ""
         self.total = 0.0
         self.done = 0.0
@@ -153,12 +157,28 @@ class Job:
             self.items_done += 1
         if message is not None:
             self.message = message
+            self._set_stage(message)
         if detail:
             self.detail.update(detail)
         self._sample()
 
+    def _set_stage(self, message: str) -> None:
+        """记住"当前卡在哪一步"（失败排错指纹里要用）。
+
+        ``message`` 会被失败行覆盖（``[char_306] 失败：…``），那行本身没有定位
+        价值 —— 真正有用的是它**之前**那句"② 解析剧本"之类的阶段描述。
+        """
+        s = " ".join(str(message or "").split())
+        # 只要"看起来像在做某事"的行；失败/告警行本身就是结论，不是阶段。
+        # 注意别把 ``[1/1] 安装 char_306（missing）`` 这类带方括号的进度行排掉 ——
+        # 它恰恰最能说明卡在哪一部。
+        if not s or s.startswith(("⚠", "✓")) or "失败" in s[:24]:
+            return
+        self.stage = s[:60]
+
     def log(self, message: str) -> None:
         self.message = message
+        self._set_stage(message)
         self._sample()
         # 同时落盘：用户反馈"出问题时日志里什么都没有"，只记 DONE/FAIL 不够，
         # 安装/导出的每一步都得留痕，否则事后没法复盘。
@@ -194,7 +214,77 @@ class Job:
                 self.detail["traceback"] = traceback.format_exc()[-3000:]
         except Exception:                                      # noqa: BLE001
             pass
-        self._audit("FAIL", self.error)
+        diag = self._diag()
+        if diag:
+            self.detail["diag"] = diag
+        # 审计行带上排错指纹：日后按码在 app.log 里也能捞到同一条
+        self._audit("FAIL", (diag.get("text") or "") + " | " + self.error
+                    if diag else self.error)
+
+    def _diag(self) -> dict:
+        """一行"排错指纹"，跟着失败一起显示在**操作记录**里。
+
+        这一行里有判断"程序问题还是环境问题"最关键的几个量 ——
+        版本 / 系统 / Python / 程序路径长度与是否含中文 / 磁盘余量 / 卡在哪一步。
+        放在「报错详情」里是给用户自己核对的（页面上不做任何求助引导）。
+        """
+        d: dict = {"code": "", "text": ""}
+        parts = []
+        try:
+            import hashlib
+            raw = f"{self.kind}|{self.unit}|{self.error}".encode("utf-8", "replace")
+            d["code"] = "#" + hashlib.md5(raw).hexdigest()[:4].upper()
+            parts.append(d["code"])
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            from . import paths as _paths
+            root = getattr(_paths, "ROOT", "") or ""
+            d["ver"] = _paths.app_version()
+            parts.append("v" + str(d["ver"]))
+            d["path"] = root
+            d["pathLen"] = len(root)
+            d["nonAsciiPath"] = any(ord(c) > 127 for c in root)
+            if root:
+                parts.append(f"路径{len(root)}字"
+                             + ("·含中文" if d["nonAsciiPath"] else ""))
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            import platform
+            d["os"] = f"{platform.system()} {platform.version()}".strip()
+            d["py"] = platform.python_version()
+            parts.append(d["os"].replace("Windows", "Win"))
+            parts.append("py" + d["py"])
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            import shutil
+            from . import paths as _paths
+            free = shutil.disk_usage(getattr(_paths, "ROOT", ".")).free
+            d["diskFreeGB"] = round(free / 1073741824)
+            parts.append(f"盘余{d['diskFreeGB']}G")
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            stage = (self.stage or self.message or "").strip()
+            if stage:
+                d["stage"] = stage[:60]
+                parts.append("阶段:" + stage[:32])
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            from . import log as _applog
+            d["log"] = os.path.basename(_applog.log_path())
+            parts.append("日志:" + d["log"])
+        except Exception:                                      # noqa: BLE001
+            pass
+        try:
+            d["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:                                      # noqa: BLE001
+            pass
+        d["text"] = " · ".join(parts)
+        return d
 
     def finish(self, message: str = "") -> None:
         _release(self)                     # 同上：先摘占用，再置终态

@@ -40,6 +40,92 @@ class CDNError(RuntimeError):
     """给用户看的错误（缺依赖、清单拉不到、角色不存在…）"""
 
 
+class _StaleManifest(RuntimeError):
+    """下载源上的包与本机**清单**对不上（大小不同 / 已经不在源上）。
+
+    为什么会走到这里：``ensure_manifest`` 只在**首次**拉清单，之后一直用旧的那份。
+    官方重新打包某个包、或把它从清单里撤掉之后，旧清单里的 ``size`` 就永远校验不过，
+    表现是"这一部怎么装都失败"，而旧版报出来的话却是"包可能损坏" —— 用户只能一遍遍
+    怀疑自己的磁盘和网络。``install_unit`` 捕获它 → 自动刷新清单并重跑一次。
+    """
+
+
+def _E(code: str, msg: str) -> "CDNError":
+    """带**错误码**的报错：``[E-DISK] 磁盘空间不足…``。
+
+    为什么要码：用户反馈时常常只截一张图、不愿发日志文件。码出现在
+    「操作记录」里，我一眼就能分出是网络、磁盘、权限还是清单问题，
+    不用让他再复现一次去翻文件（码表见 ``net.FAIL_REASONS``）。
+    """
+    return CDNError(f"[{code}] {msg}")
+
+
+def _explain_download(err) -> str:
+    """底层异常 → 「发生了什么」。归因词表在 :mod:`server.cdn.net`，全链路共用。"""
+    return net.explain_error(err)[0]
+
+
+def _is_stale(err) -> bool:
+    """这条失败像是"清单过期"造成的吗（大小不符 / 源上已没有）。"""
+    return net.is_stale_error(err)
+
+
+def _scenario_fail(what: str, stat, name: str) -> Exception:
+    """剧本包最终没落盘 → 给一条**说真话**的错（发生了什么 + 该怎么办）。
+
+    以前这里只会说「剧本解析失败（包可能损坏，重试一次）」：那是从
+    ``extract_scenario() -> None`` 反推出来的猜测，真实原因（下载失败/被删）
+    被 ``fetch_many`` 收进 ``fail`` 列表后**没人看**，于是用户拿到的信息全错，
+    我们这边也查不出问题（2026-11-06 用户反馈，UI 上只有那一行字）。
+    归因词表在 :data:`server.cdn.net.FAIL_REASONS`，全链路共用同一套。
+    """
+    fails = (stat or {}).get("fail") or []
+    err = next((e for n, e in fails if n == name), "")
+    if not err:
+        return _E("E-VANISH", (
+            f"{what} 的剧本包没下下来，但下载阶段并没有报错 —— 文件下好之后又不见了"
+            "（多半是同时跑了「清理空间 / 清理资源包」，或被安全软件、网盘同步客户端"
+            "挪走了）。等清理任务结束再重试一次；仍然不行请重装这部剧"))
+    happened, how = net.explain_error(err)
+    code = net.error_code(err)
+    tail = f"（原始错误：{str(err)[:120]}）"
+    if net.is_stale_error(err):
+        return _StaleManifest(f"[{code}] {what} 的剧本包下载失败：{happened}。{how}{tail}")
+    return _E(code, f"{what} 的剧本包没下下来：{happened}。{how}{tail}")
+
+
+def _warn_voice_fail(job, stat, what: str) -> None:
+    """语音包解不开 → 明确说"会有什么后果"。
+
+    语音不是致命项（剧本照样能读），但**一点声音都没有**会被用户当成播放器坏了，
+    而旧代码只在控制台 print 一行就过去了（GUI 用户根本看不到）。
+    """
+    bad = int((stat or {}).get("fail") or 0)
+    if not bad or job is None:
+        return
+    job.log(f"⚠ {bad} 个语音包解不开：{what}里这些句子会没有声音。"
+            "多半是包不完整或解包组件异常 —— 重装这部剧会重新下载")
+
+
+def _warn_stand_output(job, nums) -> None:
+    """立绘合成后核实产物：一张都没出来就明说，别等播到那一句才发现没有脸。"""
+    if job is None or not nums:
+        return
+    d = os.path.join(config.IMG, "stand")
+    prefixes = tuple(f"stand_{n}_" for n in nums)
+    n = 0
+    try:
+        for fn in os.listdir(d):
+            if fn.endswith(".webp") and fn.startswith(prefixes):
+                n += 1
+    except OSError:
+        return
+    if not n:
+        job.log("⚠ 立绘一张都没合成出来：剧情里的人物会是空白。"
+                "多半是图片包没下全，或缺少 Pillow / numpy 组件 —— "
+                "重装这部剧会重下图片包；仍不行请到「剧情安装」页装依赖")
+
+
 # ---------------------------------------------------------------- 进度桥
 @contextlib.contextmanager
 def _capture(job):
@@ -206,7 +292,9 @@ def ensure_manifest(job=None, force: bool = False) -> dict:
     try:
         manifest.refresh()
     except Exception as e:                                     # noqa: BLE001
-        raise CDNError(f"拉取资源清单失败：{e}") from e
+        happened, how = net.explain_error(e)
+        raise _E(net.error_code(e), f"拉取官方资源清单失败：{happened}。{how}"
+                                     f"（原始错误：{str(e)[:120]}）") from e
     if job is not None:
         job.log(manifest.summary())
     return manifest.load_index()
@@ -387,16 +475,23 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     if "banner" in parts:
         _total += len([n for n in mf.index if n.startswith(BANNER_PREFIXES)])
     fails: list[str] = []
+    hints: list[str] = []
 
     def _collect(tag: str, res: dict) -> None:
-        """记录下载失败：写进任务日志（带包名），最后统一抛 CDNError。"""
+        """记录下载失败：按**原因归类**汇总，最后统一抛 CDNError。
+
+        逐包贴原始异常（"…（HTTP Error 404: Not Found）"）是以前的写法：
+        同一句话既可能是"官方撤包"也可能是"磁盘满"，用户根本不知该改哪。
+        归类 + "怎么处理"由 :func:`server.cdn.net.summarize_fails` 统一给，
+        逐包的告警已经由 ``stages.fetch`` 打在任务日志里，这里只留汇总。
+        """
         bad = (res or {}).get("fail") or []
         if not bad:
             return
-        sample = "、".join(f"{n}（{str(e)[:40]}）" for n, e in bad[:5])
-        fails.append(f"{tag} {len(bad)} 个：{sample}")
-        if job is not None:
-            job.log(f"⚠ {tag} 有 {len(bad)} 个包下载失败：{sample}")
+        fails.append(f"{tag}：{net.summarize_fails(bad, limit=160)}")
+        hint = net.hint_for(bad)
+        if hint:
+            hints.append(hint)
 
     done_base = 0
     if job is not None and _total:
@@ -547,8 +642,9 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                 job.log(f"   头像生成完毕：{n_ok}/{len(ents)}"
                         + (f"，失败 {n_bad} 个" if n_bad else ""))
             if n_bad:
-                fails.append(f"头像导出失败 {n_bad} 个"
-                             "（多为包损坏或缺少解码组件）")
+                fails.append(f"头像：{n_bad} 个包下到了但裁不出图"
+                             "（包不完整，或缺图片解码组件）")
+                hints.append("重装一次公共素材；仍失败请到「剧情安装」页装依赖")
         elif tag == "banner":
             try:
                 stages.export_char_banners()
@@ -607,9 +703,13 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     if fails:
         # 有失败就抛错：前端会弹提示（任务条显示 j.error），用户能看到"卡在哪"，
         # 而不是对着一个永远 97% 的数字猜。完整清单在任务日志里。
-        raise CDNError("部分素材没装上 · " + fails[0]
-                       + (f"（另有 {len(fails) - 1} 类失败，详见日志）"
-                          if len(fails) > 1 else ""))
+        # 文案 = 哪一类 + 什么原因（归类）+ 怎么处理，三者缺一不可。
+        msg = "部分素材没装上 · " + fails[0]
+        if len(fails) > 1:
+            msg += f"（另有 {len(fails) - 1} 类失败，详见日志）"
+        if hints:
+            msg += f"。怎么处理：{hints[0]}"
+        raise _E("E-PART", msg)
 
     return out
 
@@ -1185,24 +1285,52 @@ def install_unit(key: str, job=None, workers: int = 32, voice: bool = True,
     config.ensure_dirs()
     miss = missing_deps()
     if miss:
-        raise CDNError("缺少依赖：" + "、".join(miss)
-                       + "。请先 pip install -r requirements.txt")
+        raise _E("E-DEP", "缺少安装组件：" + "、".join(miss)
+                            + "。到「剧情安装」页点「自动安装依赖」，装完再重试")
     with _capture(job):
         mf = select.Manifest(ensure_manifest(job))
-        if key.startswith("char_"):
+
+        def _run(m):
+            if key.startswith("char_"):
+                try:
+                    cid = int(key[5:])
+                except ValueError as e:
+                    raise _E("E-ID", f"角色标识不对：{key}") from e
+                return _install_char(m, cid, job, workers, voice, image, maps, force,
+                                     upscale, upscale_scale, upscale_engine)
+            mm = _UNIT_RE.match(key)
+            if not mm:
+                raise _E("E-ID", f"无法识别的剧情标识：{key}"
+                                 "（应为 char_12 或 adv_main_3）")
+            kind = mm.group(1)
+            no = int(mm.group(2)) if mm.group(2) else None
+            return _install_adv(m, kind, no, job, workers, voice, image, maps, force,
+                                upscale, upscale_scale, upscale_engine)
+
+        for attempt in (0, 1):
             try:
-                cid = int(key[5:])
-            except ValueError as e:
-                raise CDNError(f"角色标识不对：{key}") from e
-            return _install_char(mf, cid, job, workers, voice, image, maps, force,
-                                 upscale, upscale_scale, upscale_engine)
-        m = _UNIT_RE.match(key)
-        if not m:
-            raise CDNError(f"无法识别的剧情标识：{key}（应为 char_12 或 adv_main_3）")
-        kind = m.group(1)
-        no = int(m.group(2)) if m.group(2) else None
-        return _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
-                            upscale, upscale_scale, upscale_engine)
+                return _run(mf)
+            except _StaleManifest as e:
+                # 清单过期自愈：下载源上的包和本机清单里的 size/条目对不上。
+                # 刷新一次清单（约 30–60 秒）再重跑 —— 各 stage 都是幂等的，
+                # 已经下好/解好的部分不会重做。
+                if attempt:
+                    raise _E("E-STALE", f"{e}（刷新清单后仍然对不上，当前的下载源"
+                                        "可能需要更换，或官方正在更新资源）") from None
+                if job is not None:
+                    job.log(str(e))
+                    job.log("本机资源清单可能是旧的，正在刷新清单"
+                            "（约 30–60 秒，这段时间进度条不动是正常的），"
+                            "随后自动重试…")
+                try:
+                    manifest.refresh()
+                except Exception as e2:                        # noqa: BLE001
+                    raise _E(net.error_code(e2),
+                             f"{e}；刷新清单也失败了：{str(e2)[:120]}"
+                             "（请检查网络后重试）") from e2
+                mf = select.Manifest(manifest.load_index())
+                if job is not None:
+                    job.log("清单已更新，重新安装…")
 
 
 def _bname(n) -> str:
@@ -1385,8 +1513,8 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     t0 = time.time()
     scen = mf.scenario(cid)
     if not scen:
-        raise CDNError(f"官方清单里找不到角色 {cid} 的剧本包"
-                       f"（可能是新角色还没上架，或清单过期）")
+        raise _E("E-NOBUNDLE", f"官方清单里找不到角色 {cid} 的剧本包"
+                               f"（可能是新角色还没上架，或清单过期）")
     names = [scen]
     if voice:
         names += mf.voices(cid)
@@ -1399,17 +1527,40 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     if job is not None:
         job.log(f"① 剧本 / 语音 / 头像：{len(base_entries)} 个包 / "
                 f"{_sz0 / 1048576:.1f} MB")
-    stages.fetch(base_entries, workers, f"char{cid} 基础包", skip=True, pause_event=_pe(job), job=job)
+    st0 = stages.fetch(base_entries, workers, f"char{cid} 基础包", skip=True, pause_event=_pe(job), job=job)
+
+    # 剧本包是整条链路的地基：它没落盘，后面一律没意义。这里先看**文件在不在**，
+    # 再决定要不要解析 —— 失败时用下载层记下的真实原因报错（见 _scenario_fail）。
+    scen_name = _bname(scen)
+    scen_path = os.path.join(FILES_STORY, f"bundle_scenarioscript_char_{cid}")
+    if not os.path.exists(scen_path):
+        raise _scenario_fail(f"角色 {cid}", st0, scen_name)
 
     if job is not None:
         job.log("② 解析剧本 → data/char_%d.js" % cid)
-    if not stages.extract_scenario(cid, force=force):
-        raise CDNError(f"角色 {cid} 的剧本解析失败（包可能损坏，重试一次）")
+    try:
+        ok = stages.extract_scenario(cid, force=force)
+    except OSError as e:
+        # 解出来了但写不进去（磁盘满 / 目录只读 / 被占用）：别说成"包坏了"。
+        happened, how = net.explain_error(e)
+        code = net.error_code(e)
+        raise _E(code if code != "E-UNKNOWN" else "E-WRITE",
+                 f"角色 {cid} 的剧本已经解出来，但保存失败：{happened}。"
+                 f"{how}（原始错误：{str(e)[:120]}）") from e
+    except Exception as e:                                     # noqa: BLE001
+        # 文件在、但内容解不开：和"没下下来"是两回事，必须分开说。
+        raise _E("E-UNPACK", f"角色 {cid} 的剧本包解不开：{str(e)[:160]}。"
+                             "两种情况：① 文件只下了一半（重装这部剧会重新下载）；"
+                             "② 官方换了打包格式，当前版本还不认识（升级到最新版）") from e
+    if not ok:
+        raise _E("E-VANISH", f"角色 {cid} 的剧本包解不开：本机缺少 "
+                             f"{os.path.basename(scen_path)}，重装这部剧会重新下载")
 
     if voice:
         if job is not None:
             job.log("③ 导出语音")
-        stages.export_voices(cid, workers=workers)
+        vs = stages.export_voices(cid, workers=workers)
+        _warn_voice_fail(job, vs, "这部剧")
 
     # 头像源：剧本**不引用** c-panel 包（它是角色面板的半身像），
     # 但侧栏头像要靠它裁出来，所以这里单独下一个（几 KB ~ 几百 KB）。
@@ -1421,7 +1572,11 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     if cp_ents:
         stages.fetch(cp_ents, workers, "角色头像", skip=True,
                      pause_event=_pe(job), job=job)
-    stages.export_avatar(cid)
+    if not stages.export_avatar(cid) and job is not None:
+        # 头像不是播放必需品（剧情/立绘都在），但左侧列表会一直显示首字色块，
+        # 用户会当成"没装好"。这一行必须落日志。
+        job.log("⚠ 角色头像没裁出来（左侧列表会显示首字色块）：多半是半身像包"
+                "没下到，或包的格式不认识 —— 重装这部剧会重新下载")
 
     # 角色剧情的**横幅**（游戏「角色剧情」入口那张图）也在公共素材里：
     # `bundle_episodeicons_episode_character_<cid:05d>` → media/img/story/char_<cid>.webp。
@@ -1474,16 +1629,20 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
         if job is not None:
             # export_images 的 print 只在控制台；这里把"缺哪些 key / 失败多少张"
             # 落进日志，否则事后只能看到"合成 N 套成功"，查不出缺图原因。
+            # 「清单里没这个图」和「图解不出来」是两回事，分开说：
             if ex.get("miss"):
                 head = ", ".join(f"{k}:{s}" for k, s in ex["miss"][:5])
-                job.log(f"   ⚠ 无对应包的图片 key {len(ex['miss'])} 个（{head}）")
+                job.log(f"   ⚠ {len(ex['miss'])} 个图片在官方清单里找不到对应包"
+                        f"（{head}）—— 官方源本身缺图，播放到那里会跳过不出图")
             if ex.get("fail"):
-                job.log(f"   ⚠ 图片导出失败 {ex['fail']} 张（包缺失或损坏）")
+                job.log(f"   ⚠ {ex['fail']} 张图解不出来：包不完整，或图片格式"
+                        "当前版本不认识 —— 重装这部剧会重新下载这些包")
         stages.export_standfull(mf, nums)
         if nums:
             if job is not None:
                 job.log(f"⑤ 合成表情差分立绘（{len(nums)} 套）")
             stages.compose_stands(nums)
+            _warn_stand_output(job, nums)
         # 剧本引用了、但包里没有对应表情的立绘（表情码其实是文本）→ 素体顶替
         stages.fill_missing_stands(assets.get("stand") or (), job)
 
@@ -1493,9 +1652,16 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     if maps:
         if job is not None:
             job.log("⑥ 刷新索引与映射表")
-        stages.sync_index()
-        stages.sync_cgmap(cid)
-        stages.regen_maps()
+        try:
+            stages.sync_index()
+            stages.sync_cgmap(cid)
+            stages.regen_maps()
+        except Exception as e:                                 # noqa: BLE001
+            # 素材已经落盘，只是列表/索引没刷新：说清"东西在，别重下"，
+            # 而不是扔一段英文堆栈让用户以为整部都白装了。
+            raise _E("E-INDEX", "剧情和素材已经装好，但刷新列表 / 图片索引失败："
+                                f"{str(e)[:160]}。重启程序后重试即可"
+                                "（已下载的资源不会重下）") from e
         stages.regen_names()
         # 新角色 Wiki 可能还没收录：先把实装日期用剧本包创建时间顶上，
         # 之后用户点「更新角色信息」拿到 wiki 数据会被自动覆盖。
@@ -1516,14 +1682,27 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
     key = select.story_key(kind, no)
     b = mf.adv_scenario(kind, no)
     if not b:
-        raise CDNError(f"官方清单里找不到 {key} 的剧本包")
+        raise _E("E-NOBUNDLE", f"官方清单里找不到 {key} 的剧本包"
+                               "（多半是清单过期：点「更新」刷新资源清单后重试）")
     if job is not None:
         # 只打包名：b 是清单条目 dict，直接插值会把
         # "{'bundle_name': ..., 'crc': ..., 'hash': ...}" 整段写进操作记录
         job.log(f"① 剧本包：{_bname(b)}")
-    stages.fetch(_entries(mf, [b]), workers, f"{key} 剧本", skip=True, pause_event=_pe(job), job=job)
-    if not stages.extract_adv(kind, no, force=force):
-        raise CDNError(f"{key} 的剧本解析失败")
+    st0 = stages.fetch(_entries(mf, [b]), workers, f"{key} 剧本", skip=True, pause_event=_pe(job), job=job)
+    # 与角色剧情同一条判据：先看包里文件在不在，再用下载层的真实原因报错。
+    scen_name = _bname(b)
+    scen_path = os.path.join(FILES_STORY, scen_name)
+    if not os.path.exists(scen_path):
+        raise _scenario_fail(key, st0, scen_name)
+    try:
+        ok = stages.extract_adv(kind, no, force=force)
+    except Exception as e:                                     # noqa: BLE001
+        raise _E("E-UNPACK", f"{key} 的剧本包解不开：{str(e)[:160]}。"
+                             "两种情况：① 文件只下了一半（重装这一部会重新下载）；"
+                             "② 官方换了打包格式，当前版本还不认识（升级到最新版）") from e
+    if not ok:
+        raise _E("E-VANISH", f"{key} 的剧本包解不开：本机缺少 {scen_name}，"
+                             "重装这一部会重新下载")
 
     if voice:
         if job is not None:
@@ -1531,7 +1710,8 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
         vbundles = select.adv_voice_bundles(mf.index, kind, no)
         if vbundles:
             stages.fetch(_entries(mf, vbundles), workers, f"{key} 语音", skip=True, pause_event=_pe(job), job=job)
-            stages.export_adv_voices(key, vbundles)
+            vs = stages.export_adv_voices(key, vbundles)
+            _warn_voice_fail(job, vs, "这一部")
 
     nums = set()
     assets = {"stand": set(), "back": set(), "cg": set()}
@@ -1567,14 +1747,17 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
         if job is not None:
             if ex.get("miss"):
                 head = ", ".join(f"{k}:{s}" for k, s in ex["miss"][:5])
-                job.log(f"   ⚠ 无对应包的图片 key {len(ex['miss'])} 个（{head}）")
+                job.log(f"   ⚠ {len(ex['miss'])} 个图片在官方清单里找不到对应包"
+                        f"（{head}）—— 官方源本身缺图，播放到那里会跳过不出图")
             if ex.get("fail"):
-                job.log(f"   ⚠ 图片导出失败 {ex['fail']} 张（包缺失或损坏）")
+                job.log(f"   ⚠ {ex['fail']} 张图解不出来：包不完整，或图片格式"
+                        "当前版本不认识 —— 重装这一部会重新下载这些包")
         stages.export_standfull(mf, nums)
         if nums:
             if job is not None:
                 job.log(f"④ 合成表情差分立绘（{len(nums)} 套）")
             stages.compose_stands(nums)
+            _warn_stand_output(job, nums)
             stages.fill_missing_stands(assets.get("stand") or (), job)
         else:
             # 非角色剧情也要章节横幅
@@ -1586,13 +1769,18 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
     if maps:
         if job is not None:
             job.log("⑤ 刷新索引与映射表")
-        stages.sync_advindex()
-        # 「其他」剧情：刚装上的这一包按**正文内容**判定属于哪个游戏入口
-        # （殲滅戦 / RAID / 広域戦 / 纪念活动…），补进 othereps.js —— 不依赖人工
-        # 关联表，官方下次更新照样能归（判定规则见 stages.sync_othereps）。
-        stages.sync_othereps(job=job)
-        stages.sync_index()
-        stages.regen_maps()
+        try:
+            stages.sync_advindex()
+            # 「其他」剧情：刚装上的这一包按**正文内容**判定属于哪个游戏入口
+            # （殲滅戦 / RAID / 広域戦 / 纪念活动…），补进 othereps.js —— 不依赖人工
+            # 关联表，官方下次更新照样能归（判定规则见 stages.sync_othereps）。
+            stages.sync_othereps(job=job)
+            stages.sync_index()
+            stages.regen_maps()
+        except Exception as e:                                 # noqa: BLE001
+            raise _E("E-INDEX", "剧情和素材已经装好，但刷新列表 / 图片索引失败："
+                                f"{str(e)[:160]}。重启程序后重试即可"
+                                "（已下载的资源不会重下）") from e
         stages.regen_names()
         stages.regen_charmeta()
 

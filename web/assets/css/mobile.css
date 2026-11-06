@@ -233,12 +233,23 @@
      setup.css 的 #actPanel.collapsed，不显式覆盖的话折叠态会被撑到 46vh */
   body.mb-setup #actPanel.collapsed { width: auto; max-height: 34px; }
   body.mb-setup #actPanel.collapsed .apChk,
-  body.mb-setup #actPanel.collapsed #apClear { display: none; }
+  body.mb-setup #actPanel.collapsed #apClear,
+  body.mb-setup #actPanel.collapsed #apFeedback { display: none; }
   body.mb-setup #actPanel.collapsed .apTitle { flex: none; }
   /* 有新记录但仍保持收起时，标题旁点一个小圆点提示"里面还有内容" */
   body.mb-setup #actPanel.has-new .apTitle::after {
     content: ' •'; color: var(--warn, #e0a33a); font-weight: 700;
   }
+
+  /* ---------- 报错详情浮窗（窄屏铺满，方便截图） ---------- */
+  #apDetailMask { padding: 8px; }
+  #apDetail { width: calc(100vw - 16px); max-height: 88vh; }
+  .apDHead { padding: 8px 10px; gap: 6px; }
+  .apDHead b { font-size: 14px; }
+  .apDCode { font-size: 14px; }
+  .apDBody { padding: 10px; }
+  .apDText { font-size: 15px; }
+  .apDFoot { padding: 6px 10px 10px; }
 
   /* ---------- 底部任务条 ---------- */
   /* 桌面把「标题 / 消息 / 进度 / 数字」挤在一行，手机上必然横向溢出。

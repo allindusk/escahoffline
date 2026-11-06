@@ -229,3 +229,111 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
     for n, e in stat["fail"][:10]:
         _log(f"   失败 {n}: {e}")
     return stat
+
+
+# ================================================================ 失败归因
+#: ``(匹配片段, 发生了什么, 该怎么办, 错误码)`` —— 小写匹配 ``str(异常)``。
+#:
+#: 为什么集中在下载层：以前每个调用点自己拼错误，"装剧情失败"最后只剩一句
+#: 「剧本解析失败（包可能损坏）」—— 而真实原因可能是**代理劫持 / 磁盘满 /
+#: 清单过期 / 官方撤包 / 目录不可写**，这几件事要用户做的事完全相反。
+#: 现在只有这一张表，角色剧情、非角色剧情、公共素材、语音、图片包共用同一套话术，
+#: 绝不会把"磁盘满"和"网络超时"说成同一句话。
+#:
+#: ``错误码``（E-xxx）会写进用户能看到的报错里：用户只截图（不发日志文件）时，
+#: 凭这一串就能判断是哪一类问题，不必等我猜。
+FAIL_REASONS = (
+    # —— 配置缺失 ——
+    ("还没有配置资源源地址", "程序里还没有设置下载源",
+     "到「设置 → 下载源」填一个地址，或重新解压一份完整的程序包", "E-NOSRC"),
+    # —— 清单与源对不上（可自愈：刷新清单）——
+    ("size ", "下载到的文件和清单里记的大小不一样",
+     "点「更新」刷新资源清单后重试", "E-STALE"),
+    ("404", "下载源上已经没有这个包",
+     "点「更新」刷新资源清单；仍然失败请换个下载源", "E-STALE"),
+    ("not found", "下载源上已经没有这个包",
+     "点「更新」刷新资源清单；仍然失败请换个下载源", "E-STALE"),
+    ("403", "下载源拒绝提供这个包", "换个下载源试试", "E-SRC"),
+    ("407", "代理要求先登录（代理设置有问题）",
+     "关掉代理 / VPN，或改用直连后重试", "E-PROXY"),
+    # —— 本机写不进去 ——
+    ("permission", "本机写不进文件（权限或安全软件）",
+     "别把程序放在 Program Files 等受保护目录，并把程序目录加进杀软白名单", "E-PERM"),
+    ("denied", "本机写不进文件（权限或安全软件）",
+     "别把程序放在 Program Files 等受保护目录，并把程序目录加进杀软白名单", "E-PERM"),
+    ("winerror 5", "本机写不进文件（权限或安全软件）",
+     "别把程序放在 Program Files 等受保护目录，并把程序目录加进杀软白名单", "E-PERM"),
+    ("no space", "磁盘空间不足", "腾出磁盘空间后重试", "E-DISK"),
+    ("errno 28", "磁盘空间不足", "腾出磁盘空间后重试", "E-DISK"),
+    # —— 网络 / 代理 ——
+    ("timed out", "连下载源超时", "关掉代理 / VPN，或换个线路后重试", "E-NET"),
+    ("timeout", "连下载源超时", "关掉代理 / VPN，或换个线路后重试", "E-NET"),
+    ("refused", "下载源拒绝连接", "检查代理 / VPN 与防火墙后重试", "E-NET"),
+    ("reset", "连接被中途切断", "多半是代理 / VPN 或防火墙在拦，关掉后重试", "E-NET"),
+    ("certificate", "安全连接校验失败", "代理 / VPN 在改流量，关掉后重试", "E-PROXY"),
+    ("ssl", "安全连接失败", "代理 / VPN 在改流量，关掉后重试", "E-PROXY"),
+    ("getaddrinfo", "域名解析失败（连不上网或 DNS 被拦）", "检查网络后重试", "E-NET"),
+    ("11001", "域名解析失败（连不上网或 DNS 被拦）", "检查网络后重试", "E-NET"),
+    ("urlopen error", "连不上下载源", "检查网络 / 代理后重试", "E-NET"),
+)
+
+#: 一条不匹配任何规则的失败
+FAIL_UNKNOWN = ("下载失败（原因未知）",
+                "点「更新」刷新资源清单后重试；仍然不行请重装这部剧，或重启程序",
+                "E-UNKNOWN")
+
+
+def explain_error(err) -> tuple[str, str]:
+    """异常 → ``(发生了什么, 该怎么办)``。两条都给人看，不含 URL / 协议细节。"""
+    low = str(err or "").lower()
+    for key, what, how, _code in FAIL_REASONS:
+        if key in low:
+            return what, how
+    return FAIL_UNKNOWN[0], FAIL_UNKNOWN[1]
+
+
+def error_code(err) -> str:
+    """异常 → 错误码（``E-NET`` / ``E-DISK`` …）。用户截图里的那一串。"""
+    low = str(err or "").lower()
+    for key, _what, _how, code in FAIL_REASONS:
+        if key in low:
+            return code
+    return FAIL_UNKNOWN[2]
+
+
+def is_stale_error(err) -> bool:
+    """这条失败是不是"本机清单过期"造成的（刷新清单就能好）。"""
+    low = str(err or "").lower()
+    return "size " in low or "404" in low or "not found" in low
+
+
+def summarize_fails(fails, limit: int = 400) -> str:
+    """把 ``fetch_many`` 的 fail 列表压成**一句按原因归类**的话。
+
+    ``[(包名, 异常), …]`` → ``"6 个包没下下来：4 个 · 下载源上已经没有这个包（如
+    bundle_a）；2 个 · 连下载源超时（如 bundle_b）"``
+    """
+    fails = list(fails or ())
+    if not fails:
+        return ""
+    groups: dict = {}
+    for name, err in fails:
+        what, how = explain_error(err)
+        groups.setdefault((what, how), []).append(str(name))
+    bits = []
+    for (what, _how), names in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        bits.append(f"{len(names)} 个 · {what}（如 {names[0]}）")
+    msg = f"{len(fails)} 个包没下下来：" + "；".join(bits)
+    return msg if len(msg) <= limit else msg[:limit] + "…"
+
+
+def hint_for(fails) -> str:
+    """这批失败里占比最高的那条"怎么办"（多数情况下一步就够了）。"""
+    fails = list(fails or ())
+    if not fails:
+        return ""
+    cnt: dict = {}
+    for _n, err in fails:
+        how = explain_error(err)[1]
+        cnt[how] = cnt.get(how, 0) + 1
+    return max(cnt.items(), key=lambda kv: kv[1])[0]

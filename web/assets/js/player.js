@@ -1975,7 +1975,10 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('on');
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove('on'), 1600);
+  /* 停留时间随字数走：固定 1.6 秒只够读「已复制」这种短句，
+     报"哪几部剧情没下载"那种长句根本看不清就消失了。 */
+  const ms = Math.min(6000, 1600 + String(msg).length * 120);
+  el._t = setTimeout(() => el.classList.remove('on'), ms);
 }
 
 function copyText(text, msg) {
@@ -2134,6 +2137,23 @@ function cloudAdvRow(key) {
   };
 }
 
+/** 「云端有、本地没装」的提示文案。
+ *  只说「发现 N 部新剧情（未下载）」用户还得自己去列表里翻是哪几部（2026-11-06 用户
+ *  要求报清楚**哪一类、标题叫什么**），所以这里把名字直接列出来；超过 4 条用
+ *  「等 N 个」收口 —— 标题本身可能很长，全列出来 toast 会撑成一堵墙。
+ *  标题一律走 ESC.storyTitle（"活动剧情 第42话" 这种自带分类名）。 */
+function cloudTip(countText, chars, advs) {
+  const clean = s => String(s || '').replace('（未接入）', '');
+  const names = [];
+  advs.forEach(a => names.push(clean(a.title) || clean(storyTitle(a.key))));
+  chars.forEach(c => names.push(clean(storyTitle('char_' + c.id))));
+  const MAX = 4;
+  const list = names.slice(0, MAX).map(n => '「' + n + '」').join('、')
+    + (names.length > MAX ? ' 等 ' + names.length + ' 个' : '');
+  return '发现 ' + countText + '还没下载：' + list
+    + '。到「资源管理」装上就会出现在这里';
+}
+
 async function loadCloudChars() {
   if (_cloudLoaded || !window.PACKSTATE) return;
   _cloudLoaded = true;
@@ -2142,30 +2162,41 @@ async function loadCloudChars() {
     if (!r.ok) return;
     const d = await r.json();
     if (d.needManifest) return;              // 清单还没下，等用户装完再说
+    /* 「索引里没有」≠「没下载」：本地状态才是唯一依据。
+       2026-11-06 就是这样翻车的 —— 漫画活动（0 句台词的 ShowEventCg 连环画）被旧
+       规则挡在 advindex 之外，剧本文件其实好好装着，资源管理显示「已全部安装」，
+       而这里只看索引差异，于是弹「发现 5 部新剧情（未下载）」。两边说法打架。
+       现在：只有 state=missing（清单有、本地没文件）才算未下载；已安装却没进索引
+       的不再并进来（索引侧的根因已修，见 stages.sync_advindex 的空包判定）。 */
+    const st = d.state || {};
+    const isMissing = k => !st[k] || st[k] === 'missing';
     const have = new Set((INDEX || []).map(c => +c.id));
     const extra = [];
     ((d.units || {}).char || []).forEach(function (k) {
       const id = +String(k).slice(5);
-      if (id && !have.has(id)) extra.push({ id: id, parts: 0, lines: 0, cloud: true });
+      if (id && !have.has(id) && isMissing(String(k)))
+        extra.push({ id: id, parts: 0, lines: 0, cloud: true });
     });
     const haveAdv = new Set((ADV || []).map(a => a.key));
     const extraAdv = [];
     ((d.units || {}).adv || []).forEach(function (k) {
-      if (!haveAdv.has(String(k))) extraAdv.push(cloudAdvRow(String(k)));
+      if (haveAdv.has(String(k))) return;
+      if (!isMissing(String(k))) return;         // 装了、只是索引没登记 → 不谎报未下载
+      extraAdv.push(cloudAdvRow(String(k)));
     });
     const msgs = [];
     if (extra.length) {
       CLOUD_ONLY = extra;
-      msgs.push(extra.length + ' 个新角色');
+      msgs.push(extra.length + ' 个角色');
     }
     if (extraAdv.length) {
       CLOUD_ADV = extraAdv;
-      msgs.push(extraAdv.length + ' 部新剧情');
+      msgs.push(extraAdv.length + ' 部剧情');
     }
     if (msgs.length) {
       renderSidebar((($('#search') || {}).value) || '');
       updateCnt();                  // 分类按钮上的总数跟着加上这些
-      toast('发现 ' + msgs.join(' · ') + '（未下载）：装完就会出现在这里');
+      toast(cloudTip(msgs.join('、'), extra, extraAdv));
     }
   } catch (e) { /* 纯静态打开时没有服务端，忽略 */ }
 }

@@ -443,16 +443,27 @@ window.SL = (() => {
       const active = !!String(state.q || '').trim() || state.rar.size > 0 || !!state.status;
       const hit = bar ? bar.querySelector('.sl-hit') : null;
       if (hit) {
-        hit.textContent = active
-          ? (keys.length ? '命中 ' + keys.length + ' 部剧情' : '没有匹配的剧情')
-          : '';
-        hit.className = 'sl-hit' + (active ? (keys.length ? ' on' : ' none') : '');
+        // 一条都没有时，同一句话已经在列表中央的 .sl-empty 里说过了，这里再挂一条红色
+        // 「没有匹配的剧情」纯属重复噪音（用户会以为两处说的是两件事）。
+        hit.textContent = (active && keys.length) ? '命中 ' + keys.length + ' 部剧情' : '';
+        hit.className = 'sl-hit' + ((active && keys.length) ? ' on' : '');
       }
       if (!keys.length) {
-        let hint = '没有匹配的剧情';
+        /* 空列表的提示必须说**当前事实**，别一律劝用户去改筛选：
+           2026-11-06 用户反馈，明明这一类 385 部全装好了，「只看未安装」下空得理所当然，
+           文案却在说"把筛选切回全部剧情查看"，读起来像出了故障。 */
+        const all = keysOf(state.src).length;
+        const filtering = !!String(state.q || '').trim() || state.rar.size > 0;
+        let hint;
         if (cfg.empty) hint = cfg.empty(state);
-        else if (state.status === 'miss') hint = '这一类都装好了 —— 把筛选切回「全部剧情」查看';
-        else if (state.status === 'have') hint = '这一类还没装 —— 把筛选切回「全部剧情」查看';
+        else if (state.status === 'miss')
+          hint = '这一类' + (all ? ' ' + all + ' 部' : '') + '全部已安装，没有未安装的剧情';
+        else if (state.status === 'have')
+          hint = '这一类还没有装任何剧情 —— 切回「全部剧情」挑一部装';
+        else if (filtering) hint = '没有匹配的剧情';
+        /* 没开任何筛选却空：这类页面（④导出只列已装、③只列有图的）各有各的原因，
+           只说事实、别猜原因，免得和安装页的"先下载剧情目录"对上号。 */
+        else hint = '这一类还没有可选的剧情';
         list.innerHTML = '<div class="sl-empty">' + esc(hint) + '</div>';
       } else if (cfg.groupOf) {
         list.innerHTML = groupHtml(keys);

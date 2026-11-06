@@ -34,7 +34,7 @@ from . import select
 from .config import (ARCHIVE_DIR, AUDIO, DATA, FILES_AUDIO, FILES_IMG,
                      FILES_STORY, IMG, IMG_X2, ROOT, SCRIPTS, STATE_DIR, WEB, WS,
                      add_scripts_to_path)
-from .net import _log, fetch_many
+from .net import _log, fetch_many, hint_for, summarize_fails
 
 add_scripts_to_path()          # 之后才能 import unityfs_probe / parse_script
 
@@ -63,10 +63,25 @@ def fetch(entries, workers: int = 48, desc: str = "bundle",
 
     ``pause_event`` 由任务传入，用来支持「暂停 / 继续」。
     ``count_skipped`` 见 :func:`server.cdn.net.fetch_many`。
+
+    **失败必须在这里就归类说清**：``fetch_many`` 只把 ``(包名, 原始异常)`` 收进
+    ``fail``，而各调用点（语音 / 图片 / 公共素材）原来一律忽略它 —— 于是"语音包
+    全下失败"的表现是**剧情能播、一点声音都没有**，用户完全不知道发生过什么。
+    统一在这里输出「哪一类原因、几个包、怎么办」，调用点再决定要不要当致命错。
     """
-    return fetch_many(entries, workers=workers, desc=desc, skip_existing=skip,
-                      pause_event=pause_event, job=job,
-                      done_offset=done_offset, count_skipped=count_skipped)
+    st = fetch_many(entries, workers=workers, desc=desc, skip_existing=skip,
+                    pause_event=pause_event, job=job,
+                    done_offset=done_offset, count_skipped=count_skipped)
+    fails = st.get("fail") or []
+    if fails:
+        verdict = summarize_fails(fails)
+        _note(f"{desc}：{verdict}", tag="cdn")
+        if job is not None:
+            job.log(f"⚠ {verdict}")
+            hint = hint_for(fails)
+            if hint:
+                job.log(f"   怎么处理：{hint}")
+    return st
 
 
 def read_bundle(path: str) -> bytes:
@@ -131,10 +146,23 @@ def _parts_from_bundle(path: str) -> list:
     **角色剧情与主线/活动/其他剧情共用这一份实现**：实测三类包内的 JSON
     schema 完全相同（FileName/StandImages/BackImages/Voices/Methods），
     只有 FileName 前缀不同（``adv_char_<cid>_<n>`` vs ``adv_<kind>_<no>_<n>``）。
+
+    解不出来就**抛异常**，不要返回空列表：以前 0 段会被当成"解包成功"，
+    写出一份空剧本，播放器里那部剧情点开一片空白，日志里却全是"完成"。
     """
-    payload, *_ = parse_unityfs(open(path, "rb").read())
+    name = os.path.basename(path)
+    try:
+        payload, *_ = parse_unityfs(open(path, "rb").read())
+    except Exception as e:                                     # noqa: BLE001
+        raise ValueError(f"{name} 的 UnityFS 容器解不开"
+                         f"（{str(e)[:80]}）") from e
+    try:
+        objs = extract_jsons(payload)
+    except Exception as e:                                     # noqa: BLE001
+        raise ValueError(f"{name} 里的剧本数据读不出"
+                         f"（{str(e)[:80]}）") from e
     parts = []
-    for o in extract_jsons(payload):
+    for o in objs:
         methods = []
         for m in o["Methods"]:
             # 保留全部演出指令（时序必需），只剔除空字符串字段压缩体积
@@ -150,12 +178,28 @@ def _parts_from_bundle(path: str) -> list:
             "voices": o.get("Voices", []),
             "methods": methods,
         })
+    if not parts:
+        raise ValueError(f"{name} 里没有任何剧本数据（0 段）"
+                         "—— 官方可能换了打包格式")
     parts.sort(key=lambda p: int(p["file"].rsplit("_", 1)[1]))
     return parts
 
 
 def _count_lines(parts: list) -> int:
     return sum(1 for p in parts for m in p["methods"] if m.get("Method") == "ShowMessage")
+
+
+#: 只要出现其中一条，就说明这个包有**看得见的内容**（哪怕一句台词都没有）。
+#: 漫画活动（官方把整集画成 CG 逐格翻页）只有 ShowEventCg，没有 ShowMessage。
+VISUAL_METHODS = frozenset((
+    "ShowEventCg", "ShowBackground", "ShowStand", "ShowScreenEffect", "PlayMovie",
+))
+
+
+def _has_visual(parts: list) -> bool:
+    """包里有画面演出吗（不依赖台词）。用于区分「空占位包」与「无台词剧情」。"""
+    return any(m.get("Method") in VISUAL_METHODS
+               for p in parts for m in (p.get("methods") or []))
 
 
 def extract_scenario(cid, force: bool = False) -> str | None:
@@ -167,7 +211,8 @@ def extract_scenario(cid, force: bool = False) -> str | None:
     """
     src = os.path.join(FILES_STORY, f"bundle_scenarioscript_char_{cid}")
     if not os.path.exists(src):
-        print(f"  缺少剧本包：{src}")
+        # 必须落盘：GUI 用户看不到控制台，而出事时"文件到底在不在"是第一判据。
+        _say(f"  缺少剧本包：{src}", tag="story")
         return None
     out_path = os.path.join(DATA, f"char_{cid}.js")
     if os.path.exists(out_path) and not force:
@@ -194,7 +239,7 @@ def extract_adv(kind: str, no, force: bool = False) -> str | None:
             else f"bundle_scenarioscript_{kind}_{no}")
     src = os.path.join(FILES_STORY, name)
     if not os.path.exists(src):
-        print(f"  缺少剧本包：{src}")
+        _say(f"  缺少剧本包：{src}", tag="story")
         return None
     out_path = os.path.join(DATA, key + ".js")
     if os.path.exists(out_path) and not force:
@@ -361,9 +406,12 @@ def sync_advindex() -> int:
         vdir = os.path.join(AUDIO, key)
         kind = d.get("kind") or key.split("_")[1]
         n = d.get("no")
-        # 空占位包（例如 event_51 / event_52：2 段、0 句，官方还没放内容，
-        # 所以也没有 topic_event 横幅）不要进列表 —— 否则就是一行点不开的空条目。
-        if _count_lines(d["parts"]) == 0:
+        # 空占位包（官方只放了包壳）不要进列表 —— 否则就是一行点不开的空条目。
+        # 判定**不能只看台词数**：漫画活动（event_42 / 51 / 52 / 59 / 96）整集没有
+        # 一句 ShowMessage，内容全在 ShowEventCg 逐格翻页里，那是能看的。
+        # 只看台词会把它们当空包剔掉 → 资源管理显示「已安装」、播放器侧栏却永远
+        # 没有它们（2026-11-06 用户遇到的矛盾：还附带一条"发现 5 部新剧情（未下载）"）。
+        if _count_lines(d["parts"]) == 0 and not _has_visual(d["parts"]):
             skipped.add(key)
             continue
         # 封面：章节标题横幅（游戏里标题本身就是图，没有文本资源）
@@ -1368,13 +1416,12 @@ def _note(msg: str, tag: str = "names") -> None:
 
     GUI 用户看不到 stdout，而"这次拒绝了哪些改名""哪些角色元数据是沿用旧版"
     恰恰是事后排查唯一有用的线索。
+
+    走 :func:`_say`（它给 ``print`` 兜了一层 ``UnicodeEncodeError``）：这里的
+    文案带 ⚠，在 GBK 控制台 / 被重定向的 stdout 下 ``print`` 会抛异常，而
+    :func:`fetch` 的"下载失败汇总"就从这里出去 —— 打不出来不该把整部剧情判失败。
     """
-    print("  " + msg)
-    try:
-        from .. import log as applog
-        applog.log(msg, tag=tag)
-    except Exception:                                          # noqa: BLE001
-        pass
+    _say("  " + msg, tag=tag)
 
 
 def regen_names(use_wiki: bool = True) -> None:

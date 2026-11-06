@@ -50,7 +50,10 @@ GROUPS: dict[str, tuple[str, str, str]] = {
     "export": ("导出成品", "userdata/export", "导出的视频 / CG 压缩包 / 翻译 txt"),
     "logs": ("日志", "userdata/logs", "排错用，可随便删"),
     "backup": ("旧图备份", "userdata/backup", "早期版本遗留，通常为空"),
-    "downloads": ("下载残留", "userdata/downloads", "中断的下载与临时上传文件"),
+    # 目录里其实只有两种东西：没下完的 .part（断点续传状态），和导出视频时
+    # 浏览器上传中断留下的 upload_*.webm。上传成功的会被 save_video() 直接搬去
+    # export/，不会留在这里 —— 所以别写成"导出的临时文件"，会被读成导出产物。
+    "downloads": ("下载残留", "userdata/downloads", "没下完的下载 / 导出视频时传了一半的临时文件"),
     "userdata_other": ("其他用户数据", "userdata", "配置 / 索引小文件"),
     "program": ("程序本体", "server · tools · web 程序文件",
                 "代码与超分引擎，删了要重装程序"),
