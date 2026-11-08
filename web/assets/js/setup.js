@@ -387,7 +387,13 @@
     ST.manifest = manifest;
     ST.links = links;
     ST.pub = pub;
+    /* 重画会重建整块列表的 innerHTML，滚动容器（main）的内容一高一低，
+       滚动位置就被夹回顶端 —— 任务结束后列表自动刷新一次，用户正看到一半的
+       位置就丢了。这里记一下再放回去（内容变短时由浏览器自己夹紧）。 */
+    const sc = document.querySelector('main');
+    const top = sc ? sc.scrollTop : 0;
     renderAll();
+    if (sc && top) sc.scrollTop = top;
   }
 
   const depIndex = () => {
@@ -502,8 +508,11 @@
   async function reloadAfterJobs() {
     try {
       ST.units.loaded = false;
-      await loadAll();
-      renderPacks();
+      await loadAll();                 // 里面已经重画过列表（含 renderPacks）
+      const sc = document.querySelector('main');
+      const top = sc ? sc.scrollTop : 0;
+      renderPacks();                   // 再补一次：目录刚拉回来时列表还是空的
+      if (sc && top) sc.scrollTop = top;
     } catch (e) { /* 忽略 */ }
   }
 
@@ -832,11 +841,14 @@
       },
       // 入口横幅也是「公共素材」解包产物：没下过就不发图（否则「其他」一展开一片 404）。
       // 只用正数入口号：0=投票说明、-1=未归类（新剧情）没有游戏横幅，不显示。
+      // 还要按本机清单核这张具体在不在 —— 整层"下过"不代表每个入口都导出了。
       groupBanner: id => {
         if (!bannersReady()) return '';
         if (id.indexOf('etc_') === 0) {
           const no = +id.slice(4);
-          if (no > 0) return 'media/img/story/etc_' + no + '.webp';
+          if (no > 0 && ESC.media.has('story', 'etc_' + no) !== false) {
+            return 'media/img/story/etc_' + no + '.webp';
+          }
         }
         return '';   // 教程 / 开场 无横幅
       },
@@ -1392,9 +1404,18 @@
       b.onclick = () => api('jobs/' + b.dataset.cancel + '/cancel', { method: 'POST' })
         .then(() => toastMsg('已请求取消')).catch(e => toastMsg(e.message, true));
     });
-    // 有任务刚结束 → 重新拉状态（清单/依赖/安装都会改变列表）
-    const done = list.some(j => j.state === 'done' || j.state === 'failed');
-    if (done && !ST._refreshT) {
+    /* 有任务刚结束 → 重新拉状态（清单/依赖/安装都会改变列表）。
+       **每个任务只触发一次**：这里判断的是"列表里还有没有终态任务"，而已结束的
+       任务会在底部条上再停 15 秒（失败停 40 秒），所以以前只要有一条任务结束，
+       这 1.2 秒一次的轮询就会不停重拉 /api/state + 重画整个列表 ——
+       滚动条被反复顶回顶端、画面一闪一闪，整整闪 40 秒（2026-11-08 用户反馈
+       装剧情失败后页面一直在闪）。用任务 id 去重后，一次任务只刷一次。 */
+    ST._reloaded = ST._reloaded || {};
+    const ended = list.filter(j => (j.state === 'done' || j.state === 'failed')
+      && !ST._reloaded[j.id]);
+    if (ended.length && !ST._refreshT) {
+      ended.forEach(j => { ST._reloaded[j.id] = 1; });
+      if (Object.keys(ST._reloaded).length > 200) ST._reloaded = {};
       ST._refreshT = setTimeout(() => {
         ST._refreshT = null;
         reloadAfterJobs();

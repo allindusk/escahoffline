@@ -84,6 +84,66 @@ def overlay_path(kind: str, img_kind: str, key: str) -> str:
     return f"media/{'img_x2' if kind == 'x2' else 'img'}/{img_kind}/{key}"
 
 
+# ---------------------------------------------------------------- 本机媒体清单
+#: 前端据此决定"这张图要不要请求"。见 :func:`write_mediaindex`。
+MEDIA_INDEX = os.path.join(paths.DATA, "mediaindex.js")
+
+#: 清单只收两类：头像（角色侧栏 / CG 页）与剧情横幅（侧栏每行第一眼）。
+#: 立绘 / 背景 / CG 不在这里 —— 它们的路径由 imgmap.js 给出，且播放器已经
+#: 按"这段剧情装没装"判定过，不存在"整层有、单个没有"的问题。
+
+
+def _stems(sub: str, base: str | None = None) -> set[str]:
+    """``<base>/<sub>`` 下所有图片的**文件名主干**（不带扩展名）。"""
+    d = os.path.join(base or paths.IMG, sub)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return set()
+    out = set()
+    for n in names:
+        stem, ext = os.path.splitext(n)
+        if stem and ext.lower() in (".png", ".webp", ".jpg", ".jpeg", ".avif"):
+            out.add(stem)
+    return out
+
+
+def write_mediaindex() -> dict:
+    """把"本机磁盘上到底有哪些头像 / 剧情横幅"写成 ``data/mediaindex.js``。
+
+    为什么需要它（2026-11-06 用户反馈「更新到 1.1.0 又开始在启动 cmd 里报 404」）
+    ------------------------------------------------------------------
+    图不随程序分发，``media/`` 里有什么只有磁盘知道。而前端以前是靠**猜**的：
+
+      · ``avatarsReady()`` / ``bannersReady()`` 按"整层下载到 98% 就算齐"判定，
+        官方一上新角色（1.0.9 的 char_416），384/385 = 99.7% 仍然算齐，
+        于是对这个**唯一没有图**的角色照样发请求；
+      · 映射里查不到时还会硬拼 ``<id>.png/.webp/.jpg`` 三个扩展名逐个试，
+        等于一个角色白送 4 个必然失败的请求。
+
+    结果就是"用户什么都没点，启动后 cmd 窗口先刷一串 404"——他当然以为程序坏了。
+    打补丁（调阈值、加白名单）永远追不上官方上新，所以改成**把事实变成数据**：
+    每次启动 / 每导出完一张图就重扫这两个目录，前端只请求"清单里有的"。
+
+    只做两次 ``listdir``（几百个文件名），毫秒级，可以随便调。
+    """
+    # 头像要把**超分层**也算进来：用户做过「清理空间（删原图）」后只剩
+    # media/img_x2/avatar/*.webp，只扫原图目录会让侧栏头像全变首字色块。
+    avatars = _stems("avatar") | _stems("avatar", paths.IMG_X2)
+    data = {"avatar": sorted(avatars), "story": sorted(_stems("story"))}
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    try:
+        os.makedirs(paths.DATA, exist_ok=True)
+        tmp = MEDIA_INDEX + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("window.__MEDIA=" + body + ";\n")
+        os.replace(tmp, MEDIA_INDEX)
+    except OSError:
+        # 写不进去只是"前端退回老的猜测逻辑"（多几个 404），不该影响启动
+        return {"error": "无法写入 mediaindex.js"}
+    return {"avatar": len(data["avatar"]), "story": len(data["story"])}
+
+
 # ---------------------------------------------------------------- 解包
 def _safe_join(root: str, name: str) -> str | None:
     """防 zip 路径穿越。返回 None 表示非法条目。"""

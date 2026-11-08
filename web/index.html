@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1104c">
+<link rel="stylesheet" href="assets/css/player.css?v=1108a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
@@ -267,6 +267,12 @@
 <script src="data/charmeta.js"></script>
 <script src="data/index.js"></script>
 <script src="data/advindex.js"></script>
+<!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（server/media.py 在启动和每次
+     导出图片后重写）。前端只请求清单里有的图 —— 官方刚上新、素材还没装的角色
+     不会再对不存在的文件发请求（以前启动时 cmd 窗口会刷一片 404）。
+     缺这个文件只是退回"按约定拼路径"的老逻辑，不影响使用。 -->
+<script src="data/mediaindex.js?v=1106a"
+        onerror="window.__MEDIA=window.__MEDIA||null"></script>
 <!-- 数据映射表。必须带版本号：imgmap.js 由 gen_imgmap.py 在装完剧情后重新生成，
      不带版本号会被浏览器一直用旧缓存（表现为头像/立绘明明有了却找不到） -->
 <script src="data/imgmap.js?v=1029a"></script>
@@ -278,13 +284,13 @@
   <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
-<script src="assets/js/common.js?v=1103a"></script>
+<script src="assets/js/common.js?v=1106a"></script>
 <script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/i18n.js?v=1102a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1105a"></script>
-<script src="assets/js/player.js?v=1105c"></script>
+<script src="assets/js/player.js?v=1108a"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>

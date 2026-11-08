@@ -64,6 +64,8 @@
 #   imgmap.base.js         WebP 覆盖层
 #   sfxmap.js|json         音频映射（依赖本机导出的 m4a）
 #   stand_slot.json        立绘落点缓存
+#   mediaindex.js          本机媒体清单（server/media.py 每次启动按磁盘重写，
+#                          内容就是"这台机器上有哪些头像/剧情横幅"，纯本机状态）
 #   *.orig / *.bak         手工备份
 /web/data/*
 !/web/data/advindex.js
@@ -107,7 +109,4 @@ __pycache__/
 
 # 视频导出的渲染中间产物
 /tools/video/out/
-
-# 本机分析/逆向工作目录（体积几十 GB，绝不能进仓库）
-/_manifest_analysis/
 

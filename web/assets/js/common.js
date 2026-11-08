@@ -261,4 +261,42 @@
       try { return !!(screen.orientation && screen.orientation.lock); } catch (e) { return false; }
     },
   };
+
+  /* ------------------------------------------------------------ 本机媒体清单
+   * 头像和剧情横幅**不随程序分发**：用户 media/ 里到底有哪些图，只有磁盘知道。
+   *
+   * 以前前端全靠猜，两条路都会漏：
+   *   · avatarsReady()/bannersReady() 按"整层下载到 98% 就算齐"判定 ——
+   *     官方一上新角色（1.0.9 的 char_416），384/385 = 99.7% 仍然算齐，
+   *     于是对这个唯一没图的角色照样发请求；
+   *   · 映射里查不到时硬拼 <id>.png/.webp/.jpg 逐个试 —— 一个角色白送 4 个 404。
+   * 结果是用户什么都没点，启动后 cmd 窗口先刷一串 404，以为程序坏了
+   * （2026-11-06 反馈）。调阈值/加白名单永远追不上官方上新，所以改成
+   * **只请求磁盘上确实存在的图**：服务端每次启动/每导出一张图就重扫
+   * media/img/{avatar,story}，写成 data/mediaindex.js（server/media.py）。
+   *
+   *   ESC.media.has('avatar', 416) → true  磁盘上有，正常请求
+   *                                → false 确实没有，别发请求，画占位
+   *                                → null  清单不存在（纯静态托管/旧包），按老逻辑
+   */
+  const _mediaSets = {};
+  function mediaSet(kind) {
+    const M = window.__MEDIA;
+    if (!M || !Object.prototype.hasOwnProperty.call(M, kind)) return null;
+    let s = _mediaSets[kind];
+    if (!s) {
+      s = new Set((M[kind] || []).map(String));
+      _mediaSets[kind] = s;
+    }
+    return s;
+  }
+  ESC.media = {
+    /** 清单里有没有这个分类（没有就是"不知道"，调用方退回老逻辑） */
+    known: function (kind) { return mediaSet(kind) !== null; },
+    /** 'avatar' 传角色 id，'story' 传文件名主干（char_416 / main_1 / etc_5） */
+    has: function (kind, key) {
+      const s = mediaSet(kind);
+      return s ? s.has(String(key)) : null;
+    },
+  };
 })();

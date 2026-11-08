@@ -673,12 +673,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # API 走 _log_req（带耗时/状态码/请求体摘要），这里只管静态资源，
         # 否则每个 /api 请求会被记两遍。
-        if urllib.parse.urlparse(self.path).path.startswith("/api/"):
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/"):
             return
         try:
             code = int(str(args[1])) if len(args) > 1 else 0
         except (ValueError, IndexError):
             code = 0
+        # media/ 下的东西**不随程序分发**：用户没装那部剧情、官方刚上新的角色还
+        # 没装素材，缺图都是正常状态而不是程序故障。这类 404 以前按 WARN 记并且
+        # 原样写进启动的 cmd 窗口，用户一开就以为坏了（2026-11-06 反馈）。
+        # 现在只留一条 DEBUG（当天日志仍是全量，能查），不进 stderr。
+        # 前端也已经改成"先看 data/mediaindex.js，没有就不请求"，这里是最后兜底。
+        if code == 404 and path.startswith("/media/"):
+            try:
+                applog.debug("素材未安装（不影响使用）：" + (fmt % args),
+                             tag="http")
+            except Exception:                                    # noqa: BLE001
+                pass
+            return
         if code >= 400:
             try:
                 applog.warn("static " + (fmt % args), tag="http")
@@ -1587,6 +1600,15 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
                     _f.write(_body)
         except Exception:                                      # noqa: BLE001
             pass
+    # 本机媒体清单：每次启动按磁盘重扫头像/剧情横幅（两次 listdir，毫秒级）。
+    # 前端只请求清单里有的图 —— 纯净包刚启动、官方新角色还没装素材时，
+    # 那一行直接画首字色块，不再对不存在的图发请求刷 404。
+    try:
+        _mi = media.write_mediaindex()
+        applog.debug("本机媒体清单：头像 %s 张 / 剧情横幅 %s 张"
+                     % (_mi.get("avatar", 0), _mi.get("story", 0)), tag="boot")
+    except Exception:                                          # noqa: BLE001
+        pass
     handler = Handler
     try:
         httpd = _QuietServer((host, port), handler)

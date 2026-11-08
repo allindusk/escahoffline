@@ -850,9 +850,12 @@
 <script src="data/names.js"></script>
 <script src="data/charmeta.js"></script>
 <script src="data/advindex.js"></script>
-<script src="assets/js/common.js?v=1103a"></script>
+<!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（见 web/index.html 的说明） -->
+<script src="data/mediaindex.js?v=1106a"
+        onerror="window.__MEDIA=window.__MEDIA||null"></script>
+<script src="assets/js/common.js?v=1106a"></script>
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
-<script src="assets/js/storylist.js?v=1126a"></script>
+<script src="assets/js/storylist.js?v=1106a"></script>
 <script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1101a"></script>
@@ -863,7 +866,7 @@
 <!-- 容量 / 耗时的唯一来源（server/facts.py → api/facts）：必须比 setup.js 先加载，
      setup.js 里拼的提示文案直接用 FACT.t(...) -->
 <script src="assets/js/facts.js?v=1131a"></script>
-<script src="assets/js/setup.js?v=1139b"></script>
+<script src="assets/js/setup.js?v=1108a"></script>
 <script src="assets/js/mobile.js?v=1103a"></script>
 </body>
 </html>

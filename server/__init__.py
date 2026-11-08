@@ -16,7 +16,7 @@ api      HTTP 路由与静态站点服务
 
 #: 版本号兜底值 —— 正常路径永远读根目录的 ``VERSION`` 文件（见 ``paths.app_version()``），
 #: 这里只在 VERSION 文件丢了时才用得上，所以发版时顺手跟 VERSION 对齐一次，别让它掉队。
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 #: 数据结构（packs.json / state.json）变更时递增
 SCHEMA = 1

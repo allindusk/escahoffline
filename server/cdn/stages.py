@@ -1058,6 +1058,8 @@ def export_story_topics() -> dict:
     # 界面于是显示成"横幅已齐"，反而掩盖了没下全的事实。
     if produced and not missing_pkgs:
         _write_story_banner_inventory(produced)
+    if n_new:
+        regen_mediaindex()        # 新横幅落盘 → 前端立刻知道"这几张可以请求了"
     print(f"  剧情封面：新增 {n_new} 跳过 {n_skip} 应有 {len(produced)}")
     return {"new": n_new, "skip": n_skip, "total": len(produced),
             "missingPkgs": missing_pkgs}
@@ -1118,6 +1120,8 @@ def export_char_banners(only=None) -> dict:
                 n_fail += 1
         except Exception:                                   # noqa: BLE001
             n_fail += 1
+    if n_new:
+        regen_mediaindex()        # 新横幅落盘 → 前端立刻知道"这个角色有横幅了"
     print(f"  角色横幅：新增 {n_new} 跳过 {n_skip} 失败 {n_fail}")
     return {"new": n_new, "skip": n_skip, "fail": n_fail}
 
@@ -1166,6 +1170,7 @@ def export_avatar(cid, size: int = 96, force: bool = False,
                 im.resize((size * 2, size * 2), Image.LANCZOS).save(
                     os.path.join(x2dir, f"{cid}.webp"), "WEBP",
                     quality=92, method=4)
+            regen_mediaindex()    # 头像落盘 → 侧栏这一行从色块换成真头像
             return True
     except Exception as e:
         _log(f"    头像导出失败 {cid}: {e}")
@@ -1342,6 +1347,22 @@ def fill_missing_stands(keys, job=None) -> list[str]:
 def regen_imgmap() -> None:
     """委派旧脚本重生成 ``imgmap.js``（全量、幂等、只读磁盘，秒级）。"""
     run_script("gen_imgmap.py", quiet=True)
+
+
+def regen_mediaindex() -> None:
+    """刷新 ``data/mediaindex.js``（头像 / 剧情横幅的**本机真实清单**）。
+
+    每次导出完头像或横幅都要调一次：前端拿它决定"这张图要不要请求"。
+    以前靠 98% 阈值猜，官方一上新角色就对新角色刷 404（2026-11-06 反馈），
+    这里保证清单和磁盘同步 —— 装完这部剧，它的图马上就能显示。
+
+    失败只影响"会不会多一次 404"，绝不能拖累安装流程，所以异常一律吞掉。
+    """
+    try:
+        from .. import media
+        media.write_mediaindex()
+    except Exception:                                          # noqa: BLE001
+        pass
 
 
 def regen_sfxmap() -> int:

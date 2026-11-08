@@ -1532,7 +1532,7 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     # 剧本包是整条链路的地基：它没落盘，后面一律没意义。这里先看**文件在不在**，
     # 再决定要不要解析 —— 失败时用下载层记下的真实原因报错（见 _scenario_fail）。
     scen_name = _bname(scen)
-    scen_path = os.path.join(FILES_STORY, f"bundle_scenarioscript_char_{cid}")
+    scen_path = os.path.join(config.FILES_STORY, f"bundle_scenarioscript_char_{cid}")
     if not os.path.exists(scen_path):
         raise _scenario_fail(f"角色 {cid}", st0, scen_name)
 
@@ -1691,7 +1691,7 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
     st0 = stages.fetch(_entries(mf, [b]), workers, f"{key} 剧本", skip=True, pause_event=_pe(job), job=job)
     # 与角色剧情同一条判据：先看包里文件在不在，再用下载层的真实原因报错。
     scen_name = _bname(b)
-    scen_path = os.path.join(FILES_STORY, scen_name)
+    scen_path = os.path.join(config.FILES_STORY, scen_name)
     if not os.path.exists(scen_path):
         raise _scenario_fail(key, st0, scen_name)
     try:

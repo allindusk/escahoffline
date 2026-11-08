@@ -751,7 +751,9 @@ function showWindow(m) {
   const who = spkName(m);
   if (who) { n.textContent = who; n.classList.add('on'); }
   else n.classList.remove('on');
-  $('#msgText').classList.toggle('narr', !who);
+  const t = $('#msgText');
+  t.classList.remove('partNotice');      // 段间提示的样式只属于提示那一行
+  t.classList.toggle('narr', !who);
   return wait(winFadeMs(m));
 }
 function hideWindow(m) {
@@ -1331,7 +1333,10 @@ async function seekTo(midx, opt) {
     if (!resume) {
       // 暂停着点进度条：把那一句的文本贴上去，画面停在这儿等人点播放
       const m = ST.methods[midx];
-      if (m && m.Method === 'ShowMessage') $('#msgText').textContent = lineText(m);
+      if (m && m.Method === 'ShowMessage') {
+        $('#msgText').classList.remove('partNotice');
+        $('#msgText').textContent = lineText(m);
+      }
       seeking = false;
       return;
     }
@@ -1390,15 +1395,95 @@ async function continueLoop() {
   }
   // 已经被暂停/跳转/重播取代：直接退出，别和新循环抢指令、也别改按钮状态
   if (gen !== ST.run) return;
-  if (ST.running && ST.idx >= ST.methods.length) {
-    if (ST.auto && ST.part + 1 < S.data.parts.length) {
-      await wait(700);
-      // noResume：自动播下一段就是"接着往下看"，别又跳回下一段自己的旧进度
-      if (ST.running) playPart(ST.part + 1, { noResume: true });
-    } else {
-      ST.running = false; setPlayBtn(false);
-    }
+  if (ST.running && ST.idx >= ST.methods.length) await partBoundary(gen);
+}
+
+/* ================= 段间衔接 =================
+ * 一段播完后**画面保持不动**，只在台词框里贴一行提示：
+ *   第 N 段播放完毕 · 3 秒后自动播放第 N+1 段
+ * 3 秒是真实时间（不乘倍速）；按暂停 / 切段 / 点「下一句」都会立即打断。
+ * 三种情况只提示、不自动续播：
+ *   1. 角色剧情播完**倒数第二段**（最后一段不自动进，要玩家手动切）；
+ *   2. 控制条的「自动」被关掉；
+ *   3. 已经是最后一段。 */
+const PART_GAP_MS = 3000;
+
+/** 固定时长停留（不受倍速影响），可被 skipAll（暂停/跳转/快进）立刻打断。
+ *  返回 true = 等满了；false = 被打断（调用方就此收手，别再往下播）。 */
+function gapWait(ms) {
+  return new Promise(res => {
+    let done = false;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+      ST.skips = ST.skips.filter(f => f !== cancel);
+      res(ok);
+    };
+    const cancel = () => finish(false);
+    const t = setTimeout(() => finish(true), Math.max(0, ms));
+    ST.skips.push(cancel);
+  });
+}
+
+/** 把提示写进对话框：不动背景/立绘、不动进度、也不进右侧文本列表。
+ *  玩家把对话框关掉了（控制条「对话框」按钮）就退化成顶部 toast，绝不强行弹框。 */
+function showPartNotice(text) {
+  const w = $('#msgWindow'), t = $('#msgText'), n = $('#msgName');
+  if (!w || !t) return;
+  if (!SET.showWin) { toast(text); return; }
+  w.classList.add('on');
+  if (n) { n.textContent = ''; n.classList.remove('on'); }
+  t.classList.remove('narr');
+  t.classList.add('partNotice');
+  t.textContent = text;
+}
+
+/** 段尾该显示的提示文案（自动续播时带剩余秒数）。切换语言时也用它重画。 */
+function partNoticeText(secs) {
+  const total = (S.data && S.data.parts) ? S.data.parts.length : 1;
+  const cur = ST.part;                 // 刚播完的段（0 基）
+  const n = cur + 1;                   // 界面口径（1 基）
+  if (n >= total) {
+    return L10N.t('part.endLast', `第 ${n} 段播放完毕 · 已是最后一段`, { n });
   }
+  const nextNo = n + 1;
+  // 角色剧情：最后一段不自动进，停在倒数第二段播完处
+  if (isCharKey(S.key) && cur === total - 2) {
+    return L10N.t('part.endHold',
+      `第 ${n} 段播放完毕 · 已暂停，要播放第 ${nextNo} 段请手动切换`, { n, m: nextNo });
+  }
+  if (!ST.auto) {
+    return L10N.t('part.endNoAuto',
+      `第 ${n} 段播放完毕 · 「自动」已关闭，要播放第 ${nextNo} 段请手动切换`,
+      { n, m: nextNo });
+  }
+  const s = secs == null ? Math.round(PART_GAP_MS / 1000) : secs;
+  return L10N.t('part.endAuto',
+    `第 ${n} 段播放完毕 · ${s} 秒后自动播放第 ${nextNo} 段`, { n, s, m: nextNo });
+}
+
+/** 一段播完的收尾：提示 + 决定续播还是停下。gen 用来确认这期间没被暂停/切段。 */
+async function partBoundary(gen) {
+  const total = (S.data && S.data.parts) ? S.data.parts.length : 1;
+  const cur = ST.part;
+  const willPlay = cur + 1 < total && ST.auto
+    && !(isCharKey(S.key) && cur === total - 2);
+  if (!willPlay) {
+    showPartNotice(partNoticeText());
+    ST.running = false; setPlayBtn(false);
+    return;
+  }
+  const next = cur + 1;
+  for (let s = Math.round(PART_GAP_MS / 1000); s >= 1; s--) {
+    showPartNotice(partNoticeText(s));
+    const ok = await gapWait(1000);
+    if (gen !== ST.run || !ST.running) return;      // 被暂停/切段接管
+    // 按住 K 快进时不等：直接把下一段接上，别把快进卡在段界上
+    if (!ok) { if (ST.rush) playPart(next, { noResume: true }); return; }
+  }
+  // noResume：自动播下一段就是"接着往下看"，别又跳回下一段自己的旧进度
+  playPart(next, { noResume: true });
 }
 
 /* opt.keepVisual：跳转重建时保留背景/CG（见 seekTo），避免黑屏闪烁 */
@@ -1426,6 +1511,10 @@ function resetStage(opt) {
   $('#placeLayer').style.opacity = 0;
   $('#msgWindow').classList.remove('on');
   $('#msgText').style.fontSize = '';
+  /* 段间提示（「第 N 段播放完毕…」）不是台词：切段时连文字一起清掉，
+     否则下一段 ShowMessageWindow 把框打开的一瞬间会闪一下上一段的提示。 */
+  const mtEl = $('#msgText');
+  if (mtEl.classList.contains('partNotice')) { mtEl.textContent = ''; mtEl.classList.remove('partNotice'); }
   setDrawMode('');
   ST.stands.clear();
   ST.pendingAll.length = 0;
@@ -2412,13 +2501,19 @@ function renderSidebar(filter = '') {
       (st === 'soft-missing' ? '\n公共素材未下载：可播放但可能缺背景/音乐' : '');
     /* 图片要不要请求，必须"能确定磁盘上有图"才发 —— 横幅和头像都不随程序分发，
        全新环境里 384 行一次会打出 5000 多个 404，把启动窗口刷成一片红。
-       判定口径与 CG 页一致：该角色剧情已装（装的时候会导出它自己的横幅/头像），
-       或者整层素材（头像 / 横幅）已经下过。没图就画首字色块占位。 */
+       两道关，缺一不可：
+         ① 整层素材下过没有（这一层太粗：384/385 = 99.7% 仍算"齐"，
+            官方刚上新的那个角色照样会被发请求）；
+         ② 本机清单里到底有没有这张图（data/mediaindex.js，见 ESC.media）——
+            没有就画首字色块占位，一个请求都不发。 */
     const L = imgLayer();
     const inst = st === 'ready' || st === 'soft-missing';
     const avatarsOK = inst || L.avatars;
     const bannersOK = inst || L.banners;
-    const haveImg = avatarsOK || bannersOK;
+    const bnrSrc = bannersOK ? bannerOfChar(c.id) : '';
+    const avSrcs = avatarsOK ? avatarCands(c.id) : [];
+    const imgChain = (bnrSrc ? [imgSrc(bnrSrc)] : []).concat(avSrcs);
+    const haveImg = imgChain.length > 0;
     // 侧栏一项 = 横幅（占一行）+ 标题/信息（占一行）
     d.className += ' bnr';
     d.innerHTML =
@@ -2436,19 +2531,14 @@ function renderSidebar(filter = '') {
       // 收藏星放在最右边：每行位置一致，鼠标只需要上下移动
       favHTML('char_' + c.id) + `</span>`;
     // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）
-    if (haveImg) {
-      const chain = [];
-      if (bannersOK) chain.push(imgSrc(bannerOfChar(c.id)));
-      if (avatarsOK) chain.push(...avatarCands(c.id));
-      applyChain(d.querySelector('img'), chain);
-    }
+    if (haveImg) applyChain(d.querySelector('img'), imgChain);
     bindTip(d, () => {
       const parts = c.parts || 0;
       const tr = (typeof transStatsOf === 'function') ? '' : '';
       const rec = UD && UD.prog('char_' + c.id);
       // 浮窗里的缩略图同样只在"确定有图"时才请求（鼠标扫过侧栏就会触发）
-      return (bannersOK
-        ? `<img src="${esc(imgSrc(bannerOfChar(c.id)))}" alt="" `
+      return (bnrSrc
+        ? `<img src="${esc(imgSrc(bnrSrc))}" alt="" `
           + `onerror="this.style.display='none'">`
         : '')
         + `<div style="font-weight:600;margin-bottom:4px">${esc(nm)}</div>`
@@ -2476,10 +2566,26 @@ function renderSidebar(filter = '') {
     主线/活动：advindex 里的 cover（章节标题横幅）
     其他：没有横幅 → 返回空串，列表退回纯文字行 */
 function bannerOfChar(id) {
+  // 本机清单说这张横幅不存在（官方刚上新的角色、素材还没装）→ 返回空串，
+  // 调用方据此画首字色块而不发请求。以前这里无条件拼路径，于是纯净包一启动
+  // 就对 char_416 刷 404（2026-11-06 反馈）。
+  if (ESC.media.has('story', 'char_' + id) === false) return '';
   return `media/img/story/char_${id}.webp`;
 }
 function bannerOfAdv(a) {
   return (a && a.cover) || '';
+}
+
+/** media/img/story/<stem>.<ext> 这张横幅在本机磁盘上到底有没有。
+ *
+ *  advindex 里的 cover 是**按清单推算**的路径（sync_advindex 按约定拼），
+ *  官方刚上的新章节、或用户还没补公共素材时，路径算得出来、文件却没有 ——
+ *  直接挂 src 就是一次必然失败的请求。清单不可用（null）时一律当"有"，
+ *  退回老行为，不会因为缺少 mediaindex.js 就把横幅全关了。
+ */
+function storyImgOk(path) {
+  const m = /^media\/img\/story\/([^./]+)\./.exec(path || '');
+  return !m || ESC.media.has('story', m[1]) !== false;
 }
 
 /** 悬停浮窗：整个侧栏共用一个，鼠标移开就隐藏（不抢点击，pointer-events:none） */
@@ -2520,8 +2626,19 @@ function bindTip(el, htmlFn) {
 /* 兜底：触摸任何位置都收起浮窗（触屏笔记本这类混合设备上仍可能残留） */
 document.addEventListener('touchstart', tipHide, { passive: true });
 
-/** 头像候选链（imgmap 没有 avatar 段，直接按命名拼） */
+/** 头像候选链。
+ *
+ * 映射（imgmap.avatar / x2 / base）里已经有**真实路径**时直接用，不用猜；
+ * 一条都没有才按命名兜底试扩展名 —— 而且必须先问本机清单（ESC.media）：
+ * 清单说"没有这个角色头像"就一个候选都不给，调用方画首字色块。
+ * 以前不看清单盲试 .png/.webp/.jpg，官方每上一个新角色就白送 3 个 404。
+ */
 function avatarCands(id) {
+  // 本机清单说没有这张头像（官方刚上新、素材还没装）→ 一个候选都不给，
+  // 调用方画首字色块。**以清单为准而不是以映射为准**：imgmap.js 是出厂包里
+  // 那份，可能比本机磁盘"新"（换过机器、清理过空间）—— 那时映射里写着有、
+  // 磁盘上其实没有，请求出去就是 404。
+  if (ESC.media.has('avatar', id) === false) return [];
   const out = [];
   const push = p => { if (p && out.indexOf(p) < 0) out.push(p); };
   if (SET.useX2 !== false) push((IMGX2.avatar || {})[id]);
@@ -2531,9 +2648,11 @@ function avatarCands(id) {
   // 于是全新环境里 378 个头像全部 404、侧栏头像整片空白。
   // 导出的是 **.png**，所以硬编码兜底时先试 png 再试 webp：
   // 顺序反了会让每个角色都先吃一个 404 才回退。
-  push(`media/img/avatar/${id}.png`);
-  push(`media/img/avatar/${id}.webp`);
-  push(`media/img/avatar/${id}.jpg`);
+  if (!out.length) {
+    push(`media/img/avatar/${id}.png`);
+    push(`media/img/avatar/${id}.webp`);
+    push(`media/img/avatar/${id}.jpg`);
+  }
   // **不再硬拼 media/img_x2/avatar/**：超分层是本机可选产物，只有 imgmap.x2.js
   // 登记过的才算数（上面 IMGX2.avatar 那一条已经覆盖）。硬拼路径等于给每个角色
   // 白送两个 404 —— 没跑过超分的人永远没有这个文件。
@@ -2604,7 +2723,9 @@ function renderOtherGroups(box, filter = '', opt = {}) {
     const shortName = g.name.replace(/^RAID BOSS\s*/, '').replace(/^広域戦\s*/, '広域 ');
     // 入口横幅也是解包产物：没下过公共素材就别请求（否则「其他」一展开就一片 404）。
     // 只用正数入口号：0=投票说明、-1=未归类（新剧情），这两个没有游戏横幅。
-    const hasBnr = g.no > 0 && imgLayer().banners;
+    // 再按本机清单核一遍这张具体在不在 —— 整层"下过"不代表每个入口都导出了。
+    const hasBnr = g.no > 0 && imgLayer().banners
+      && ESC.media.has('story', 'etc_' + g.no) !== false;
     // 两行：第一行横幅（280×81 画框，跟主线/活动行同一套），第二行名字 + 话数 + 箭头
     head.innerHTML =
       (hasBnr ? `<span class="bnr"><img alt="" loading="lazy"`
@@ -2837,10 +2958,11 @@ function advItem(a) {
   d.dataset.key = a.key;                 // refreshSelection() 靠它判断选中
   d.dataset.id = a.key;
   if (startPart !== null) d.dataset.part = startPart;
-  /* 章节横幅同样是解包产物（bundle_image_story_*），没下过就别请求 */
+  /* 章节横幅同样是解包产物（bundle_image_story_*），没下过就别请求；
+     下过了也要再按本机清单核一遍这张具体在不在（新章节刚上时最容易缺）。 */
   const L = imgLayer();
   const cover = (L.banners || st === 'ready' || st === 'soft-missing')
-    ? bannerOfAdv(a) : '';
+    ? (storyImgOk(bannerOfAdv(a)) ? bannerOfAdv(a) : '') : '';
   /* 云端新上、还没接入目录的条目（a.cloud）只有两种状态：
      · missing      → 官方发了包、本地没装；
      · 装了但 0 段 0 句 → 官方先放了**空占位包**（正文还没上），
@@ -3148,9 +3270,10 @@ function fitTabs(scrollToActive) {
     角色剧情没有文字横幅，用游戏「角色剧情」入口那张角色图（episode_character_<cid>，
     由 cdn/stages.export_char_banners() 落到 img/story/char_<cid>.webp）。 */
 function bannerOf(key) {
-  if (isCharKey(key)) return 'media/img/story/char_' + String(key).slice(5) + '.webp';
-  const adv = advByKey(key);
-  return (adv && adv.cover) || '';
+  const p = isCharKey(key)
+    ? 'media/img/story/char_' + String(key).slice(5) + '.webp'
+    : ((advByKey(key) || {}).cover || '');
+  return storyImgOk(p) ? p : '';
 }
 
 /** 标题区：横幅 + 剧名。只显示当前这一张，切换剧情时才换 src。 */
@@ -3230,7 +3353,9 @@ function refreshForLang() {
   if (ST.curMsgIdx != null && ST.methods[ST.curMsgIdx]) {
     // 正在播：整句重放（连带语音）；暂停中：直接把画面上的文字换掉
     if (ST.running) seekTo(ST.curMsgIdx);
-    else $('#msgText').textContent = lineText(ST.methods[ST.curMsgIdx]);
+    else if ($('#msgText').classList.contains('partNotice')) {
+      showPartNotice(partNoticeText());     // 停在段界上：提示本身按新语言重画
+    } else $('#msgText').textContent = lineText(ST.methods[ST.curMsgIdx]);
   }
 }
 

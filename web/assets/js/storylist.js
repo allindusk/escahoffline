@@ -94,6 +94,25 @@ window.SL = (() => {
     return (r === 'SSR' || r === 'SR' || r === 'R') ? r : '';
   }
 
+  /* ---------------- 剧情横幅路径
+   * 路径按约定拼得出来，但**文件名算得出来 ≠ 磁盘上有**：官方刚上的新角色 /
+   * 新章节、用户还没装公共素材，都会拼出一条不存在的路径，直接挂 <img src>
+   * 就是一次必然失败的 404（2026-11-06 用户反馈的「启动就报 404」）。
+   * 所以统一先问本机清单 data/mediaindex.js（见 assets/js/common.js: ESC.media）：
+   * 清单说没有 → 返回空串，行里不挂图，只显示文字（列表照样对齐）。
+   * 清单不可用（null，纯静态托管/旧包）→ 照旧拼，退回老行为。 */
+  function bnrHas(stem) {
+    return !(window.ESC && ESC.media && ESC.media.has('story', stem) === false);
+  }
+  function bnrPath(stem) {
+    return stem && bnrHas(stem) ? 'media/img/story/' + stem + '.webp' : '';
+  }
+  function bnrKeep(path) {
+    const m = /^media\/img\/story\/([^./]+)\./.exec(path || '');
+    if (!m) return path || '';
+    return bnrHas(m[1]) ? path : '';
+  }
+
   /** 一行要显示的信息。名字取不到时用「ID 415」而不是「角色 415」：
    *  前者是事实（游戏内部编号），后者会被读成"第 415 个角色"。
    *  item 既可以是 key 字符串，也可以是 advindex 的别名条目（一个包挂了多条
@@ -108,7 +127,7 @@ window.SL = (() => {
         name: nm || ('ID ' + id),
         rar: (m.r === 'SSR' || m.r === 'SR' || m.r === 'R') ? m.r : '',
         date: m.d || '',
-        cover: 'media/img/story/char_' + id + '.webp',
+        cover: bnrPath('char_' + id),
         adv: false, parts: 0, lines: 0,
         order: '',
       };
@@ -126,7 +145,7 @@ window.SL = (() => {
     if (a) {
       return {
         name: (alias && a.title) ? a.title : ESC.storyTitle(key),
-        rar: '', date: '', cover: a.cover || '', adv: true,
+        rar: '', date: '', cover: bnrKeep(a.cover || ''), adv: true,
         parts: a.parts || 0, lines: a.lines || 0,
         order: String((a.order == null ? 999 : a.order)).padStart(4, '0'),
       };
@@ -145,7 +164,7 @@ window.SL = (() => {
     return {
       name: ESC.storyTitle(key),
       rar: '', date: '',
-      cover: canBnr ? 'media/img/story/' + kind2 + '_' + no2 + '.webp' : '',
+      cover: canBnr ? bnrPath(kind2 + '_' + no2) : '',
       adv: true, parts: 0, lines: 0,
       order: (kind2 === 'main' && no2 !== null ? String(no2) : '9999').padStart(4, '0'),
     };

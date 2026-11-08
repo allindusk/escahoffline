@@ -104,6 +104,10 @@ function cgCands(f) {
 const AVC = '1101';
 
 function avatarCands(id) {
+  // 本机清单说没有（官方刚上新、素材还没装）→ 一个候选都不给，调用方画首字
+  // 色块。以清单为准而不是以映射为准：imgmap.js 是出厂包那份，可能比本机
+  // 磁盘"新"（换机器、清理过空间），映射里有、磁盘上没有的请求必 404。
+  if (ESC.media.has('avatar', id) === false) return [];
   const out = [];
   const push = p => { if (p && out.indexOf(p) < 0) out.push(p); };
   push((IMGX2.avatar || {})[id]);
@@ -111,10 +115,12 @@ function avatarCands(id) {
   push((IMGMAP.avatar || {})[id]);
   // 头像导出的是 **.png**（原图格式），不是 .webp。
   // 只写 .webp 的话，全新环境里所有头像 404、侧栏一片空白。
-  // 导出的是 **.png**，先试 png 再试 webp（顺序反了会先吃一个 404 才回退）
-  push('media/img/avatar/' + id + '.png?v=' + AVC);
-  push('media/img/avatar/' + id + '.webp?v=' + AVC);
-  push('media/img/avatar/' + id + '.jpg?v=' + AVC);
+  // 导出的是 **.png**，先试 png 再试 webp（顺序反了会先吃一个 404 才回退）。
+  if (!out.length) {
+    push('media/img/avatar/' + id + '.png?v=' + AVC);
+    push('media/img/avatar/' + id + '.webp?v=' + AVC);
+    push('media/img/avatar/' + id + '.jpg?v=' + AVC);
+  }
   // 超分头像不再硬拼路径，见上面 IMGX2.avatar（没跑过超分的人永远是 404）
   return out;
 }
@@ -330,8 +336,11 @@ function renderCharList(box) {
     const dTxt = (c.d && sortBy.startsWith('date')) ? ' · ' + c.d : '';
     // 头像看**头像素材**是否已下载（公共素材里 378 张），不能只看剧情装没装；
     // 否则只装少数角色时其余全变首字色块，像是"头像没加载"。
-    const have = dlHave(c.id)
-      || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady());
+    // 但"整层下过"不等于"这个角色有图"：官方刚上新时 384/385 仍算齐，
+    // 所以还要求候选链非空 —— 本机清单里确实有这张（见 ESC.media）。
+    const cands = avatarCands(c.id);
+    const have = cands.length > 0 && (dlHave(c.id)
+      || (window.PACKSTATE && PACKSTATE.avatarsReady && PACKSTATE.avatarsReady()));
     d.innerHTML =
       (have
         ? `<img alt="" loading="lazy">`
@@ -339,7 +348,7 @@ function renderCharList(box) {
       `<span class="info"><span class="nm">${c.name}</span>` +
       `<span class="sub">${c.zh ? c.zh + ' · ' : ''}${c.t ? c.t + ' · ' : ''}${c.groups.length} 组 / ${c.total} 张${dTxt}</span></span>`;
     // 必须走候选链：头像实际是 .png，只写死一个 src 会 404 且不会回退
-    if (have) setChain(d.querySelector('img'), avatarCands(c.id));
+    if (have) setChain(d.querySelector('img'), cands);
     d.onclick = () => { curChar = c.id; renderChars(); renderGrid(); };
     box.appendChild(d);
   }
