@@ -54,6 +54,7 @@ const ST = {
   typeRate: 1,           // 打字速度倍率（越大越快）
   allLines: [], lineMap: {}, curLine: -1, linePage: 0,
   curName: '', fastForward: false, curMsgIdx: null,
+  timeIdx: null,         // 每句开头的估算时间点（Float64Array，见 buildTimeIndex）
   typing: false,         // 打字机是否正在输出（决定「下一句」先补全还是翻页）
   rush: false,           // 按住 Ctrl 的快进状态
   run: 0,                // 播放循环代号：暂停/跳转/重播时自增，用来作废旧循环
@@ -191,6 +192,8 @@ function showFsChrome() {
     const e = document.getElementById('fsExit');
     if (c) c.classList.remove('show');
     if (e) e.classList.remove('show');
+    // 控制条淡出了，气泡不能还悬在画面上（拖动中的除外，那是手指/鼠标正在上面）
+    if (!seekDrag.on) hideSeekTip();
     w.classList.add('hidecur');
   }, 2600);
 }
@@ -204,13 +207,21 @@ function _fsMoveControls(on) {
   const wrap = document.getElementById('stageWrap');
   const ctl = document.getElementById('controls');
   if (!wrap || !ctl) return;
+  /* 进度条气泡也必须跟着进全屏子树：原生全屏只渲染 #stageWrap 本身，
+     留在 main 里的 fixed 元素（哪怕 z-index 再高）根本不参与绘制 ——
+     那样全屏时拖进度条就"没有句号和位置提示"，和非全屏对不上。 */
+  const tip = document.getElementById('seekTip');
   if (on) {
     if (!_ctlHome) _ctlHome = { parent: ctl.parentNode, next: ctl.nextSibling };
     if (ctl.parentNode !== wrap) wrap.appendChild(ctl);
+    if (tip && tip.parentNode !== wrap) wrap.appendChild(tip);
     ctl.classList.add('in-fs');
   } else {
     ctl.classList.remove('in-fs');
     ctl.classList.remove('show');
+    if (tip && _ctlHome && tip.parentNode !== _ctlHome.parent) {
+      _ctlHome.parent.appendChild(tip);      // fixed 定位，放回父节点哪个位置都不影响布局
+    }
     if (_ctlHome && ctl.parentNode !== _ctlHome.parent) {
       // 记住的后继兄弟可能已被移除，退回 appendChild
       if (_ctlHome.next && _ctlHome.next.parentNode === _ctlHome.parent) {
@@ -298,6 +309,11 @@ function setLayerImage(kind, sel, id, fade) {
   if (st.key === key && st.el && st.el.parentNode === L) {
     // 同一张图：不清层、不重建、不淡入（filter 由随后的颜色乘算指令重新施加）
     st.el.style.filter = '';
+    /* 镜头状态也要归零：ZoomInEventCG / StareEventCG 是往这张 img 上写的内联 transform，
+       再次 ShowEventCg 同一张图时会复用同一个 <img>，不清就会带着上一幕的放大/偏移，
+       看起来像"画面被挤到角落且回不来"。 */
+    st.el.style.transform = '';
+    st.el.style.transformOrigin = '';
     if (instant) L.querySelectorAll('img').forEach(o => { if (o !== st.el) o.remove(); });
     return instant ? Promise.resolve() : wait(fade * 1000);
   }
@@ -379,6 +395,38 @@ function setCg(id, fade) {
 
 /** 当前台上的 CG：交叉淡入期间 #cgLayer 里可能同时有新/旧两张，取状态里记的那张 */
 function cgImg() { return VIS.cg.el || $('#cgLayer').querySelector('img'); }
+
+/* ================= CG 镜头（推近 / 复位） =================
+ * 这套指令在脚本里是**成对**的，不是独立特效：
+ *   · `ZoomInEventCG{Rate:1.01~1.6}` 推近，随后再发一条 `ZoomInEventCG{Rate:1}` 拉回原样
+ *     （全站 524 条里 Rate=1 的 205 条基本都扮演"复位"）；
+ *   · `StareEventCG` 慢推 1.12（6 秒），`EndStareEventCG` 拉回（829/825 条，成对）；
+ *   · `FastZoomInEventCG` 是"砸进去"的冲击镜头：**全站 45 条都带 EventImage**，
+ *     语义是"先切到这张 CG，再放大到 Rate"，后面常紧跟 `Shake` 震屏。
+ *     （旧实现完全忽略 EventImage，这 45 处演出都少了一次切图。）
+ * `PosX/PosY` 是**放大中心**（1280×720 舞台坐标），不是位移量。 */
+function camOrigin(m) {
+  return `${num(m.PosX, 640) / 1280 * 100}% ${num(m.PosY, 360) / 720 * 100}%`;
+}
+/** instant=true 用于跳转重放：不演过渡、不等待，直接落到最终状态 */
+async function zoomCg(m, instant) {
+  if (m.EventImage) await setCg(m.EventImage, 0);   // FastZoom：先换图（瞬时，原作就是砸进来）
+  const img = cgImg();
+  if (!img) return;
+  img.style.transformOrigin = camOrigin(m);
+  img.style.transition = instant ? 'none' : `transform ${num(m.Time, 1)}s ease`;
+  img.style.transform = `scale(${num(m.Rate, 1.3)})`;
+  if (num(m.Blur, 0) > 0) img.style.filter = `blur(${num(m.Blur, 0)}px)`;
+  if (!instant) await wait(num(m.Time, 1) * 1000);
+}
+async function stareCg(m, instant) {
+  const img = cgImg();
+  if (!img) return;
+  const back = m.Method === 'EndStareEventCG';
+  img.style.transformOrigin = '50% 50%';            // 凝视不带焦点参数，永远以画面正中推
+  img.style.transition = instant ? 'none' : (back ? 'transform .5s' : 'transform 6s ease-out');
+  img.style.transform = `scale(${back ? 1 : 1.12})`;
+}
 
 /* ================= 立绘 ================= */
 const POS_X = { Left: '23%', Center: '50%', Right: '77%', All: '50%' };
@@ -915,27 +963,10 @@ function runOne(m, midx, isSeek) {
     case 'MulStand': mulStand(m); return;
     case 'ShowEventCg': P(setCg(m.EventImage, num(m.Time, .5))); return;
     case 'HideEventCg': P(setCg('', num(m.Time, .3))); return;
-    case 'StareEventCG': {
-      const img = cgImg();
-      if (img) { img.style.transition = 'transform 6s ease-out'; img.style.transform = 'scale(1.12)'; }
-      return;
-    }
-    case 'EndStareEventCG': {
-      const img = cgImg();
-      if (img) { img.style.transition = 'transform .5s'; img.style.transform = 'scale(1)'; }
-      return;
-    }
+    case 'StareEventCG': P(stareCg(m, false)); return;
+    case 'EndStareEventCG': P(stareCg(m, false)); return;
     case 'ZoomInEventCG':
-    case 'FastZoomInEventCG': {
-      const img = cgImg();
-      if (img) {
-        img.style.transition = `transform ${num(m.Time, 1)}s ease`;
-        img.style.transform = `scale(${num(m.Rate, 1.3)}) translate(${num(m.PosX, 0)}px,${num(m.PosY, 0)}px)`;
-        if (num(m.Blur, 0) > 0) img.style.filter = `blur(${num(m.Blur, 0)}px)`;
-        P(wait(num(m.Time, 1) * 1000));
-      }
-      return;
-    }
+    case 'FastZoomInEventCG': P(zoomCg(m, false)); return;
     /* --- 文字 --- */
     case 'ShowMessageWindow':
       // VoiceMark: ○ 有配音 / ● 无配音（主角）
@@ -1097,7 +1128,40 @@ function buildLineIndex() {
   out.forEach((l, i) => { ST.lineMap[l.midx] = i; });
   ST.linePage = 0;
   ST.curLine = -1;
+  buildTimeIndex();
   renderLineList();
+}
+
+/* ---- 时间轴（只给进度条气泡用）----
+ * 逐句演出**没有客观时长**：打字机速度、语音长短、玩家点快慢都在变，所以这里不统计
+ * 墙钟时间，而是按台本量静态推算一条时间轴 —— 用来回答"这段大概多长、我现在大概在
+ * 几分几秒"，跟视频进度条语义一致。基础停留 0.4s + 每字 0.07s + 带语音的句子多给 1.6s。 */
+const SEC_BASE = 0.4, SEC_PER_CHAR = 0.07, SEC_VOICE = 1.6;
+function buildTimeIndex() {
+  const lines = ST.allLines || [];
+  const acc = new Float64Array(lines.length + 1);   // acc[i] = 第 i+1 句开始时的累计秒
+  let t = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const midx = lines[i].midx;
+    const prev = ST.methods[midx - 1];
+    const voice = !!(prev && prev.Method === 'VOICE' && prev.Voice);
+    const n = String(lines[i].text || '').replace(/\s+/g, '').length;
+    t += SEC_BASE + n * SEC_PER_CHAR + (voice ? SEC_VOICE : 0);
+    acc[i + 1] = t;
+  }
+  ST.timeIdx = acc;
+}
+/** 第 no 句（1 基）开始时的估算毫秒；no=0 → 0 */
+function timeAtLine(no) {
+  const a = ST.timeIdx;
+  if (!a || a.length < 2) return 0;
+  const i = Math.max(0, Math.min(a.length - 1, no | 0));
+  return a[i] * 1000;
+}
+/** 本段估算总时长（毫秒） */
+function partTimeMs() {
+  const a = ST.timeIdx;
+  return a && a.length ? a[a.length - 1] * 1000 : 0;
 }
 
 function renderLineList() {
@@ -1165,12 +1229,17 @@ function focusLine(gi) {
 }
 
 /* ---- 跳转：只重放「画面状态」类指令，不碰文字与音频 ---- */
+/* 镜头指令也必须重放：otherwise「上一句」回到的还是当前这一句的缩放状态，
+   玩家想对比前后两句的画面就看不出差别（2026-11-08 用户反馈）。 */
+const CAM_REPLAY = new Set(['ZoomInEventCG', 'FastZoomInEventCG',
+  'StareEventCG', 'EndStareEventCG']);
 const REPLAY = new Set([
   'ShowBackground', 'HideBackground', 'ShowDoubleBackground',
   'ShowDoubleBackgroundOffset', 'MulColorBackground',
   'ShowStand', 'ShowStandAndSit', 'HideStand', 'MoveStand', 'MulStand',
   'ShowEventCg', 'HideEventCg',
   'SetDrawModeSepia', 'SetDrawModeGrayscale', 'SetDrawModeDefault',
+  ...CAM_REPLAY,
 ]);
 /* 背景/CG 这两类只重放「最后一条」：中间的先 Show 再 Hide 再 Show 会互相抵消，
    逐条重放等于把同一张图拆了建好几次，每一次都可能有一帧没有图（闪黑）。 */
@@ -1215,6 +1284,11 @@ function replayOne(m) {
     case 'MulStand': mulStand(m); break;
     case 'ShowEventCg': setCg(m.EventImage, 0.01); break;
     case 'HideEventCg': setCg(''); break;
+    /* 镜头：跳转重放要**瞬时**落到该句应有的状态（不演 6 秒推镜、不等待） */
+    case 'ZoomInEventCG':
+    case 'FastZoomInEventCG': zoomCg(m, true); break;
+    case 'StareEventCG':
+    case 'EndStareEventCG': stareCg(m, true); break;
     case 'SetDrawModeSepia': setDrawMode('sepia'); break;
     case 'SetDrawModeGrayscale': setDrawMode('gray'); break;
     case 'SetDrawModeDefault': setDrawMode(''); break;
@@ -1276,7 +1350,7 @@ async function seekTo(midx, opt) {
     /* 背景/CG 只重放最终状态：中间的先 Show 再 Hide 再 Show 会互相抵消，
        逐条重放等于把同一张图拆了建好几次，每次都可能有一帧没图（闪黑）。
        MulColorBackground 是给当前背景上色的，只补在最后一条背景指令之后。 */
-    let lastBg = null, lastCg = null;
+    let lastBg = null, lastCg = null, lastCam = null;
     const muls = [];
     for (let i = 0; i < midx; i++) {
       const m = ST.methods[i];
@@ -1284,6 +1358,7 @@ async function seekTo(midx, opt) {
       const M = m.Method;
       if (BG_REPLAY.has(M)) { lastBg = { i, m }; continue; }
       if (CG_REPLAY.has(M)) { lastCg = { i, m }; continue; }
+      if (CAM_REPLAY.has(M)) { lastCam = { i, m }; continue; }
       if (M === 'MulColorBackground') { muls.push({ i, m }); continue; }
       try { replayOne(m); } catch (e) { }
     }
@@ -1293,6 +1368,12 @@ async function seekTo(midx, opt) {
       try { mulColorBg(x.m); } catch (e) { }
     }
     if (lastCg) { try { replayOne(lastCg.m); } catch (e) { } }
+    /* 镜头最后应用：它写的是台上那张 <img> 的内联 transform，得等 CG 定下来才有效。
+       镜头指令是绝对赋值（scale 覆盖，不是叠加），所以只取最后一条就是该句的最终画面；
+       落在最后一条 CG 指令之前说明那张图早被换掉，忽略。 */
+    if (lastCam && lastCam.i > (lastCg ? lastCg.i : -1)) {
+      try { replayOne(lastCam.m); } catch (e) { }
+    }
     ST.fastForward = false;
     // 目标位置本来就没有背景/CG：重放里一条都没下过才撤掉，否则留着复用
     if (!VIS.bg.hit) { $('#bgLayer').innerHTML = ''; VIS.bg.key = null; VIS.bg.el = null; }
@@ -1558,21 +1639,62 @@ function resumeAudio() {
   if (bgmAudio && bgmAudio.paused) { try { bgmAudio.play().catch(() => { }); } catch (e) { } }
   if (loopSe && loopSe.paused) { try { loopSe.play().catch(() => { }); } catch (e) { } }
 }
+/* ================= 进度：条长 + 句号 =================
+ * 条长用**指令下标**比例（一条立绘/背景也算一格）——这是唯一连续的进度；
+ * 文字用**台词序号**（第 K/T 句）——玩家真正能对上的是这个，两者天然不等。
+ * 这里**不统计墙钟时间**：逐句演出没有客观时长（打字机速度、语音长短、玩家点快慢都在变），
+ * "你看了多久"对玩家毫无用处。时间只在气泡里给一个按台本量估的参考（见 timeAtLine）。 */
+/** 进度条拖动状态（updateProgress 读它决定要不要让出填充宽度，所以必须提前声明） */
+const seekDrag = { on: false, ratio: 0 };
+
+/** 毫秒 → m:ss（过 1 小时自动 h:mm:ss） */
+function fmtClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  const p2 = v => (v < 10 ? '0' + v : '' + v);
+  return h ? `${h}:${p2(m)}:${p2(ss)}` : `${m}:${p2(ss)}`;
+}
+
+/** 当前台词是本段第几句（1 基）；还没播到台词时是 0 */
+function curLineNo() {
+  if (ST.curMsgIdx == null || !ST.lineMap) return 0;
+  const gi = ST.lineMap[ST.curMsgIdx];
+  return gi == null ? 0 : gi + 1;
+}
+
+/** 「第 N/M 段 · K/T 句」。每条指令都会调，所以文本没变就不写 DOM。 */
+let _posText = '';
+function updatePos() {
+  const pinfo = $('#pinfo');
+  if (!pinfo || !S.data) return;
+  const segs = S.data.parts.length;
+  const total = (ST.allLines || []).length;
+  const txt = `第 ${ST.part + 1}/${segs} 段 · ${curLineNo()}/${total} 句`;
+  if (txt !== _posText) {
+    _posText = txt;
+    const seg = $('#pseg'), line = $('#pline');
+    if (seg && line) {                    // 两段分开写：窄窗口 CSS 只藏掉段号
+      seg.textContent = `第 ${ST.part + 1}/${segs} 段 · `;
+      line.textContent = `${curLineNo()}/${total} 句`;
+    } else pinfo.textContent = txt;
+  }
+}
+
 function updateProgress() {
   const p = ST.methods.length ? ST.idx / ST.methods.length * 100 : 0;
-  $('#progress > i').style.width = p + '%';
+  const fill = $('#progress > i');
+  // 拖动中由预览接管填充宽度，别让播放循环把它抢回来
+  if (fill && !seekDrag.on) fill.style.width = p + '%';
+  updatePos();
 }
 function updateInfo() {
   const p = S.data?.parts[ST.part];
   if (!p) return;
-  const n = ST.methods.filter(x => x.Method === 'ShowMessage').length;
-  const human = `第 ${ST.part + 1}/${S.data.parts.length} 段 · ${n} 句`;
-  // 控制条上只显示「第 N/M 段 · K 句」（玩家要的是这个）；
-  // 剧本内部文件名（adv_op_4 这种）塞进 title，需要排查时悬停就能看到。
-  // 这样进度条能占满中间，窄窗口也不会把「46 句」挤掉。
-  const pinfo = $('#pinfo');
-  pinfo.textContent = human;
-  pinfo.title = `${p.file} · ${human}`;
+  // 段号与剧本内部文件名（adv_op_4 这种）塞进 title：窄窗口会藏掉段号，
+  // 需要排查时悬停就能看到完整信息
+  $('#pinfo').title = `第 ${ST.part + 1}/${S.data.parts.length} 段 · ${p.file}`;
+  _posText = '';                 // 强制重写（段号可能没变，但句数变了）
+  updatePos();
 }
 
 /* ================= 句子级跳转 / 暂停 / 快进 ================= */
@@ -1819,29 +1941,108 @@ function resetSettings() {
 }
 $('#btnSet').onclick = () => { const s = $('#settings'); s.hidden = !s.hidden; };
 
-/* ================= 进度条点击跳转 ================= */
+/* ================= 进度条：点击 / 拖动 / 悬停预览 ================= */
 /* 像视频播放器那样：点哪跳哪。比例先换算成"第几条指令"，再**吸附到它前面最近的一句台词**
    —— 必须落在 ShowMessage 的下标上，因为 seekTo 是从头重放到那一条来重建画面的。 */
-function seekByRatio(ratio) {
-  if (!S.data || !ST.methods.length) return;
+function pickLineAtRatio(ratio) {
   const list = lineIdxList();
-  if (!list.length) return;
+  if (!list.length) return null;
   const r = Math.max(0, Math.min(1, ratio));
   const target = Math.round(r * (ST.methods.length - 1));
   let pick = list[0];
   for (const i of list) { if (i <= target) pick = i; else break; }
+  return pick;
+}
+function seekByRatio(ratio) {
+  if (!S.data || !ST.methods.length) return;
+  const pick = pickLineAtRatio(ratio);
+  if (pick == null) return;
   seekTo(pick, { keepPaused: !ST.running });
 }
 
+/** 气泡：第 K/T 句 + 台本估算的「位置时间 / 本段总时长」，跟着鼠标横坐标走（fixed，上方 6px） */
+function showSeekTip(ratio, clientX) {
+  const tip = $('#seekTip');
+  const bar = $('#progress');
+  if (!tip || !bar || !ST.methods.length) return;
+  const midx = pickLineAtRatio(ratio);
+  if (midx == null) return;
+  const total = (ST.allLines || []).length;
+  const no = (ST.lineMap && ST.lineMap[midx] != null) ? ST.lineMap[midx] + 1 : 0;
+  const totalMs = partTimeMs();
+  const timeTxt = totalMs
+    ? `<em>约 ${fmtClock(timeAtLine(no))} / ${fmtClock(totalMs)}</em>` : '';
+  tip.innerHTML = `<b>${no}/${total}</b> 句${timeTxt}`;
+  tip.hidden = false;
+  const r = bar.getBoundingClientRect();
+  // 靠边时别让气泡跑出屏幕（半个气泡宽 ≈ 70px）
+  const x = Math.min(window.innerWidth - 78, Math.max(78, clientX));
+  tip.style.left = x + 'px';
+  tip.style.top = (r.top - 6) + 'px';
+}
+function hideSeekTip() {
+  const tip = $('#seekTip');
+  if (tip) tip.hidden = true;
+}
+
+/** 拖动预览：填充变淡 + 跟手，松手才真跳 */
+function paintSeekPreview(ratio) {
+  const fill = $('#progress > i');
+  if (!fill) return;
+  fill.classList.add('pre');
+  fill.style.width = (Math.max(0, Math.min(1, ratio)) * 100) + '%';
+}
+function clearSeekPreview() {
+  const fill = $('#progress > i');
+  if (fill) fill.classList.remove('pre');
+}
+
+/* 用 pointer 事件统一「点击」与「拖动」：
+   **松手才 seekTo**。seekTo 要从前到后重放几百条指令重建画面，
+   拖动过程中跟着跳等于一秒跳几十次，直接卡死；只有松手那一下值得付这个成本。 */
 (() => {
   const bar = $('#progress');
   if (!bar) return;
-  bar.title = L10N.t('ctrl.seek', '点击进度条跳到对应位置');
-  bar.onclick = e => {
+  bar.title = L10N.t('ctrl.seek', '点击或拖动进度条，跳到想看的位置');
+  const ratioAt = x => {
     const r = bar.getBoundingClientRect();
-    if (!r.width) return;
-    seekByRatio((e.clientX - r.left) / r.width);
+    return r.width ? Math.max(0, Math.min(1, (x - r.left) / r.width)) : 0;
   };
+  bar.addEventListener('pointerdown', e => {
+    if (!S.data || !ST.methods.length) return;
+    seekDrag.on = true;
+    seekDrag.ratio = ratioAt(e.clientX);
+    bar.classList.add('drag');
+    try { bar.setPointerCapture(e.pointerId); } catch (err) { }
+    paintSeekPreview(seekDrag.ratio);
+    showSeekTip(seekDrag.ratio, e.clientX);
+    e.preventDefault();               // 别让浏览器把拖动当文本选择/滚动
+  });
+  bar.addEventListener('pointermove', e => {
+    const r = ratioAt(e.clientX);
+    if (seekDrag.on) { seekDrag.ratio = r; paintSeekPreview(r); }
+    showSeekTip(r, e.clientX);
+  });
+  const finish = () => {
+    if (!seekDrag.on) return;
+    seekDrag.on = false;
+    bar.classList.remove('drag');
+    hideSeekTip();
+    clearSeekPreview();
+    seekByRatio(seekDrag.ratio);       // seekTo 里会 updateProgress，填充宽度自然回到真实位置
+  };
+  bar.addEventListener('pointerup', finish);
+  bar.addEventListener('pointercancel', () => {
+    if (!seekDrag.on) return;
+    seekDrag.on = false;
+    bar.classList.remove('drag');
+    hideSeekTip();
+    clearSeekPreview();
+    updateProgress();
+  });
+  bar.addEventListener('pointerleave', () => {
+    if (!seekDrag.on) { hideSeekTip(); updateProgress(); }
+  });
 })();
 
 /* ================= 快捷键帮助（最右边的 ? 按钮） ================= */

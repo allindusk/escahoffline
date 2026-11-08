@@ -439,7 +439,8 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #controls .grp{display:flex;align-items:center;gap:8px;min-width:0}
 #controls .gPlay{flex:0 0 auto}
 /* basis 用 0：否则按 max-content 参与换行计算，明明放得下也会被折到第二行 */
-#controls .gProgress{flex:1 1 0;min-width:180px;gap:10px}
+/* min-width 给足：窄窗口宁可让它把 dlBar（版本/免责）挤到第二行，也别把进度条压成 138px */
+#controls .gProgress{flex:1 1 0;min-width:320px;gap:9px}
 /* 右侧按钮多，单独收紧一点内边距（全局 13px 是给左侧三连用的） */
 #controls .gOpt{flex:0 0 auto;gap:5px}
 #controls .gOpt button{padding:6px 10px}
@@ -476,14 +477,32 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
    进度条自己会让位。上限 260px 兜住异常长的文本。 */
 #pinfo{flex:0 0 auto;max-width:260px;text-align:right;font-size:14px;
   color:var(--fg3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 1366 及以下：段号已经在顶部段标签里高亮着，控制条把这段宽度让给进度条
+   （实测 1366 时让出来约 70px，进度条从 168px 变 238px，好拖得多） */
+@media (max-width:1400px){#pseg{display:none}}
 /* 进度条弹性占满中间，别再用 120px 的小短条缩在角落。
    轨道要用比控制条背景亮一点的颜色，否则深色主题下"完全看不见还剩多少"。
-   可点击跳转（seekByRatio），所以给手型光标 + 悬停加亮。 */
+   可点击跳转 + 可拖动（seekByRatio），所以给手型光标 + 悬停加亮。 */
 #progress{flex:1 1 80px;width:auto;min-width:60px;height:6px;background:#232c3c;
-  border-radius:3px;overflow:hidden;box-shadow:inset 0 0 0 1px #2c3648;
-  cursor:pointer;transition:box-shadow .12s}
+  border-radius:3px;box-shadow:inset 0 0 0 1px #2c3648;position:relative;
+  cursor:pointer;transition:box-shadow .12s;touch-action:none}
+/* 轨道只有 6px 高，鼠标很难按住：透明命中区上下各外扩 9px（不影响布局）。
+   所以 overflow 必须 visible —— 有 hidden 会把命中区裁回 6px。 */
+#progress::after{content:'';position:absolute;inset:-9px -2px}
 #progress:hover{box-shadow:inset 0 0 0 1px #4a5c78}
+#progress.drag{box-shadow:inset 0 0 0 1px var(--cyan)}
 #progress>i{display:block;height:100%;width:0;background:var(--cyan);border-radius:3px}
+/* 拖动预览：填充色变淡，和"真正已播到的位置"区分开 */
+#progress>i.pre{background:#5f8ea8;opacity:.7}
+/* 进度条气泡（悬停/拖动）：fixed 跟手，绝不参与控制条的宽度争夺 */
+#seekTip{position:fixed;z-index:12000;pointer-events:none;
+  padding:3px 9px;border-radius:6px;background:#0d1220cc;border:1px solid var(--line);
+  color:var(--fg);font-size:14px;line-height:1.5;white-space:nowrap;
+  transform:translate(-50%,-100%);box-shadow:0 4px 14px rgba(0,0,0,.55);
+  backdrop-filter:blur(3px)}
+#seekTip[hidden]{display:none}
+#seekTip b{color:var(--cyan);font-weight:600}
+#seekTip em{color:var(--fg3);font-style:normal;margin-left:6px}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--fg3);font-size:14.6px;line-height:2;text-align:center;background:#05060a}
 /* 主区域：舞台与文本列表并列，互不遮挡 */

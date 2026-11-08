@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1108a">
+<link rel="stylesheet" href="assets/css/player.css?v=1108c">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1103b">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1108b">
 </head>
 <body>
 <!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
@@ -230,7 +230,8 @@
       </div>
       <div class="grp gProgress">
         <div id="progress"><i></i></div>
-        <div id="pinfo"></div>
+        <!-- 段号与句号拆成两个 span：窄窗口只留句号，把宽度让给进度条 -->
+        <div id="pinfo"><span id="pseg"></span><span id="pline"></span></div>
       </div>
       <div class="grp gOpt gOptA">
         <label class="ctl" data-i18n="ctrl.speed">倍速
@@ -257,6 +258,8 @@
                 title="空格/P/点画面 暂停 · 回车/↓→ 下一句 · ↑← 上一句 · 按住 K 快进">?</button>
       </div>
     </div>
+    <!-- 进度条气泡：悬停/拖动时显示"第 K/T 句 · 约 mm:ss"，fixed 定位跟手 -->
+    <div id="seekTip" hidden></div>
     <div id="dbg">调试</div>
   </main>
 </div>
@@ -290,7 +293,7 @@
 <script src="assets/js/packstate.js?v=1103a"></script>
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1105a"></script>
-<script src="assets/js/player.js?v=1108a"></script>
+<script src="assets/js/player.js?v=1108g"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>

@@ -328,7 +328,7 @@
   #controls .gOpt::-webkit-scrollbar { display: none; }
   #controls .gOpt button, #controls .gOpt label { flex: none; }
   #controls button { padding: 5px 9px; height: 28px; }
-  /* 段信息在横屏只会挤占进度条，收起来（进度条本身够看） */
+  /* 段信息在横屏只会挤占进度条，收起来（进度条本身够看，悬停/拖动有气泡） */
   #pinfo { display: none; }
   #tabs { padding: 3px 10px; }
   #meta { font-size: 14px; }
