@@ -506,14 +506,29 @@
 
   /** 任务结束后（renderJobs 里检测到 done）重新拉一次数据 */
   async function reloadAfterJobs() {
+    ST.units.loaded = false;
     try {
-      ST.units.loaded = false;
       await loadAll();                 // 里面已经重画过列表（含 renderPacks）
+    } catch (e) {
+      /* 整体刷新失败**不能静默吞**：任务刚结束时 /api/state / /api/manifest
+         偶尔会慢或失败，以前这里 catch 一下就完事，页面于是停在上一次的数字上
+         ——「补全缺失」按钮一直亮着，用户手动刷新页面才对（2026-11-10 反馈）。
+         现在至少把公共素材那一行单独补上，并留一条 console 便于排查。 */
+      try { console.error('[reload] 任务结束后刷新失败：', e); } catch (e2) { }
+      try {
+        const p = await api('cdn/public');
+        if (p && !p.error) { ST.pub = p; renderPacks(); }
+      } catch (e3) {
+        try { console.error('[reload] 公共素材进度也没取到：', e3); } catch (e4) { }
+      }
+      return;
+    }
+    try {
       const sc = document.querySelector('main');
       const top = sc ? sc.scrollTop : 0;
       renderPacks();                   // 再补一次：目录刚拉回来时列表还是空的
       if (sc && top) sc.scrollTop = top;
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* 重画失败不影响数据 */ }
   }
 
   /* 名字一律用人话（角色名 / 章节标题）。**不再拼「角色 415」「char_415」**：
@@ -607,7 +622,7 @@
     const exact = (a, b) => (b ? (a || 0) >= b : true);
     const nearBg = (a, b) => (b ? (a || 0) >= b * 0.98 : true);
     const pubAny = (pub.back || 0) + (pub.music || 0) + (pub.sfx || 0)
-      + (pub.avatar || 0) + (pub.banner || 0) > 0;
+      + (pub.avatar || 0) + (pub.banner || 0) + (pub.advfx || 0) > 0;
     // 后端结构版本：v<2 说明这个服务进程还是加 banner 之前的旧代码
     // （本地服务是常驻进程，改完 Python 必须重启程序；否则前端会看到缺字段，
     //   以前被 `|| 0` 兜成「横幅 0/0」，看起来像"没有横幅"）
@@ -622,9 +637,13 @@
        这里再卡一道 backRefMiss —— 缺一张就不该说"已就绪"。 */
     const backRefMiss = +(pub.backRefMiss || 0);
     const bgOk = (pub.backVerified ? exact : nearBg)(pub.back, pub.backTotal);
+    /* 演出特效（表情符号逐帧数据 + 图集）是 v6 才有的类别：后端进程还没重启时
+       没有 advfx 字段，此时不能判成"缺"，否则老用户会看到一个永远补不齐的 0/1。 */
+    const advfxOk = pubVer >= 6 ? exact(pub.advfx, pub.advfxTotal) : true;
     const pubAll = ready && !pubStale && bgOk && backRefMiss === 0
       && exact(pub.music, pub.musicTotal) && exact(pub.sfx, pub.sfxTotal)
-      && exact(pub.avatar, pub.avatarTotal) && exact(pub.banner, pub.bannerTotal);
+      && exact(pub.avatar, pub.avatarTotal) && exact(pub.banner, pub.bannerTotal)
+      && advfxOk;
 
     // 清单描述去掉"已就绪"前缀 —— 状态统一由右侧徽标表达，别在一行里说两遍
     const mfTxt = (cdn.manifest || '').replace(/^已就绪\s*·?\s*/, '');
@@ -651,6 +670,7 @@
       + ' · 音效 ' + cnt(pub.sfx, pub.sfxTotal)
       + ' · 头像 ' + cnt(pub.avatar, pub.avatarTotal)
       + ' · ' + bannerTxt
+      + (pubVer >= 6 ? ' · 演出特效 ' + cnt(pub.advfx, pub.advfxTotal) : '')
       + (pubStale ? ' · <b style="color:#f0c05a">程序该重启了</b>' : '')
       : '约 <b>' + FACT.t('public') + '</b>（' + FACT.breakdown() + '）';
 
@@ -702,17 +722,36 @@
       (allInstalled ? '<span class="st ok">已全部安装</span>'
         : '<span class="st none">按剧情</span>') + '</div>';
 
+    /* 「补全」只补**缺的类别**（键名与后端 facts.PUBLIC_PARTS 一致）。
+       以前这里一律不传 parts → 后端把 6 个类别全部重走一遍：明明只差一个
+       演出特效，也要把 602 个背景包逐个打开检查、385 个头像强制重裁，
+       几十分钟起步，进度条还得在 60% 停很久（用户 2026-11-10 反馈：
+       "只缺特效也要全量重跑，那这个『补全』还有什么意义"）。
+       已经齐的类别不传 → 连解包阶段都不会碰它们。 */
+    const missParts = [];
+    if (!(bgOk && backRefMiss === 0)) missParts.push('bg');
+    if (!exact(pub.music, pub.musicTotal)) missParts.push('bgm');
+    if (!exact(pub.sfx, pub.sfxTotal)) missParts.push('sfx');
+    if (!exact(pub.avatar, pub.avatarTotal)) missParts.push('avatar');
+    if (!exact(pub.banner, pub.bannerTotal)) missParts.push('banner');
+    if (!advfxOk) missParts.push('advfx');
+    const PART_CN = {
+      bg: '背景', bgm: '音乐', sfx: '音效', avatar: '头像',
+      banner: '剧情横幅', advfx: '演出特效',
+    };
     const bp = $('#bpPub');
     if (bp) {
       bp.onclick = () => {
-        if (!confirm('下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅，约 '
-          + FACT.t('public') + '）？\n\n'
-          + '· 所有剧情共用，下过之后装任何剧情都不会缺背景、也不会没音乐\n'
-          + '· 头像与剧情横幅也在这里：下完侧栏/CG 页才有头像，剧情列表才有标题横幅\n'
-          + '· 已有的会跳过，重复点不会重下；官方更新后再点也只补新增的\n'
-          + '· 下载 + 解包合计约 ' + FACT.t('secPublic')
-          + '（取决于网速），期间可关掉页面\n\n开始？')) return;
-        startJob('install/base', {}, '开始下载公共素材');
+        const list = missParts.map(k => PART_CN[k] || k).join(' / ');
+        if (!confirm('补齐公共素材？\n\n'
+          + '· 这次只补缺的部分：' + (list || '全部')
+          + '\n· 已经齐的类别不重跑 —— 不重新下载，也不重新解包'
+          + '\n· 只差一两项时通常十几秒就完；缺头像会慢些（385 张要重裁）'
+          + '\n· 期间可关掉页面，任务在后台继续\n\n开始？')) return;
+        // 空对象 = 后端按默认全量（只有清单没读到时才会落到这里）
+        startJob('install/base',
+          missParts.length ? { parts: missParts } : {},
+          '开始补齐公共素材：' + (list || '全部'));
       };
     }
 
@@ -1079,6 +1118,35 @@
 
   function renderJobs(list) {
     const bar = $('#jobbar');
+    /* 任务刚结束 → 重拉状态。
+       这段原先放在函数末尾，用的还是被 filter + slice(0,3) 裁过的列表：
+       底部条只留最近 3 条，被裁掉的终态任务就永远触发不了刷新 ——
+       「下载公共素材」明明完成了，页面上的「补全缺失」按钮还亮着、
+       数字也还是旧的，得手动刷新页面才对（2026-11-10 用户反馈）。
+       现在用**原始列表**，并放在下面所有 return 之前。 */
+    ST._reloaded = ST._reloaded || {};
+    const ended = (list || []).filter(j => (j.state === 'done' || j.state === 'failed')
+      && !ST._reloaded[j.id]);
+    if (ended.length) {
+      ended.forEach(j => { ST._reloaded[j.id] = 1; });
+      if (Object.keys(ST._reloaded).length > 200) ST._reloaded = {};
+      /* 公共素材（kind=base）收尾：单独重拉一次 public 并重画「基础数据」那几行。
+         不等下面那次整体 loadAll —— 整体刷新任何一步失败都会让它白等，
+         而这几个数字就是用户判断"能不能开始看"的依据。 */
+      if (ended.some(j => j.kind === 'base')) {
+        api('cdn/public').then(p => {
+          if (!p || p.error) return;
+          ST.pub = p;
+          renderPacks();
+        }).catch(() => { });
+      }
+      if (!ST._refreshT) {
+        ST._refreshT = setTimeout(() => {
+          ST._refreshT = null;
+          reloadAfterJobs();
+        }, 1200);
+      }
+    }
     // 扫描/清理任务的结果（任务本身几秒后会从底部条消失，结果要留在页面上）
     const pr = (list || []).find(j => j.kind === 'prune' && j.state === 'done'
       && j.detail && j.detail.prune);
@@ -1330,9 +1398,14 @@
     bar.innerHTML = list.map(j => {
       const pct = j.state === 'done' ? 100 : (j.percent || 0);
       const eta = (j.eta && j.state === 'running') ? j.eta : 0;
+      /* 是不是"下载之后"的阶段（解包）：后端 phase(label="解包") 会把字节口径
+         清空并给出 phaseLabel。这个判断要早于进度条渲染 —— 解包阶段要给
+         进度条换颜色、并在 60% 处画阶段分隔线。 */
+      const extracting = !(j.bytesTotal) && !!(j.phaseLabel);
       const cls = [j.state === 'failed' ? 'failed' : '',
         j.state === 'done' ? 'done' : '',
-        j.paused ? 'paused' : ''].filter(Boolean).join(' ');
+        j.paused ? 'paused' : '',
+        extracting ? 'extracting' : ''].filter(Boolean).join(' ');
       // 速度只在右侧数值区显示一次（之前这里也拼了一次，导致两处重复、把布局挤乱）
       // 结束态前面加个符号 + 加亮（见 setup.css .job.done / .failed .jm）：
       // 以前成功和失败都是一行淡灰字，扫一眼分不出结果
@@ -1349,9 +1422,18 @@
              用户会以为程序在偷跑流量（2026-11-04 反馈："像中了木马"）。 */
       const bDone = bt > 0 && bd >= bt;
       const bsp = bDone ? 0 : (j.bytesSpeed || 0);
+      /* 非下载阶段说明：这时**一个字节都不在传**，网速必然是 0。若还照下载
+         阶段的样子显示「60.0% · 0 B/s」，用户会以为"下载停了但没到 100%，
+         是不是卡住了"。所以这一段改报「解包 120/2100 个」，并且不显示网速与
+         剩余时间（解包按包数估的剩余，大小包差异太大，估出来多半是错的）。
+
+         字节那一行也必须自己说清"这是下载量"：进度条把前 60% 留给下载、
+         后 40% 留给解包，所以「900 MB / 1 GB」旁边配的百分比只有 54%。
+         不写"下载"两个字，用户会以为进度算错了（2026-11-10 反馈）。
+         进度条上另有一条分隔线标出 60% 的边界（见下面 seg）。 */
       const line1 = [pct.toFixed(1) + '%',
-        (bDone ? `已下载 ${human(bd)}`
-          : (bt ? `${human(bd)} / ${human(bt)}` : ''))].filter(Boolean).join(' · ');
+        (bDone ? `下载完成 ${human(bd)}`
+          : (bt ? `下载 ${human(bd)} / ${human(bt)}` : ''))].filter(Boolean).join(' · ');
       // 次级行：多单元安装优先显示「第 i/N 部」+ 当前这批「包 x/y」，
       // 这样装 70 部剧情时进度条只从 0 平稳爬到 100%，不再反复冲到 100%。
       const parts = [];
@@ -1371,15 +1453,28 @@
          计数单位现在由 set_total(n, "个"/"张"/"部"/"包") 明确声明，
          字节量只走 bytesDone/bytesTotal（就是左边那行 x MB / y MB）。 */
       if ((!j.itemsTotal || j.itemsTotal <= 1) && j.total && j.unit) {
-        parts.push(`${Math.round(j.done)}/${Math.round(j.total)} ${j.unit}`);
+        parts.push((extracting ? j.phaseLabel + ' ' : '')
+          + `${Math.round(j.done)}/${Math.round(j.total)} ${j.unit}`);
       }
-      if (bsp) parts.push(`${human(bsp)}/s`);
-      if (eta) parts.push(`剩 ${secs(eta)}`);
+      if (!extracting) {
+        if (bsp) parts.push(`${human(bsp)}/s`);
+        if (eta) parts.push(`剩 ${secs(eta)}`);
+      }
       const line2 = parts.filter(Boolean).join(' · ');
+      /* 阶段分隔线：下载占前 60%、解包占后 40%（后端 phaseBase/phaseSpan 给的）。
+         没有它的话，用户看到「下载 900 MB / 1 GB」而进度条才 54%，
+         会以为百分比算错了（2026-11-10 反馈）。有了这条线，
+         "前一段是下载、后一段是解包"一眼能看出来。 */
+      const segBase = (j.phaseSpan > 0 && j.phaseSpan < 100) ? (j.phaseBase || 0) : 0;
+      const seg = segBase ? `<u style="left:${segBase}%"></u>` : '';
+      const segTip = segBase
+        ? `前 ${Math.round(segBase)}% 是下载，后 ${Math.round(100 - segBase)}% 是解包`
+          + '（解包＝把资源包解成图片和音频，不走网络）'
+        : '';
       return `<div class="job${cls ? ' ' + cls : ''}">
         <span class="jt">${esc(j.title)}</span>
         <span class="jm" title="${esc(msg)}">${esc(msg)}</span>
-        <span class="jp"><i style="width:${pct}%"></i></span>
+        <span class="jp"${segTip ? ` title="${esc(segTip)}"` : ''}${segBase ? ` style="--seg:${segBase}%"` : ''}><i style="width:${pct}%"></i>${seg}</span>
         <span class="jv"><b>${line1 || '0.0%'}</b>${
           line2 ? `<i>${esc(line2)}</i>` : ''}</span>
         ${j.state === 'running' || j.state === 'queued'
@@ -1404,23 +1499,8 @@
       b.onclick = () => api('jobs/' + b.dataset.cancel + '/cancel', { method: 'POST' })
         .then(() => toastMsg('已请求取消')).catch(e => toastMsg(e.message, true));
     });
-    /* 有任务刚结束 → 重新拉状态（清单/依赖/安装都会改变列表）。
-       **每个任务只触发一次**：这里判断的是"列表里还有没有终态任务"，而已结束的
-       任务会在底部条上再停 15 秒（失败停 40 秒），所以以前只要有一条任务结束，
-       这 1.2 秒一次的轮询就会不停重拉 /api/state + 重画整个列表 ——
-       滚动条被反复顶回顶端、画面一闪一闪，整整闪 40 秒（2026-11-08 用户反馈
-       装剧情失败后页面一直在闪）。用任务 id 去重后，一次任务只刷一次。 */
-    ST._reloaded = ST._reloaded || {};
-    const ended = list.filter(j => (j.state === 'done' || j.state === 'failed')
-      && !ST._reloaded[j.id]);
-    if (ended.length && !ST._refreshT) {
-      ended.forEach(j => { ST._reloaded[j.id] = 1; });
-      if (Object.keys(ST._reloaded).length > 200) ST._reloaded = {};
-      ST._refreshT = setTimeout(() => {
-        ST._refreshT = null;
-        reloadAfterJobs();
-      }, 1200);
-    }
+    /* 终态任务的刷新逻辑已移到函数开头（见那里的注释）：
+       放在这里的话，列表被 slice(0,3) 裁掉的任务永远触发不了。 */
   }
 
   // ---------------------------------------------------------------- 画质

@@ -72,6 +72,13 @@ BLACKLIST = ("web/media/", "web/data/", "web/assets/i18n/", "userdata/",
 WEB_DATA_UPDATABLE = (
     "web/data/charmeta.js", "web/data/names.js",
     "web/data/cgmap.js", "web/data/index.js", "web/data/advindex.js",
+    # stand_box.js = 立绘画布落点表（AlphaCutRect + ExpressionCutRect），
+    # 程序表、不是用户产物：内容是官方 base_info 的常量，覆盖面只取决于素材全不全。
+    # 它决定立绘落点与**表情气泡的锚点**（脸在哪），老用户那份是 4 项旧格式
+    # （只有 AlphaCutRect、没有脸部矩形），播放器只能退回近似系数 ——
+    # 2026-11-10 用户实测"气泡跑到头的另一边"，根因就是更新没送到这个文件。
+    # 不需要 merge（不是按条目增删的表），整份覆盖即可。
+    "web/data/stand_box.js",
 )
 
 

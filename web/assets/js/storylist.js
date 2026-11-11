@@ -302,6 +302,8 @@ window.SL = (() => {
           // 384 个角色 / 227 部剧情，逐字符重画出会明显掉帧
           timer = setTimeout(function () { state.q = v; render(); }, 120);
         };
+        // 搜索框尾部的清除叉（清空后走同一条 input 路径，列表恢复空筛选）
+        if (window.ESC && ESC.searchClear) ESC.searchClear(inp);
       }
       const so = bar.querySelector('.sl-sort');
       if (so) so.onchange = function () { state.sort = so.value; render(); };

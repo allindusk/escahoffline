@@ -4,59 +4,56 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1108c">
+<link rel="stylesheet" href="assets/css/player.css?v=1113a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1108b">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1113a">
 </head>
 <body>
+<!-- MulColorBackground / MulStand 的调色板：CSS filter 做不了「R/G/B 各自相乘」，
+     只能挂 SVG feColorMatrix。这里放一个 0 尺寸的宿主，滤镜节点由 player.js
+     按需创建/回收（color-interpolation-filters=sRGB，保证和 CSS 亮度口径一致）。 -->
+<svg id="mulFilters" width="0" height="0" aria-hidden="true"
+     style="position:absolute;width:0;height:0;overflow:hidden"></svg>
 <!-- 关闭按钮必须是面板的**兄弟节点**：面板是 overflow-y:auto 的滚动容器，
      放在里面会跟着内容滚走（以前 top:50% 相对内容高度算，一拉就看不见了） -->
 <button id="setClose" title="关闭设置（Esc）" hidden>✕</button>
 <div id="settings" hidden>
-  <h4 data-i18n="sect.view">画面</h4>
-  <label data-i18n="set.fit">画面缩放
+  <h4 data-i18n="sect.view">画面/播放</h4>
+  <!-- 面板本身就是两列网格：这一节严格「一行两项」——
+       画面缩放 | 播完第 5 段暂停，显示不完整立绘 | 优先使用超分图。
+       立绘的尺寸/位置已全部删掉（改了只会偏离游戏原演出）。
+       说明文字一律收进 title 气泡（自绘 14px 气泡，见 player.js 的 initSettingTips），不占行。 -->
+  <label class="ctlrow" data-i18n="set.fit">画面缩放
     <select id="setFit">
       <option value="1x" data-i18n="opt.fit.1x">原始 1x（最清晰）</option>
       <option value="fit" data-i18n="opt.fit.fit">适应窗口（会放大）</option>
       <option value="15" data-i18n="opt.fit.15">放大 1.5x</option>
     </select>
   </label>
-  <div class="row"><span data-i18n="set.stand">立绘尺寸</span>
-    <input type="range" id="setStand" min="70" max="110" value="100" style="width:110px">
+  <div class="row"><span title="勾选：角色剧情播完第 5 段就停住，最后一段（凌辱场景）要自己点「下一段」。&#10;不勾选：自动模式下会一路连播到第 6 段。" data-i18n-title="set.holdPart5Note" data-i18n="set.holdPart5">播完第 5 段暂停<i class="qh" aria-hidden="true">?</i></span>
+    <input type="checkbox" id="setHoldPart5" checked>
   </div>
-  <label data-i18n="set.standY">立绘纵向位置 <span id="valStandY">0px</span>
-    <input type="range" id="setStandY" min="-60" max="120" step="4" value="0">
-  </label>
-  <label data-i18n="set.standX">立绘水平偏移 <span id="valStandX">0px</span>
-    <input type="range" id="setStandX" min="-40" max="40" step="1" value="0">
-  </label>
-  <div style="font-size:14px;color:var(--fg3);margin:-8px 0 12px">
-    <span data-i18n="set.fitNote">正值向上，负值向下（负太多会切掉头部）</span>
-  </div>
-  <div class="row" style="margin-top:8px"><span title="约 10.7% 的特殊立绘在游戏里本身就是分层图，缺少脸部部件" data-i18n-title="set.partialNote" data-i18n="set.partial">显示不完整立绘</span>
+  <div class="row"><span title="约 10.7% 的特殊立绘在游戏里本身就是分层图，缺少脸部部件" data-i18n-title="set.partialNote" data-i18n="set.partial">显示不完整立绘<i class="qh" aria-hidden="true">?</i></span>
     <input type="checkbox" id="setPartial">
   </div>
-  <div class="row"><span title="优先加载「资源管理」里超分生成的 img_x2 高清图；没超分过的会自动回退到原图，不会黑图" data-i18n-title="set.useX2Note" data-i18n="set.useX2">优先使用超分图</span>
+  <div class="row"><span title="优先加载「资源管理」里超分生成的 img_x2 高清图；没超分过的会自动回退到原图，不会黑图" data-i18n-title="set.useX2Note" data-i18n="set.useX2">优先使用超分图<i class="qh" aria-hidden="true">?</i></span>
     <input type="checkbox" id="setUseX2" checked>
   </div>
 
   <h4 data-i18n="sect.window">文本框</h4>
-  <label data-i18n="set.msgBox">文本框外观
+  <!-- 排序规则（用户 2026-11-11 要求）：同一节里**同类型的控件聚在一起**，
+       下拉框两项一行、滑块两项一行。某类剩下奇数个时，多的那个就留在
+       左列独占一行**一格**——不要为了"填满"把它拉成跨两列（用户明确反对）。 -->
+  <label class="ctlrow" title="无框模式下「背景不透明度 / 背景色」不生效：文字靠描边压在任何画面上" data-i18n-title="set.msgBoxNote" data-i18n="set.msgBox">文本框外观<i class="qh" aria-hidden="true">?</i>
     <select id="setMsgBox">
       <option value="box" data-i18n="opt.msgBox.box">有边框（默认）</option>
       <option value="soft" data-i18n="opt.msgBox.soft">无框 + 柔和底衬</option>
       <option value="bare" data-i18n="opt.msgBox.bare">无框 + 纯文字</option>
     </select>
   </label>
-  <div style="font-size:14px;color:var(--fg3);margin:-8px 0 12px" data-i18n="set.msgBoxNote">
-    无框模式下「背景不透明度 / 背景色」不生效：文字靠描边压在任何画面上
-  </div>
-  <label data-i18n="set.alpha">背景不透明度 <span id="valA">90%</span>
-    <input type="range" id="setA" min="0" max="100" value="90">
-  </label>
-  <label data-i18n="set.msgBg">背景色
+  <label class="ctlrow" data-i18n="set.msgBg">背景色
     <select id="setMsgBg">
       <option value="10,14,22" data-i18n="opt.bg.blue">深蓝</option>
       <option value="0,0,0" data-i18n="opt.bg.black">纯黑</option>
@@ -66,7 +63,7 @@
       <option value="40,30,14" data-i18n="opt.bg.gold">暗金</option>
     </select>
   </label>
-  <label data-i18n="set.msgColor">文字颜色
+  <label class="ctlrow" data-i18n="set.msgColor">文字颜色
     <select id="setMsgColor">
       <option value="#f2f5fb" data-i18n="opt.color.white">纯白</option>
       <option value="#f5ecd8" data-i18n="opt.color.cream">米黄</option>
@@ -75,12 +72,24 @@
       <option value="#dcf5e0" data-i18n="opt.color.green">淡绿</option>
     </select>
   </label>
-  <label data-i18n="set.font">字体
+  <label class="ctlrow" data-i18n="set.font">字体
     <select id="setMsgFont">
       <option value="sans" data-i18n="opt.font.sans">黑体（默认）</option>
       <option value="serif" data-i18n="opt.font.serif">明朝（衬线）</option>
       <option value="yu" data-i18n="opt.font.yu">游黑体</option>
     </select>
+  </label>
+  <label class="ctlrow" data-i18n="set.align">文字对齐
+    <select id="setAlign">
+      <option value="left" data-i18n="opt.align.left">左对齐</option>
+      <option value="center" data-i18n="opt.align.center">居中</option>
+      <option value="right" data-i18n="opt.align.right">右对齐</option>
+      <option value="justify" data-i18n="opt.align.justify">两端对齐</option>
+    </select>
+  </label>
+  <div class="sp" aria-hidden="true"></div>
+  <label data-i18n="set.alpha">背景不透明度 <span id="valA">90%</span>
+    <input type="range" id="setA" min="0" max="100" value="90">
   </label>
   <label data-i18n="set.fontSize">字号 <span id="valFS">21px</span>
     <input type="range" id="setFS" min="16" max="34" value="21">
@@ -97,25 +106,18 @@
   <label data-i18n="set.stroke">描边粗细 <span id="valStroke">1.2px</span>
     <input type="range" id="setStroke" min="0" max="30" step="2" value="12">
   </label>
-  <label data-i18n="set.align">文字对齐
-    <select id="setAlign">
-      <option value="left" data-i18n="opt.align.left">左对齐</option>
-      <option value="center" data-i18n="opt.align.center">居中</option>
-      <option value="right" data-i18n="opt.align.right">右对齐</option>
-      <option value="justify" data-i18n="opt.align.justify">两端对齐</option>
-    </select>
-  </label>
   <label data-i18n="set.msgX">水平位移 <span id="valMsgX">0px</span>
     <input type="range" id="setMsgX" min="-300" max="300" step="5" value="0">
   </label>
   <h4 data-i18n="sect.name">话者名</h4>
-  <label data-i18n="set.nameAlign">对齐
+  <label class="ctlrow" data-i18n="set.nameAlign">对齐
     <select id="setNameAlign">
       <option value="left" data-i18n="opt.align.left">左对齐</option>
       <option value="center" data-i18n="opt.align.center">居中</option>
       <option value="right" data-i18n="opt.align.right">右对齐</option>
     </select>
   </label>
+  <div class="sp" aria-hidden="true"></div>
   <label data-i18n="set.nameX">水平位移 <span id="valNameX">0px</span>
     <input type="range" id="setNameX" min="-300" max="300" step="5" value="0">
   </label>
@@ -124,12 +126,13 @@
   </label>
 
   <h4 data-i18n="sect.text">文本节奏</h4>
-  <label data-i18n="set.textMode">显示方式
+  <label class="ctlrow" data-i18n="set.textMode">显示方式
     <select id="setTextMode">
       <option value="type" data-i18n="opt.textMode.type">打字机逐字</option>
       <option value="instant" data-i18n="opt.textMode.instant">立即显示整句</option>
     </select>
   </label>
+  <div class="sp" aria-hidden="true"></div>
   <label data-i18n="set.typeSpeed">打字速度 <span id="valType">100%</span>
     <input type="range" id="setType" min="30" max="300" value="100">
   </label>
@@ -197,7 +200,15 @@
     <div id="stageWrap">
       <div id="dbgFit"></div>
       <div id="stage">
-        <div id="bgLayer"></div>
+        <!-- bgLayer + screffBack 必须组成一个隔离组：ShowScreenEffectBack
+             是"垫在立绘后面"的常驻特效，它的加色要和**背景**混合、
+             但结果必须被立绘盖住。分开摆时 plus-lighter 会和 #stage 里
+             后面要画的立绘一起参与合成，实测立绘不透明区仍多出 +14.7 亮度
+             （雾透过立绘，2026-11-10 用户反馈第57句）。 -->
+        <div id="backGroup">
+          <div id="bgLayer"></div>
+          <div id="screffBack"></div>
+        </div>
         <div id="standLayer"></div>
         <div id="cgLayer"></div>
         <div id="fxLayer"></div>
@@ -243,7 +254,7 @@
             <option value="3">3x</option>
           </select>
         </label>
-        <label class="ctl"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
+        <label class="ctl" title="开启时像视频一样连续播放；关闭后只有点「下一句 / 上一句」才切句" data-i18n-title="ctrl.autoNote"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
         <span class="vsep"></span>
         <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
         <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
@@ -279,27 +290,35 @@
 <!-- 数据映射表。必须带版本号：imgmap.js 由 gen_imgmap.py 在装完剧情后重新生成，
      不带版本号会被浏览器一直用旧缓存（表现为头像/立绘明明有了却找不到） -->
 <script src="data/imgmap.js?v=1029a"></script>
+<!-- 立绘画布落点（资源包 base_info 的 AlphaCutRect + 站位锚点）：
+     有它立绘才按游戏的原尺寸/原位置摆；缺文件时播放器退回「贴底居中」老布局 -->
+<script src="data/stand_box.js?v=1113a"
+        onerror="window.__STANDBOX=window.__STANDBOX||{}"></script>
 <!-- 这两个是**可选覆盖层**（超分记录 / WebP 覆盖），不存在属正常，仅静默失败 -->
 <script src="data/imgmap.x2.js?v=1029a"
         onerror="window.__IMGX2=window.__IMGX2||{}"></script>
+<!-- 演出特效逐帧数据（可选覆盖层：没装「剧情演出特效」时文件不存在，静默失败，
+     播放器会自动退回 emoji 版表情符号） -->
+<script src="data/advfx.js?v=1113a"
+        onerror="window.__ADVFX=window.__ADVFX||null"></script>
 <script src="data/imgmap.base.js?v=1029a"
         onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
   <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
-<script src="assets/js/common.js?v=1106a"></script>
+<script src="assets/js/common.js?v=1113a"></script>
 <script src="assets/js/header.js?v=1142a"></script>
 <script src="assets/js/i18n.js?v=1102a"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1105a"></script>
-<script src="assets/js/player.js?v=1108g"></script>
+<script src="assets/js/player.js?v=1113a"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136a"></script>
 <script src="assets/js/tour.js?v=1102a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
 <script src="assets/js/health.js?v=1101a"></script>
-<script src="assets/js/mobile.js?v=1103a"></script>
+<script src="assets/js/mobile.js?v=1113a"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
 const TOUR_STEPS = [
@@ -331,7 +350,9 @@ const TOUR_STEPS = [
   { el: '#controls', title: '⑧ 底下一排按钮',
     text: '左边三个是重播、播放/暂停、下一段；中间那条是进度，'
       + '<b>想往后看就直接点进度条</b>，会跳到那个位置（暂停时只跳过去、不会自己播）；'
-      + '右边是倍速、自动、对话框、全屏、翻译和设置。' },
+      + '右边是倍速、自动、对话框、全屏、翻译和设置；'
+      + '「自动」开着就像视频一样自己往下播，关掉就只能用「下一句 / 上一句」切句，'
+      + '这时点画面、按空格或点「▶ 下一句」都是走下一句。' },
   { el: '#btnKeys', title: '⑨ 快捷键记不住就看这里',
     text: '最右边这个「<b>?</b>」点一下，会把所有快捷键列出来，看一眼就会。'
       + '点别处、或者按 <b>Esc</b> 就关掉。' },

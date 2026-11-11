@@ -58,6 +58,13 @@ class Job:
         self.done = 0.0
         self.bytes_total = 0.0
         self.bytes_done = 0.0
+        #: 字节速度的起点：进度条一开头就"预扫本地已有"的字节不算这次下载的量
+        #: （点「补全」时 99% 的包早就在盘上，不扣掉会算出 400 MB/s 这种假网速）。
+        self.bytes_base = 0.0
+        #: 当前阶段的中文名（"下载" / "解包"）。前端据此把数值区从
+        #: 「12.3 MB / 800 MB」切换成「解包 120/2100 个」—— 解包阶段没有网络流量，
+        #: 继续显示"已下载 X MB"会让用户以为已经完事了（2026-11-10 反馈）。
+        self.phase_label = ""
         self.items_total = 0
         self.items_done = 0
         # 子进度（下载层的"包 x/y"）：多单元安装时，顶层百分比改由
@@ -128,24 +135,53 @@ class Job:
         self._sample()
 
     def phase(self, base: float, span: float, total: float | None = None,
-              unit: str = "", keep_bytes: bool = False) -> None:
+              unit: str = "", keep_bytes: bool = False,
+              label: str = "") -> None:
         """切到下一个阶段：把本阶段的内部进度映射到 ``base``~``base+span``。
 
         典型用法是「下载 0–60%、解包 60–100%」：只按下载字节算，下载完成就把
         进度条顶到 100%，而解包往往比下载还久，用户看到的是"100% 却一直不动"。
 
         新阶段默认不再按字节算（``keep_bytes=False``）：上一阶段的字节已经满了，
-        留着会让百分比永远顶在 100%；清掉之后前端也不再显示那条 "893 MB / 893 MB"。
+        留着会让百分比永远顶在 100%；**已下字节也一起清**——否则前端还会画出
+        「60.0% · 已下载 800 MB」，看着像"下载完了却卡在 60%"。
+
+        ``label``：这个阶段叫什么叫（"下载" / "解包"）。前端在非字节阶段
+        用 `「解包 120/2100 个」` 代替网速与"已下载"，避免"速度 0 但没到 100%" 的误解。
         """
         self.pct_base = float(base)
         self.pct_span = float(span)
+        self.phase_label = label or ""
         if not keep_bytes:
             self.bytes_total = 0.0
+            self.bytes_done = 0.0
+            self.bytes_base = 0.0
         if total is not None:
             self.set_total(total, unit)
             # 新阶段从 0 起算：上一阶段的 done 已经"溢出"（10/2），
             # 不归零会让这个阶段的百分比一上来就是 100%。
             self.done = 0.0
+        self._sample()
+
+    def restart_percent(self) -> None:
+        """把百分比的高水位与内部计数归零：同一任务里接着跑**另一段长流程**时用。
+
+        典型场景：刷新清单（两份 = 2/2 = 100%）之后顺手自动补公共素材。
+        高水位只许前进（见 snapshot），不清掉的话进度条会永远钉在 100% ——
+        后面几十分钟的下载与解包用户完全看不见，只能看到一个死的 100%。
+
+        只清"进度"相关字段，不动 message / detail / 日志。
+        """
+        self._pct_hi = 0.0
+        self.pct_base = 0.0
+        self.pct_span = 100.0
+        self.done = 0.0
+        self.bytes_done = 0.0
+        self.bytes_base = 0.0
+        self.phase_label = ""
+        # items 驱动的口径也要交还：否则 snapshot 仍按"第 i/N 部"算（外层已经走满）
+        self.items_total = 0
+        self.items_done = 0
         self._sample()
 
     def progress(self, done: float | None = None, add: float = 0.0,
@@ -360,10 +396,13 @@ class Job:
         # 旁边还挂着 390 KB/s 在跳，用户会以为程序在偷跑流量（2026-11-04 反馈）。
         if self.bytes_done >= self.bytes_total:
             return 0.0
+        # 只算**这次真下的**字节：点「补全」时本地已有几百 MB 会被预扫进
+        # bytes_done，不扣掉的话开头两秒会算出 400 MB/s 这种假网速。
+        delta = self.bytes_done - self.bytes_base
         dt = (self.ended or time.time()) - (self.started or self.created)
-        if dt < 1 or self.bytes_done <= 0:
+        if dt < 1 or delta <= 0:
             return 0.0
-        sp = self.bytes_done / dt
+        sp = delta / dt
         return sp if 0 < sp < 1e12 else 0.0
 
     def eta(self) -> float:
@@ -428,6 +467,13 @@ class Job:
             "started": self.started, "created": self.created,
             "total": self.total, "done": self.done,
             "percent": round(pct, 2),
+            # 阶段名（"下载" / "解包"）：前端在 bytesTotal=0 的阶段用它
+            # 把数值区从"已下载 X MB"换成「解包 120/2100 个」。
+            "phaseLabel": self.phase_label,
+            # 阶段在进度条上占的区间（百分点）：下载 0–60、解包 60–100。
+            # 前端据此在进度条上画一条分隔线 —— 否则用户看到「已下 900 MB / 1 GB」
+            # 而进度条才 54%，会以为算错了（2026-11-10 反馈）。
+            "phaseBase": self.pct_base, "phaseSpan": self.pct_span,
             "speed": sp, "eta": self.eta(),
             # 进度条的字节维度：已下大小 / 总大小 / 字节速度
             "bytesDone": bd, "bytesTotal": bt,

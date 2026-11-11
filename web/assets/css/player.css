@@ -161,6 +161,15 @@ select,input,button{font-family:inherit}
      （单行不换行时实测能超过窗宽，两端都被切掉）。 */
   max-width:min(76vw,860px);text-align:center;line-height:1.55}
 #toast.on{opacity:1}
+/* 声音解锁提示：浏览器拦下"无手势自动播放"时出现，点一下（或任意点击/按键）即补播。
+   位置贴控制条上方居中，别挡住对话框正文；必须可点，所以 pointer-events 恢复。 */
+.audio-hint{position:fixed;left:50%;bottom:88px;transform:translateX(-50%);z-index:200;
+  background:rgba(45,42,74,.97);color:var(--gold);border:1px solid #6b5aa8;
+  padding:8px 20px;border-radius:20px;font-size:14px;line-height:1.5;cursor:pointer;
+  box-shadow:0 6px 20px rgba(0,0,0,.45);max-width:min(76vw,620px);text-align:center;
+  animation:ahint 1.6s ease-in-out infinite}
+.audio-hint:hover{background:rgba(58,54,92,.98)}
+@keyframes ahint{0%,100%{opacity:.85}50%{opacity:1}}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 段标签条：**一行不换行**。段数多的时候由 #tabStrip 横向滚动 + 最右边的 ◀ ▶ 翻页，
    绝不换成两行把标题栏撑高（用户 2026-11-02 要求）。统计文字 #meta 放最左边。 */
@@ -203,16 +212,51 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   background:rgba(0,0,0,.5);padding:1px 7px;border-radius:8px;pointer-events:none;
   z-index:61}
 #stage{width:1280px;height:720px;position:relative;transform-origin:center center;
-  background:#05060a;overflow:hidden;flex-shrink:0}
+  background:#05060a;overflow:hidden;flex-shrink:0;
+  /* isolation:isolate 把 mix-blend-mode 的"混合组"关在舞台内部。
+     不设的话，特效里 plus-lighter 的粒子（冷気/邪気 一层 300 多颗）
+     会和**页面根层**一起参与混合，Chromium 一重绘（比如鼠标悬停控件）
+     就把同一组里的控件也按加色/透明黑重画 —— 表现为控件全黑
+     （2026-11-10 用户反馈：第55句 邪気 起，鼠标移到控件就全黑）。
+     布景本来就在 #stage 内部，隔离后照样能和背景/立绘混合。 */
+  isolation:isolate}
 #stage.f-sepia{filter:sepia(.85)}
 #stage.f-gray{filter:grayscale(1)}
 
-#bgLayer,#cgLayer,#fxLayer,#placeLayer,#flashLayer{position:absolute;inset:0}
+#bgLayer,#cgLayer,#fxLayer,#placeLayer,#flashLayer,#screffBack{position:absolute;inset:0}
 /* 明确图层顺序，避免立绘盖住文字窗 */
-#bgLayer{z-index:1}
-#cgLayer{z-index:2}
-#standLayer{z-index:3;position:absolute;inset:0}
-#fxLayer{z-index:20}
+/* bgLayer / cgLayer 同样不设 z-index：给了 z-index 之后它们会成为 stacking
+   context，无 z-index 的 #fxLayer 被压到下面 —— 特效整层不可见（实测把
+   #fxLayer 涂成红色也看不到）。DOM 顺序已经保证
+   bg → screffBack → stand → cg → fx 的层次。 */
+/* ShowScreenEffectBack 是「垫在立绘后面」的画面特效（11100 条），
+   和 ShowScreenEffect（盖在最前）用同一个渲染器但不同层 */
+/* 这三层**不设 z-index**：z-index 会让元素各自成为独立 stacking context，
+   .screff-fx 的 plus-lighter 就只能和层内透明背景相加、穿不到舞台背景，
+   加色退化成普通覆盖 —— heal_* 的全屏光带把画面压暗发紫、光柱也不亮
+   （2026-11-09 用户截图）。改由 DOM 顺序保证层次：
+   bgLayer → screffBack → standLayer → cgLayer → fxLayer，
+   placeLayer / flashLayer / msgWindow 仍用更高的 z-index 压在上面。 */
+/* ShowScreenEffectBack（11000 条）是"垫在立绘后面"的常驻特效：
+   它的加色必须和**背景**混合，混合结果再被立绘遮住。
+   把 bgLayer + screffBack 包进一个 isolation:isolate 组，就等于
+   "先合成背景+雾，再把整张图交给立绘去盖"。
+   不这么做的后果（实测）：plus-lighter 会连同 #stage 里后面绘制的立绘
+   一起参与合成，立绘不透明区（alpha=255，占 61%）仍多出 +14.7 亮度，
+   即雾透过立绘浮在人身上（2026-11-10 用户反馈 第57句）。
+   另外两种写法都不行：
+     · 给 #standLayer 加 z-index → 它成为 stacking context，
+       #fxLayer(z-index:auto) 被压到立绘下面，冷気 整层消失；
+     · 只给 #screffBack 加 isolation → 组内没有背景可混，
+       plus-lighter 退化成普通绘制，雾整层消失（全图亮度 177→153）。 */
+#backGroup{position:absolute;inset:0;isolation:isolate}
+#screffBack{position:absolute;inset:0}
+/* isolation:isolate 把 .stand 自己的 z-index 关在本层内，不让它外溢到
+   #stage 的 stacking context 去盖住 #fxLayer；同时 #standLayer 本身
+   仍是 z-index:auto，所以 #fxLayer 依然在它之上、且不是 stacking context，
+   .screff-fx 的 plus-lighter 才能和背景/立绘真正做加色。 */
+#standLayer{position:absolute;inset:0;isolation:isolate}
+#fxLayer{position:absolute;inset:0}
 #placeLayer{z-index:30}
 #flashLayer{z-index:40}
 #msgWindow{z-index:50}
@@ -222,7 +266,12 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 用最朴素的绝对定位，避免 flex/object-fit 影响图片实际渲染尺寸 */
 /* --standY 纵向偏移（正数向上），避免缩放后整体显得贴底 */
 .stand{position:absolute;bottom:var(--standY,0px);transform-origin:50% 100%;
-  transition:left .45s ease,bottom .3s ease,transform .35s ease,opacity .3s ease}
+  /* --offx / --offy = MotionStand「移動」累计的位移（剧本 Option1 横 / Option2 纵，
+     player.js 写）。默认 0，动作动画的关键帧必须带上它们，
+     见下面「立绘动作动画」那段注释。 */
+  --offx:0px;
+  --offy:0px;
+  transition:left .45s ease,top .45s ease,bottom .3s ease,transform .35s ease,opacity .3s ease}
 /* 高度上限 = 舞台高 720（由 JS 的 --standH 保证不超），超出会被 #stage 裁掉 */
 .stand img{display:block;height:auto;max-height:var(--standH,720px);
   max-width:1280px;image-rendering:auto;
@@ -230,44 +279,74 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
      以底部为原点缩放，避免三张满高图互相压盖 */
   transform:scale(var(--sc,1));transform-origin:50% 100%;
   filter:drop-shadow(0 6px 26px rgba(0,0,0,.75))}
+/* 官方落点模式：stand_box.js 里有这张立绘的 AlphaCutRect（游戏里在 1280x720
+   画布上的位置与尺寸）。left/top/宽度都由 player.js 按画布 px 写死，
+   这里只负责把「贴底居中」那套默认值让位（bottom:auto 否则 top+bottom 会拉伸）。 */
+/* 非说话者压暗：系数 0.5 来自游戏截图实测（同一角色同位置 RGB 等比 ×0.52，
+   无色偏/去色），见 player.js applyTalk() 的注释。挂在容器上，
+   与 MulStand 写在 img 上的 filter 相乘叠加。 */
+.stand.dim{filter:brightness(.5)}
+/* ShowStandFull：结局用的大立绘（从下方升起） */
+.standfull{position:absolute;inset:0;display:flex;justify-content:center;
+  align-items:flex-end;pointer-events:none;z-index:4}
+/* 高度按舞台 100%：PosY=-400 再上移一段，露出图的中上部（放大到 118% 会把
+   人脸顶出画面，实测只剩腰部）。 */
+.standfull img{height:100%;width:auto;max-width:none;opacity:.99;
+  filter:drop-shadow(0 8px 30px rgba(0,0,0,.7))}
+/* ShowStandAndSit：坐姿（相对站姿下沉 26px ≈ 立绘高 4%，和原作坐姿落差相当）。
+   用 !important 压过 showStand 写在内联 style 上的 transform。 */
+.stand.sit{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(26px) !important}
+.stand.boxed{bottom:auto}
+.stand.boxed img{max-height:none;max-width:1280px}
 #cgLayer img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   transition:transform .6s ease,opacity .5s ease;background:#05060a}
 
-/* 立绘动作动画 */
+/* 立绘动作动画
+   --tx 是「水平居中修正」：老布局靠 translateX(-50%) 让 left 指中心，
+   官方落点模式下 left 已经是左边缘（--tx:0px），动画不能再用死值，
+   否则一动就整体右移半张图。
+   --offx / --offy 是 MotionStand「移動」累计的位移（剧本 Option1 横 / Option2 纵，
+   ±50~±500）。
+   关键帧会**整体覆盖**内联 transform —— 不带这一项，被移动过的立绘会在动画
+   期间弹回官方原落点、动画结束再弹回位移点（2026-11-10 用户实测：
+   char_416 第1段第25句先 移動 +100 再 ShakeStand，立绘向左跳 100px 再跳回，
+   头顶表情气泡又不动，看着像人在乱飘）。 */
 .stand.m-pop{animation:standPop .52s cubic-bezier(.3,1.6,.5,1)}
-@keyframes standPop{0%{transform:translateX(-50%) translateY(0) scale(1)}
-  35%{transform:translateX(-50%) translateY(-26px) scale(1.035)}
-  70%{transform:translateX(-50%) translateY(4px) scale(.995)}
-  100%{transform:translateX(-50%) translateY(0) scale(1)}}
+@keyframes standPop{0%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(0) scale(1)}
+  35%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(-26px) scale(1.035)}
+  70%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(4px) scale(.995)}
+  100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(0) scale(1)}}
 .stand.m-bow{animation:standBow .52s ease}
-@keyframes standBow{0%{transform:translateX(-50%) rotate(0)}
-  45%{transform:translateX(-50%) translateY(14px) rotate(-3.2deg)}
-  100%{transform:translateX(-50%) rotate(0)}}
+@keyframes standBow{0%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(0)}
+  45%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(14px) rotate(-3.2deg)}
+  100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(0)}}
 .stand.m-sway{animation:standSway .52s ease}
-@keyframes standSway{0%{transform:translateX(-50%) rotate(0)}
-  25%{transform:translateX(-50%) rotate(2.4deg)}
-  60%{transform:translateX(-50%) rotate(-2.4deg)}
-  100%{transform:translateX(-50%) rotate(0)}}
+@keyframes standSway{0%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(0)}
+  25%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(2.4deg)}
+  60%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(-2.4deg)}
+  100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) rotate(0)}}
 .stand.m-tremble{animation:standTremble .5s linear}
-@keyframes standTremble{0%,100%{transform:translateX(-50%) translate(0,0)}
-  20%{transform:translateX(-50%) translate(-3px,1px)}
-  40%{transform:translateX(-50%) translate(3px,-1px)}
-  60%{transform:translateX(-50%) translate(-2px,-1px)}
-  80%{transform:translateX(-50%) translate(2px,1px)}}
+@keyframes standTremble{0%,100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translate(0,0)}
+  20%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translate(-3px,1px)}
+  40%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translate(3px,-1px)}
+  60%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translate(-2px,-1px)}
+  80%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translate(2px,1px)}}
 .stand.m-thrust{animation:standThrustR .5s ease}
-@keyframes standThrustR{0%,100%{transform:translateX(-50%) translateX(0)}
-  35%{transform:translateX(-50%) translateX(34px) scale(1.03)}}
+@keyframes standThrustR{0%,100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(0)}
+  35%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(34px) scale(1.03)}}
 .stand.m-thrust-l{animation:standThrustL .5s ease}
-@keyframes standThrustL{0%,100%{transform:translateX(-50%) translateX(0)}
-  35%{transform:translateX(-50%) translateX(-34px) scale(1.03)}}
+@keyframes standThrustL{0%,100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(0)}
+  35%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(-34px) scale(1.03)}}
+/* 幅度由剧本的 ShakePixel 给（数据里几乎都是 20），时长由 Time 给（多半 1s），
+   以前写死 7px / 0.4s，等于把每次抖动都演成同一个弱动作。 */
 .stand.m-shake{animation:standShake .4s linear}
-@keyframes standShake{0%,100%{transform:translateX(-50%)}
-  25%{transform:translateX(-50%) translateX(-7px)}
-  50%{transform:translateX(-50%) translateX(7px)}
-  75%{transform:translateX(-50%) translateX(-4px)}}
+@keyframes standShake{0%,100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px))}
+  25%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(calc(var(--sk,7px) * -1))}
+  50%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(var(--sk,7px))}
+  75%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateX(calc(var(--sk,7px) * -.55))}}
 .stand.m-move{animation:standMove .5s ease}
-@keyframes standMove{0%,100%{transform:translateX(-50%) translateY(0)}
-  50%{transform:translateX(-50%) translateY(-10px)}}
+@keyframes standMove{0%,100%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(0)}
+  50%{transform:translateX(var(--tx,-50%)) translate(var(--offx,0px), var(--offy,0px)) translateY(-10px)}}
 #flashLayer{pointer-events:none;opacity:0}
 #placeLayer{display:flex;align-items:center;justify-content:center;
   opacity:0;transition:opacity .5s}
@@ -277,11 +356,73 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   padding:14px 46px;background:rgba(0,0,0,.3)}
 
 /* 表情符号 / 画面特效 */
+/* 真素材版：da_mark_* 的逐帧数据（web/data/advfx.js）。
+   .mfx 是一个 0×0 的锚点容器，摆到立绘头部；每个部件一个 .mfx-p，
+   位置/缩放/透明度逐帧由 player.js 写 transform，所以这里只管静态样式。 */
+.mfx{position:absolute;width:0;height:0;pointer-events:none;
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.5))}
+.mfx-p{position:absolute;background-repeat:no-repeat;
+  will-change:transform,opacity}
+/* 降级版（素材未下载时的 emoji 兜底） */
 .seffect{position:absolute;font-size:51.5px;font-weight:700;color:#fff;
   text-shadow:0 0 14px #000,0 4px 10px #000;pointer-events:none;
   animation:popin .28s ease-out}
 @keyframes popin{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
 .screff{position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen}
+/* 画面特效逐帧部件：锚点在画布中心(640,360)，每帧由 JS 写 transform/opacity */
+/* 混合模式按部件自己的 OperationBlendTarget 决定（JS 逐件写 mix-blend-mode），
+   整层保持 normal。以前整层写死 plus-lighter，把 bl=0 的普通混合部件
+   （空想／image_loop 的白雾滤镜）也当成加色，全屏叠成纯白
+   （2026-11-09 用户反馈：播放器全白只剩字幕）。 */
+.screff.screff-fx{mix-blend-mode:normal}
+/* 逐帧写 transform，本来就每帧变；**不能加 will-change**：
+   冷気/邪気 一层就有 300 多颗 500~1000px 的粒子，will-change 会把每一颗
+   都提成独立合成层，显存/图块预算瞬间打爆，Chromium 会退化成
+   "整块画黑"——表现就是鼠标移到任意控件、控件全变黑（2026-11-10 用户反馈）。 */
+.screff .fxp{position:absolute;left:50%;top:50%;background-repeat:no-repeat;
+  pointer-events:none;transform-origin:0 0}
+/* 粒子层的 canvas（冷気/邪気/煙 这类几百颗大四边形）：整块铺满舞台，
+   内部按 1280×720 绘制、浏览器等比缩放。一帧 480 次 drawImage 取代 480 个 DOM 层。 */
+.screff .fxp.fxp-canvas{left:0;top:0;width:100%;height:100%;transform:none;
+  background:none}
+/* 加色粒子组：整组只做**一次** mix-blend-mode（一层数百颗逐个混合会被浏览器丢掉，
+   见 player.js）。容器必须铺满整屏——0×0 的容器会把混合层按 0 尺寸裁掉，
+   组内粒子全都不见了（实测）。子元素仍用 left/top 50% 定位到画布中心。 */
+/* 粒子组的混合模式取自发射器的 `OperationBlendTarget`：
+   官方 SsBlendType 里 mix=0、mul=1、add=2、sub=3。
+   冷気/邪気 的 de_ef_kiri_P 和 de_ef_cold_P 前两组都是 **1 = mul（正片叠底）**，
+   正是它把背景绿通道压下去的（实测四角 g 151→102，游戏 95）。
+   以前一律按 plus-lighter 加色，g 只会被抬高、永远降不下来。 */
+.screff .fxp-grp{position:absolute;left:0;top:0;width:100%;height:100%;
+  pointer-events:none;mix-blend-mode:plus-lighter}
+/* 冷気/邪気 的雾形与动效全部由包里的粒子（kiri + cold_P）产生；
+   之前自造的 radial 环带层已删除（2026-11-10 用户反馈：不该自己画特效）。 */
+/* 空想 / 空想／黒 的整屏雾层：锁死整屏、静态（不参与逐帧位移与缩放），
+   强度/形状由 JS 写的 radial-gradient 决定（见 player.js 的 fogGradient） */
+.screff .fxp.fx-flat{left:0;top:0;width:100%;height:100%;
+  transform:none!important;background-repeat:no-repeat}
+/* 画面特效的循环动画：只动 transform / filter，**不动 opacity**——
+   opacity 由 player.js 写内联做淡入淡出，动画改它会互相打架。 */
+/* 集中線：两层整屏放射细线，各带互补的扇形遮罩，交替明暗。
+   周期 0.267s（8 帧 @30fps），steps 硬切，模拟原作"来回交替隐藏一部分线条"；
+   整体不缩放、不位移。 */
+.screff .sln{position:absolute;inset:0;animation:scrAlt .267s steps(1,end) infinite}
+@keyframes scrAlt{0%{opacity:1}50%{opacity:.12}}
+.screff.scr-glow{animation:scrGlow 1.6s ease-in-out infinite}
+@keyframes scrGlow{0%,100%{transform:scale(1);filter:brightness(1)}
+  50%{transform:scale(1.07);filter:brightness(1.3)}}
+.screff.scr-heal{animation:scrHeal 1.5s ease-out infinite}
+@keyframes scrHeal{0%{transform:translateY(5%) scale(.96)}100%{transform:translateY(-5%) scale(1.04)}}
+.screff.scr-burst{animation:scrBurst .46s ease-out infinite}
+@keyframes scrBurst{0%{transform:scale(.72)}70%{transform:scale(1.1)}100%{transform:scale(1.16)}}
+.screff.scr-haze{animation:scrHaze 3.2s ease-in-out infinite}
+@keyframes scrHaze{0%,100%{transform:translate(0,0) scale(1)}
+  50%{transform:translate(1%,-1.5%) scale(1.05)}}
+@media (prefers-reduced-motion: reduce){
+  .screff.scr-lines,.screff.scr-glow,.screff.scr-heal,.screff.scr-burst,.screff.scr-haze{
+    animation:none}
+  .screff .spk{animation:none;opacity:.4}
+}
 
 /* 文字窗口：纯色 + 可调不透明度（不用毛玻璃） */
 /* --msgY 垂直位置、--msgH 最小高度，由设置里的滑块控制 */
@@ -371,14 +512,48 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   /* 关闭按钮已经移到面板外（浮窗），这里不用再给左侧留 44px 空白 */
   padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:14px;
   max-height:calc(100vh - 62px);overflow-y:auto}
-/* 分节标题 / 复选框行 / 说明文字 / 底部按钮：占满整行，不然两列会被拦腰截断 */
-#settings>h4,#settings>.row,#settings>.reset-row,#settings>div:not([class]){
+/* 分节标题 / 说明文字 / 底部按钮：占满整行，不然两列会被拦腰截断。
+   .row（复选框行）**不再**整行 —— 一行放两项才省地方（画面/播放那一节）。 */
+#settings>h4,#settings>.reset-row,#settings>div:not([class]){
   grid-column:1/-1}
 /* 同一行里两个控件高度不齐时，别让下面的项跟着错位 */
-#settings>label{align-self:start}
+#settings>label,#settings>.row{align-self:start}
+/* 「名称 + 下拉框」压在同一行（一行一列），下拉框不占满宽度。
+   上限 68% 是为了长选项（「原始 1x（最清晰）」「无框 + 柔和底衬」）在半列里也放得下。 */
+#settings label.ctlrow{display:flex;align-items:center;gap:8px;
+  justify-content:space-between}
+#settings label.ctlrow select{width:auto;flex:0 1 auto;min-width:0;max-width:68%;
+  margin-top:0;text-overflow:ellipsis}
+/* 占位格：某一类控件剩下单数时（「话者名」只有一个下拉框等），单独那项
+   仍旧只占**一列**，用一个 0 高度的空格把下一类顶到新的一行。
+   不要改成给它 grid-column:1/-1 —— 单行独项被拉成半屏宽很难看（用户明确反对）。 */
+#settings>.sp{height:0}
+/* 「?」角标：这一项鼠标移上去有详细说明。
+   没有它用户根本不知道有气泡可看（用户 2026-11-11 提的）。
+   角标本身不挂 title —— 气泡由父项（带 title 的 span / label）提供，
+   指针落在角标上时 closest('[title]') 找到的是父项。 */
+#settings .qh{display:inline-flex;align-items:center;justify-content:center;
+  width:17px;height:17px;box-sizing:border-box;flex:0 0 auto;
+  border:1px solid currentColor;border-radius:50%;
+  font-size:14px;font-weight:600;font-style:normal;line-height:1;
+  margin-left:5px;vertical-align:1px;opacity:.45;cursor:help}
+#settings .qh:hover{opacity:.95;color:var(--gold)}
+/* 一行两项的 flex 行里，把角标粘在名字后面，别被 space-between 推到中间 */
+#settings .ctlrow>.qh{margin-right:auto}
+/* 设置项的悬停说明气泡（player.js 的 initSettingTips 创建）。
+   字号必须 ≥14px：原生 title 气泡在 Edge 里只有 12px，用户反馈"太小"。
+   z-index 必须高过**移动端全屏化的设置面板**（mobile.css 里 #settings 是 300、
+   关闭按钮 310），否则手机上气泡画在面板底下 = 手指点了没反应（2026-11-11 反馈）。 */
+#tipBox{position:fixed;left:0;top:0;z-index:900;max-width:min(340px,calc(100vw - 24px));
+  padding:7px 11px;border-radius:8px;background:rgba(12,16,24,.97);
+  border:1px solid var(--line2);color:var(--fg);font-size:14px;line-height:1.55;
+  white-space:pre-line;box-shadow:0 8px 26px rgba(0,0,0,.72);
+  pointer-events:none;opacity:0;transform:translateY(2px);
+  transition:opacity .12s ease,transform .12s ease}
+#tipBox.on{opacity:1;transform:none}
 /* 当前模式下不起作用的设置项：变淡 + 禁止操作（无框字幕时的背景色 / 不透明度） */
 #settings select:disabled,#settings input:disabled{opacity:.4;cursor:not-allowed}
-#settings h4{font-size:14px;color:var(--gold);letter-spacing:1px;margin:9px 0 5px;
+#settings h4{font-size:14px;color:var(--gold);letter-spacing:1px;margin:7px 0 4px;
   padding-bottom:5px;border-bottom:1px solid var(--line);font-weight:600}
 #settings h4:first-child{margin-top:0}
 #settings[hidden]{display:none}
@@ -400,17 +575,19 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   border:1px solid var(--line);color:#7f97b0;font-size:19px;font-weight:600;
   letter-spacing:0;user-select:none}
 .char-btn.nodl .ava-ph{color:#5d6f84;border-color:#1a2836}
-#settings label{display:block;margin-bottom:5px;color:var(--fg2)}
+/* 行间距压到 3px：设置项按类型两两并排后总高会涨一截，
+   不压这一点 1080p 下就要出滚动条（用户明确嫌"占地方"） */
+#settings label{display:block;margin-bottom:3px;color:var(--fg2)}
 #settings label span{float:right;color:var(--gold);font-family:monospace}
 #settings input[type=range]{width:100%;margin-top:4px;accent-color:var(--purple)}
 #settings select{width:100%;margin-top:4px;padding:3px 6px;border-radius:5px;
   border:1px solid var(--line);background:var(--bg3);color:var(--fg);font-size:14px}
 #settings .row{display:flex;justify-content:space-between;align-items:center;
-  color:var(--fg2)}
+  color:var(--fg2);margin:0 0 6px;padding:2px 0}
 #btnSet{background:var(--bg3);border:1px solid var(--line);color:var(--fg);
   border-radius:6px;padding:4px 9px;cursor:pointer;font-size:15.7px}
 #btnSet:hover{color:var(--gold)}
-#settings .reset-row{margin-top:10px;text-align:right}
+#settings .reset-row{margin-top:8px;text-align:right}
 #settings .reset-row button{background:var(--bg3);border:1px solid var(--line);
   color:var(--fg);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
 #settings .reset-row button:hover{color:var(--gold);background:#2a3448}
@@ -419,6 +596,12 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   #settings{width:calc(100vw - 96px);grid-template-columns:1fr;gap:0}
 }
 #msgText.narr{font-style:normal}
+/* 台词行内图标：<sprite=0> 是那颗粉色小爱心（素材由 export_adv_effects.py 从
+   bundle_font_66_heart_03 裁出来，见 advfx.js 的 msgspr）。
+   尺寸跟着字号走（1em），纵向略下沉对齐文字基线，不参与打字机换行计算。 */
+#msgText .mspr{display:inline-block;width:.98em;height:.98em;
+  vertical-align:-.16em;background:center/contain no-repeat;
+  margin:0 .05em 0 .04em}
 /* 段间提示（「第 N 段播放完毕 · …」）：借用对话框的位置，但居中 + 金色 + 加粗，
    一眼能看出这不是剧情台词。背景/立绘不动，只是台词换了这一行。 */
 #msgText.partNotice{display:flex;align-items:center;justify-content:center;

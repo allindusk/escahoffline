@@ -23,7 +23,13 @@ $ErrorActionPreference = "Stop"
 $INDEX_FILES = @(
     'advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
     'imgmap.js', 'index.js', 'names.js', 'othereps.js',
-    'packs.links.js', 'stand_layers.json'
+    'packs.links.js', 'stand_layers.json',
+    # stand_box.js = 立绘画布落点表（AlphaCutRect + ExpressionCutRect），
+    # 由 server/cdn/scripts/gen_stand_box.py 从 base_info 导出。**是程序表，不是用户数据**：
+    # 少了它播放器只能退回"贴底居中 + 62% 宽"的近似，立绘位置、表情气泡锚点全都不对
+    # （2026-11-10 用户实测：老安装里气泡跑到头的另一边）。新增文件默认不进包，
+    # 所以这里**必须显式列上**，否则发出去的包自己都缺一份。
+    'stand_box.js'
 )
 
 New-Item -ItemType Directory -Force -Path $Dst | Out-Null

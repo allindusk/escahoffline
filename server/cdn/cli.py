@@ -74,7 +74,8 @@ def cmd_doctor(a) -> int:
     print("=== 网页数据 ===")
     chars = [f for f in os.listdir(DATA) if f.startswith("char_") and f.endswith(".js")]
     print(f"  char_*.js   {len(chars)} 个")
-    for fn in ("index.js", "imgmap.js", "names.js", "charmeta.js", "sfxmap.js"):
+    for fn in ("index.js", "imgmap.js", "names.js", "charmeta.js", "sfxmap.js",
+               "stand_box.js"):
         p = os.path.join(DATA, fn)
         print(f"  {fn:<12} {'✓' if os.path.exists(p) else '✗'}")
     return 0

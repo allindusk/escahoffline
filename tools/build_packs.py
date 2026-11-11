@@ -66,7 +66,7 @@ INDEX_FILES = [
     "data/names.js", "data/index.js", "data/advindex.js", "data/othereps.js",
     "data/imgmap.js", "data/imgmap.x2.js", "data/imgmap.base.js", "data/sfxmap.js",
     "data/charmeta.js", "data/cgmap.js",
-    "data/stand_layers.json", "data/stand_slot.json",
+    "data/stand_layers.json", "data/stand_slot.json", "data/stand_box.js",
 ]
 
 UNIT_RE = r"^(char_\d+|adv_(?:main|event|other|side|tutorial|op)(?:_\d+)?)$"

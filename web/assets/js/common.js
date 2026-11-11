@@ -299,4 +299,137 @@
       return s ? s.has(String(key)) : null;
     },
   };
+
+  /* ------------------------------------------------------------ 搜索框「清除 ✕」
+   * 需求（用户 2026-11-09）：所有搜角色 / 搜剧情的搜索框后面都加一个打叉，
+   * 点了就清空并把列表恢复成"没搜索之前"的样子。
+   *
+   * 三处搜索框（播放器侧栏 #search、CG 页 #q、控制台 5 个列表的 .sl-search）
+   * 布局各不相同，各写一套必然走样，所以统一在这里做：插按钮 + 注入一次样式。
+   * 这里只负责"清空 + 派发 input 事件"，重筛仍由页面自己的防抖处理（都是
+   * input → render），所以点叉之后列表就是空筛选的结果，与手动删字完全一致。
+   */
+  let _clearCss = false;
+  function injectClearCss() {
+    if (_clearCss) return;
+    _clearCss = true;
+    const st = document.createElement('style');
+    st.id = 'escClearCss';
+    st.textContent = [
+      /* 叉要跟输入框"正中"对齐，只能以输入框自己的高度为准：
+         wrap 只当定位容器，高度必须严格等于 input —— 输入框的外边距全部搬到
+         wrap 上（见 searchClear），再把 input 变成块级，去掉行盒基线留的空隙。
+         以前只搬左右外边距，块级 input 的 margin-bottom 留在里面、wrap 又不会
+         和它塌陷，wrap 就比输入框高出 8~10px，叉看着就是歪的。 */
+      '.esc-clear-wrap{position:relative;display:block}',
+      '.esc-clear-wrap>input{display:block;width:100%;box-sizing:border-box;margin:0}',
+      /* top/bottom:0 + margin:auto = 几何居中：不用百分比、不会有半像素模糊，
+         wrap 高多少都正好压在中间。 */
+      '.esc-clear-wrap>.esc-clear{position:absolute;top:0;bottom:0;right:6px;',
+      '  margin:auto 0;width:18px;height:18px;display:flex;align-items:center;',
+      '  justify-content:center;border:0;padding:0;border-radius:50%;cursor:pointer;',
+      '  background:rgba(255,255,255,.07);color:#b6c0d2;',
+      '  transition:background .15s,color .15s}',
+      /* ✕ 用两条伪元素斜线画，别用字符：字符带字体基线，圆里会偏下 1~2px */
+      '.esc-clear-wrap>.esc-clear::before,.esc-clear-wrap>.esc-clear::after{',
+      '  content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;',
+      '  border-radius:1px;background:currentColor;',
+      '  transform:translate(-50%,-50%) rotate(45deg)}',
+      '.esc-clear-wrap>.esc-clear::after{transform:translate(-50%,-50%) rotate(-45deg)}',
+      '.esc-clear-wrap>.esc-clear:hover{background:rgba(255,255,255,.22);color:#fff}',
+      '.esc-clear-wrap>.esc-clear:focus-visible{outline:2px solid var(--purple,#8b7cf6)}',
+      /* display:flex 会盖掉 UA 的 [hidden]{display:none}，必须自己写一条 */
+      '.esc-clear-wrap>.esc-clear[hidden]{display:none}',
+    ].join('');
+    document.head.appendChild(st);
+  }
+
+  /**
+   * 给一个搜索输入框加上"清除 ✕"。
+   * @param {Element} input 搜索用的 input
+   * @returns {Element|null} 清除按钮（便于测试/自动化）
+   */
+  ESC.searchClear = function (input) {
+    if (!input || input._escClear) return null;
+    input._escClear = true;
+    injectClearCss();
+
+    const cs = getComputedStyle(input);
+
+    /* 输入框可能原来是 flex 子项（控制台 .sl-search{flex:1 1 200px}）：
+       包一层后这些尺寸属性要挪到外层，否则那一行会塌成一个窄框。 */
+    const flexItem = parseFloat(cs.flexGrow) > 0
+      || (cs.flexBasis && cs.flexBasis !== 'auto' && cs.flexBasis !== '0%');
+
+    const wrap = document.createElement('span');
+    wrap.className = 'esc-clear-wrap';
+    if (flexItem) {
+      if (cs.flex) wrap.style.flex = cs.flex;
+      if (cs.minWidth && cs.minWidth !== 'auto' && parseFloat(cs.minWidth)) {
+        wrap.style.minWidth = cs.minWidth;
+      }
+    }
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    /* 四边外边距全部搬到外层：只要有一边留在输入框上，wrap 就会比输入框高一截
+       （块级父元素在这里不会和子元素发生外边距塌陷），叉必然偏上或偏下 ——
+       这正是之前播放器页偏下 5px、CG 页偏上 4px 的原因。搬完 wrap 高度
+       就等于输入框高度，叉的居中才是真的几何居中。 */
+    ['Top', 'Right', 'Bottom', 'Left'].forEach(function (side) {
+      const v = cs['margin' + side];
+      if (v && v !== '0px') wrap.style['margin' + side] = v;
+      input.style.setProperty('margin-' + side.toLowerCase(), '0px', 'important');
+    });
+    /* 宽度一律用行内样式，别赌级联：各页选择器权重不一样（CG 页是
+       `#sidebar #q{width:auto}`），统一成"撑满 wrap 的 border box"，
+       顺便保证 content-box 的页不会撑出外层把叉挤到框外。 */
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    input.style.display = 'block';
+    input.style.paddingRight = '30px';      // 让文字别压到叉上
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'esc-clear';
+    btn.hidden = true;
+    btn.title = (window.L10N && L10N.t) ? L10N.t('search.clear', '清除搜索') : '清除搜索';
+    btn.setAttribute('aria-label', btn.title);
+    // 叉本身由 CSS 伪元素画（位置写死 50%/50%），不塞字符：字体基线会让 ✕ 偏下
+    wrap.appendChild(btn);
+
+    const sync = () => { btn.hidden = !input.value; };
+    const clear = ev => {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      if (!input.value) return;
+      input.value = '';
+      // 派发 input：各页面原有的防抖重筛会跑一遍，等价于用户手动删光
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      sync();
+      input.focus();
+    };
+    // mousedown 先拦一下：点叉不会把焦点从输入框抢走（桌面上手一松就能继续打字）
+    btn.addEventListener('mousedown', ev => ev.preventDefault());
+    btn.addEventListener('click', clear);
+    /* 有的地方是代码里直接 `input.value=''`（切分类/离开播放记录），不会发 input
+       事件，所以这些时机都顺手同步一次显示状态。 */
+    ['input', 'change', 'keyup', 'click', 'focus', 'blur'].forEach(ev =>
+      input.addEventListener(ev, sync));
+    _clearReg.push(sync);
+    sync();
+    return btn;
+  };
+
+  /* 代码里改 value（不派发 input）时，靠下面这两个捕获阶段监听把叉的显隐补正：
+     用户点任何地方/按任何键，都顺手对一遍（几处搜索框，开销可以忽略）。
+     setTimeout 那一遍是必需的：切分类这类处理里是**在 click 里**才把 value 清空的，
+     捕获阶段先跑，看到的是清空前的老值。 */
+  const _clearReg = [];
+  const syncAll = () => _clearReg.forEach(f => f());
+  ['click', 'keydown'].forEach(ev => {
+    document.addEventListener(ev, () => {
+      syncAll();
+      setTimeout(syncAll, 0);
+    }, true);
+  });
 })();

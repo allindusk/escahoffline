@@ -81,6 +81,9 @@
 !/web/data/othereps.js
 !/web/data/packs.links.js
 !/web/data/stand_layers.json
+# stand_box.js：立绘在 1280x720 画布上的官方落点/尺寸（stand_box 缺失 = 立绘缩一圈、
+# 位置偏低，所以必须随程序发；本机装完新角色后由 gen_stand_box.py 覆盖更新）
+!/web/data/stand_box.js
 
 # ---------- web/media ----------
 # 解包出来的图片语音全在本机，仓库里只留一个空目录占位
@@ -109,4 +112,8 @@ __pycache__/
 
 # 视频导出的渲染中间产物
 /tools/video/out/
+
+# 临时探针脚本（调试用，不进仓库也不进更新包；需要时现场写）
+# 已有 tools/_gh_route_bench.py 是历史文件、且已跟踪，规则不回溯，不影响它
+/tools/_probe_*
 

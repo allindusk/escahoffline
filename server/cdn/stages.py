@@ -866,10 +866,15 @@ def export_adv_voices(key: str, bundles: list, dry: bool = False) -> dict:
 # ================================================================ 图片
 
 
-def export_images(mf: select.Manifest, ids: dict, workers: int = 32) -> dict:
+def export_images(mf: select.Manifest, ids: dict, workers: int = 32,
+                  on_bundle=None) -> dict:
     """按需导出背景/CG/分层立绘部件。
 
     ``ids`` 是 :func:`pipeline.select.collect_assets` 的输出。调用方负责先下载包。
+
+    ``on_bundle``：每处理完一个 bundle 回调一次。公共素材的"补全"要靠它把
+    背景解包（602 个包，比下载还久）画进进度条 —— 只按类别推进的话，
+    这段时间进度条是一动不动的。
     """
     import UnityPy
 
@@ -906,15 +911,27 @@ def export_images(mf: select.Manifest, ids: dict, workers: int = 32) -> dict:
         os.makedirs(os.path.join(IMG, sub), exist_ok=True)
 
     n_new = n_skip = n_fail = 0
+
+    def _tick():
+        """每包一次回调：进度条（公共素材补全）要知道背景解包走到第几个包了。"""
+        if on_bundle is None:
+            return
+        try:
+            on_bundle()
+        except Exception:                                     # noqa: BLE001
+            pass
+
     for bname, wanted in sorted(bybundle.items()):
         path = os.path.join(FILES_IMG, bname)
         if not os.path.exists(path):
             n_fail += len(wanted)
+            _tick()
             continue
         try:
             env = UnityPy.load(path)
         except Exception:
             n_fail += len(wanted)
+            _tick()
             continue
         got = set()
         for obj in env.objects:
@@ -944,6 +961,7 @@ def export_images(mf: select.Manifest, ids: dict, workers: int = 32) -> dict:
             except Exception:
                 continue
         n_fail += len(wanted) - len(got)
+        _tick()
     print(f"  图片导出：新增 {n_new} 跳过 {n_skip} 失败 {n_fail} "
           f"（无 bundle 映射 {len(miss)}）")
     for k, s in miss[:8]:
@@ -1239,6 +1257,20 @@ def stand_size_report(nums) -> list[str]:
     return out
 
 
+def regen_stand_box() -> None:
+    """重生成 ``data/stand_box.js`` —— 立绘在 1280x720 画布上的官方落点与尺寸。
+
+    来源是资源包 ``base_info`` 的 AlphaCutRect（Center = 原样，Left/Right 再平移
+    站位锚点 ±320）。前端没有这张表就只能"贴底居中 + 按人数缩小"，表现是立绘
+    比游戏里小一圈、位置偏低（伞/头顶明显违和）。所以每次合成完立绘都要刷一次。
+    全量只读 TextAsset、不解码贴图，秒级；失败不能拖累安装，异常一律吞掉。
+    """
+    try:
+        run_script("gen_stand_box.py", quiet=True)
+    except Exception as e:                                     # noqa: BLE001
+        _say(f"  stand_box.js 生成失败（立绘回退旧布局）：{e}")
+
+
 def compose_stands(nums) -> None:
     """委派 ``compose_stand_all.py`` 合成表情差分，并**合并**落点文件。
 
@@ -1298,6 +1330,8 @@ def compose_stands(nums) -> None:
             _say("    " + b)
     else:
         _say("  立绘尺寸一致 ✓")
+    # 画布落点表要跟着一起刷：漏了就会"新装的角色立绘比游戏里小一圈、还贴底"
+    regen_stand_box()
     _say(f"  合成用时 {time.time() - t0:.0f}s")
 
 

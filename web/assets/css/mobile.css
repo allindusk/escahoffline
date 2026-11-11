@@ -133,6 +133,10 @@
     font-size: 17px !important; z-index: 310 !important;
   }
 
+  /* 设置项的「?」角标在手机上要按得中：桌面 17px 对指尖太小，
+     放大到 22px 并加点内边距（气泡请点它或在带说明的那一项上点一下）。 */
+  #settings .qh { width:22px; height:22px; font-size:15px; margin-left:7px; }
+
   /* 段标签条横向滚动，别把翻页按钮挤出去 */
   #tabs { padding: 4px 8px; gap: 6px; overflow: hidden; }
   /* 统计文字（「6 段 · 910 句 · 321 语音 · 已译 2/899」）在手机上先让位：

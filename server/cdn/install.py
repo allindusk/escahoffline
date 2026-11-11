@@ -410,6 +410,13 @@ def unit_status_map() -> dict[str, str]:
 #: 横幅类包的两种前缀
 BANNER_PREFIXES = ("bundle_episodeicons_episode_character_", "bundle_image_story_")
 
+#: 演出特效（advfx）要用到的包：
+#:   · bundle_image_adv        —— 表情符号图集 + 画面特效逐帧参数表
+#:   · bundle_font_66_heart_03 —— 台词行内图标（<sprite=0> 的那颗粉色心形，
+#:     TMP SpriteAsset）。它归在 bundle_font 里，光看 bundle_image_adv
+#:     是拿不到的，漏了它台词里「……❤❤❤」的心就会缺失。
+ADVFX_PREFIXES = ("bundle_image_adv", "bundle_font_66_heart_03")
+
 #: **清理缓存时必须保留**的包前缀。
 #: 这些包不会被任何剧本引用（头像/横幅/背景/BGM/音效都是"全局共用"），
 #: 若交给"按引用差集删"，用户清理一次就会把它们全删掉 ——
@@ -423,6 +430,8 @@ PROTECTED_PREFIXES = (
     "bundle_home2charathumbnails_",
     "bundle_bgimage_",                    # 背景（公共素材）
     "bundle_music_", "bundle_sound_",     # BGM / 音效（公共素材）
+    "bundle_image_adv",                   # 演出特效（表情符号图集 + 逐帧参数表）
+    "bundle_font_66_heart_03",            # 台词行内图标（<sprite=0> 心形）
 )
 
 
@@ -474,6 +483,8 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         _total += len([n for n in mf.index if n.startswith("bundle_chara_c-panel_")])
     if "banner" in parts:
         _total += len([n for n in mf.index if n.startswith(BANNER_PREFIXES)])
+    if "advfx" in parts:
+        _total += len([n for n in mf.index if n.startswith(ADVFX_PREFIXES)])
     fails: list[str] = []
     hints: list[str] = []
 
@@ -495,6 +506,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
 
     done_base = 0
     if job is not None and _total:
+        # 一个任务里可能"先刷新清单、再顺手补公共素材"（见 api._auto_fill_public）：
+        # 那条流程走到这里时进度已经是 100%（2/2 份清单），不清高水位的话
+        # 后面整段下载 + 解包都会顶在 100% 上不动。独立点「补全」时无副作用。
+        job.restart_percent()
         job.set_total(_total, "个")
         # 总字节也一起给出来，进度条才能显示"12.3 / 775 MB"
         _bytes = 0
@@ -509,6 +524,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
             _bytes += sum(int(e.get("size") or 0)
                           for n, e in mf.index.items()
                           if n.startswith(BANNER_PREFIXES))
+        if "advfx" in parts:
+            _bytes += sum(int(e.get("size") or 0)
+                          for n, e in mf.index.items()
+                          if n.startswith(ADVFX_PREFIXES))
         for _pref in ("bundle_music_", "bundle_sound_"):
             if (_pref == "bundle_music_" and "bgm" not in parts) or \
                (_pref == "bundle_sound_" and "sfx" not in parts):
@@ -516,6 +535,12 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
             _bytes += sum(int(e.get("size") or 0) for n, e in mf.index.items()
                           if n.startswith(_pref))
         job.bytes_total = _bytes
+        # **下载阶段只占 0–60%**：解包（背景逐包开图、头像 385 张重裁）常常比
+        # 下载还慢，而以前这里没设阶段映射，默认就是 0–100% —— 下载一完
+        # bytes_done 就撞到 bytes_total，进度条顶到 100%（高水位还会把它钉死），
+        # 后面几十分钟的解包全程显示 100%，用户以为已经完成（2026-11-10 反馈）。
+        # keep_bytes=True：这一阶段仍然要按字节算进度，不能把分母清掉。
+        job.phase(0.0, 60.0, keep_bytes=True)
 
     # 先把「要下的全部包」按类别登记好，再分两个阶段执行：
     #   阶段一：一股脑把全部资源包下载完（网络瓶颈，默认 32 并发）
@@ -548,6 +573,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         ents = _entries(mf, names)
         sz = sum(int(e.get("size") or 0) for e in ents)
         plan.append({"tag": "banner", "label": "剧情横幅", "ents": ents, "sz": sz})
+    if "advfx" in parts:
+        ents = [e for n, e in mf.index.items() if n.startswith(ADVFX_PREFIXES)]
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        plan.append({"tag": "advfx", "label": "演出特效", "ents": ents, "sz": sz})
 
     # ---- 进度条的起点：先把"磁盘上已有、这次不会重下"的字节扫进来 ----
     # 必须是全量已完成字节，而不是本次新下的字节：用户第二次点「补全」时，
@@ -569,6 +598,9 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                     pass
         if _have:
             job.bytes_done = max(job.bytes_done, float(_have))
+            # 预扫进来的字节不是"这次下载的量"：不设基线的话，任务开头两秒
+            # 会按 800 MB / 2 秒算出几百 MB/s 的假网速（用户会以为中了木马）。
+            job.bytes_base = float(_have)
             job.log(f"本地已有 {_have / 1048576:.0f} MB 不会重下，进度从这部分开始算")
 
     # ---- 阶段一：下载全部资源包 ----
@@ -589,19 +621,32 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     # ---- 阶段二：逐个类别解包 ----
     # 百分比分两段：下载 0–60%、解包 60–100%。解包（尤其背景）常常比下载还久，
     # 如果仍按下载字节算，下载一完进度条就顶到 100% 干等十几分钟，像卡死了。
+    #
+    # 解包阶段的计数单位是**包**（不是"类"）：只按 6 个类推进的话，背景那一类
+    # 要跑十几分钟而进度条纹丝不动，用户还是会当成卡死。背景与头像逐包推进，
+    # 其余类别（子进程导出）只能整类补足配额。
     if job is not None:
-        job.phase(60.0, 40.0, total=max(1, len(plan)), unit="类")
+        # 这句要留在"操作记录"里：进度条只有 60% 时最容易让人以为算错了
+        # （明明 1 GB 的素材已经下到 900 MB），所以必须说清"下载只占前 60%"。
+        job.log("下载阶段结束（进度条 60%）。接下来解包：不再联网，"
+                "把资源包解成图片/音频，占进度条后 40%")
+        job.phase(60.0, 40.0, total=max(1, _total), unit="个", label="解包")
         job.progress(done=0)
     for step in plan:
         tag = step["tag"]
         ents = step["ents"]
         sz = step["sz"]
+        quota = len(ents)          # 与 phase(total=_total) 同一口径：按包记账
+        _d0 = job.done if job is not None else 0.0
         if job is not None and ents:
             extra = "，这步比下载还久" if tag == "bg" else ""
-            job.progress(message=f"解包{step['label']}（{len(ents)} 个包{extra}）…")
+            job.progress(message=f"解包{step['label']}（{len(ents)} 个包{extra}，"
+                                 "占进度条后 40%）…")
         if tag == "bg":
             stages.export_images(mf, {"back": set(step["keys"]),
-                                      "stand": set(), "cg": set()})
+                                      "stand": set(), "cg": set()},
+                                 on_bundle=(lambda: job.progress(add=1))
+                                 if job is not None else None)
             out["bg"] = len(ents)
             out["bytes"] += sz
         elif tag in ("bgm", "sfx"):
@@ -631,6 +676,8 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                     n_bad += 1
                     if job is not None and n_bad <= 3:
                         job.log(f"   头像导出失败 cid={tail}：{str(ex)[:80]}")
+                if job is not None:
+                    job.progress(add=1)      # 逐张推进：385 张要跑好几分钟
             # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
             try:
                 stages.regen_imgmap()
@@ -658,10 +705,36 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                     job.log(f"   章节横幅导出失败：{e}")
             out["banner"] = len(ents)
             out["bytes"] += sz
+        elif tag == "advfx":
+            # 演出特效不能直接给前端：包里是 CPE 数据结构 + 一张 512² 图集，
+            # 必须在本机解成「逐帧 JSON（web/data/advfx.js）+ 无损 webp」，
+            # 播放器才能按 30fps 摆部件。逻辑全在 export_adv_effects.py。
+            if job is not None:
+                job.progress(message="解包演出特效（表情符号逐帧数据）…")
+            cnt = stages.run_script("export_adv_effects.py", quiet=True)
+            oks = os.path.exists(os.path.join(config.WEB, "data", "advfx.js"))
+            if not oks:
+                fails.append("演出特效：包下到了但没能解出逐帧数据"
+                             f"（导出脚本 exit={cnt}，详见日志）")
+                hints.append("重装一次公共素材；仍失败请反馈日志里的 advfx 段落")
+            out["advfx"] = 1 if oks else 0
+            out["bytes"] += sz
 
-        # 每解包完一类推一格（解包阶段百分比由"类"决定，见上面 job.phase）
+        # 每解包完一类，把"这一类该记的包数"补足：
+        # 背景与头像是逐包推进的（上面已 add 过），背景/音效/横幅/特效是整块做完，
+        # 这里一次性补上配额。统一按包记账，百分比才不会在背景那一类冻住十几分钟。
         if job is not None:
-            job.progress(add=1, message=f"{step['label']} 已就绪")
+            owe = quota - (job.done - _d0)
+            if owe > 0:
+                job.progress(add=owe, message=f"{step['label']} 已就绪")
+            else:
+                job.progress(message=f"{step['label']} 已就绪")
+
+    # 兜底：解包阶段的配额按"包数"记，个别类别的实际回调数可能与配额差一个
+    # （一个包装着多张图/多张背景时只回调一次）。这里补到 100%，
+    # 免得任务明明跑完了、进度条还停在 99.6%。
+    if job is not None and job.total and job.done < job.total:
+        job.progress(done=float(job.total))
 
     # 记录本次各类的清单包数，下次刷新清单据此判断"有没有新增"
     # **有失败就不写**：写了等于"这一类已经跟上清单"，下次刷新就不会自动补，
@@ -683,7 +756,8 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                                       ("BGM", "music", "musicTotal"),
                                       ("音效", "sfx", "sfxTotal"),
                                       ("头像", "avatar", "avatarTotal"),
-                                      ("横幅", "banner", "bannerTotal")):
+                                      ("横幅", "banner", "bannerTotal"),
+                                      ("演出特效", "advfx", "advfxTotal")):
             have, total = int(st.get(have_k) or 0), int(st.get(total_k) or 0)
             if total and have < total * 0.98:
                 short.append(f"{name} {have}/{total}")
@@ -752,6 +826,9 @@ def _cur_counts() -> dict:
         "sfx": len([n for n in idx if n.startswith("bundle_sound_")]),
         "avatar": len([n for n in idx if n.startswith("bundle_chara_c-panel_")]),
         "banner": len([n for n in idx if n.startswith(BANNER_PREFIXES)]),
+        # 演出特效：新类别。oldua 的 stamp 里没有这个键 → new_public() 判为
+        # 「从没下过」，老用户刷新清单时会自动把它列进待补，不用手动勾。
+        "advfx": len([n for n in idx if n.startswith(ADVFX_PREFIXES)]),
     }
 
 
@@ -1017,6 +1094,14 @@ def public_status() -> dict:
                    + min(n_story_banner, story_total))
     n_banner_img = len(story_files)
 
+    # 演出特效：产物是「逐帧 JSON + 图集 webp + 台词行内图标」，齐了才算装上。
+    # 判的是产物不是 bundle 缓存：用户清过缓存后特效仍然能播，不该显示成缺。
+    # msg_heart.png（<sprite=0> 的粉心）是这一版新加的产物：老用户这里会判成
+    # 未完成 → 点「补全」重装一次就会连 bundle_font_66_heart_03 一起拉下来重导。
+    advfx_ok = (os.path.exists(os.path.join(config.DATA, "advfx.js"))
+                and os.path.exists(os.path.join(config.IMG, "advfx", "mark.webp"))
+                and os.path.exists(os.path.join(config.IMG, "advfx", "msg_heart.png")))
+
     return {"back": n_back, "backTotal": back_total,
             # 背景的三个补充口径：
             #   backPacks   = 清单里的 bgimage 包数（612）
@@ -1042,10 +1127,13 @@ def public_status() -> dict:
             # 结构版本：前端据此判断"后端是不是还没重启/还是旧代码"。
             # 2 = 加了 banner 字段；3 = 横幅改成按图数（角色/章节分开）；
             # 4 = 背景改成"按引用算" + backPacks/backRefMiss/backUnused；
-            # 5 = 加 backVerified（前端据此对"已核对过"的背景按 1:1 严格判齐）。
+            # 5 = 加 backVerified（前端据此对"已核对过"的背景按 1:1 严格判齐）；
+            # 6 = 加 advfx（演出特效：表情符号逐帧数据 + 图集）。
+            # 7 = advfx 追加台词行内图标 msg_heart.png（<sprite=0>）。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
-            "v": 5,
+            "advfx": 1 if advfx_ok else 0, "advfxTotal": 1,
+            "v": 7,
             "bytes": 0}
 
 

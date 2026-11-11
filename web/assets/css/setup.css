@@ -389,7 +389,12 @@ details.explain li { margin-bottom: 2px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 进度条放大：原来 190×6px 太细，扫一眼看不出来 */
 .job .jp { flex: 0 0 36%; max-width: 520px; height: 11px;
-  background: #17232f; border-radius: 6px; overflow: hidden;
+  /* 轨道分两段底色：--seg 之前是下载区（蓝灰），之后是解包区（暖灰）。
+     没定义 --seg 的任务（不分阶段的）整条都是蓝灰，观感与以前一致。 */
+  background: linear-gradient(90deg,
+    #17232f 0, #17232f var(--seg, 100%),
+    #272a1f var(--seg, 100%), #272a1f 100%);
+  border-radius: 6px; overflow: hidden;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, .5); }
 .job .jp i { display: block; height: 100%; border-radius: 6px;
   /* 流动动画：一眼能看出"还在动"，比静态色块有说服力 */
@@ -402,6 +407,19 @@ details.explain li { margin-bottom: 2px; }
   100% { background-position: 0 0; }
 }
 .job.paused .jp i { animation-play-state: paused; opacity: .55; }
+/* 进度条上的**阶段分隔线**（下载 0–60%、解包 60–100%）：
+   没有它，用户看到「下载 900 MB / 1 GB」而进度条才 54%，会以为算错了。
+   u 由 renderJobs 按后端 phaseBase 定位，压在填充色之上。 */
+.job .jp { position: relative; }
+.job .jp u {
+  position: absolute; top: 0; bottom: 0; width: 0; z-index: 2;
+  border-left: 1px dashed rgba(233, 245, 255, .6);
+  pointer-events: none;
+}
+/* 解包阶段（不再有网络流量）：进度条换成琥珀色，和"正在下载"的蓝色区分开 */
+.job.extracting .jp i {
+  background: linear-gradient(90deg, #a5742a, #f0c980, #a5742a);
+}
 .job.done .jp i { animation: none;
   background: linear-gradient(90deg, #35a065, #63d992); }
 .job.failed .jp i { animation: none;

@@ -91,11 +91,16 @@ def main():
         print('未找到运行中的浏览器，也没扫到 escah_set。保留现有 player_settings.json（即你贴的那份）。')
         return
     # 仅保留播放器认识的键，避免脏数据
-    keys = {'alpha', 'fs', 'typeRate', 'showWin', 'standH', 'bgmVol', 'seVol', 'voiceVol',
+    keys = {'alpha', 'fs', 'typeRate', 'showWin', 'bgmVol', 'seVol', 'voiceVol',
             'fit', 'instantText', 'pausePerChar', 'pauseBase', 'pauseAfterVoice', 'showPartial',
-            'sortBy', 'rarSel', 'standY', 'standOX', 'msgBg', 'msgColor', 'msgFont',
+            'sortBy', 'rarSel', 'msgBg', 'msgColor', 'msgFont',
             'msgLH', 'msgStroke', 'msgX', 'msgAlign', 'nameX', 'nameY', 'nameAlign'}
     obj = {k: v for k, v in obj.items() if k in keys}
+    # 播放器已经删掉「立绘尺寸 / 纵向位置 / 水平偏移」三项（改了只会偏离游戏原演出），
+    # 成片一律按游戏原尺寸满高 720、落在官方锚点上：老 escah_set 里的旧值不参与。
+    obj['standH'] = 100
+    obj['standY'] = 0
+    obj['standOX'] = 0
     OUT.write_text(json.dumps(obj, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
     print(f'已写入 {OUT}  （来源: {src}）')
     print(json.dumps(obj, ensure_ascii=False))

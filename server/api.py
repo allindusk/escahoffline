@@ -526,6 +526,10 @@ def _refresh_manifest(job) -> dict:
                 f"{'3.5' if name.endswith('1Ex') else '1.5'} MB）…")
         cdn_manifest.refresh(names=[name])
         job.progress(done=i, message=f"{name} 完成")
+        # items_total>1 时 snapshot 的百分比由 items 驱动（sub_progress 那条口径），
+        # 只写 done 的话 items_done 永远是 0 —— 整段清单刷新显示成一直 0%，
+        # 用户看到一条不动的进度条。这里同步一下。
+        job.items_done = i
 
     cdn_install.invalidate_units()
     after = cdn_install.list_units(job)
@@ -577,8 +581,11 @@ def _auto_fill_public(job) -> dict:
             job.log("公共素材有缺口，但任务已取消，未自动下载")
         return add
 
-    # 背景 / 音乐 / 音效：没有"一包一图"的对应关系，只能按类别整批补
-    bulk = {k: v for k, v in add.items() if k in ("bg", "bgm", "sfx")}
+    # 背景 / 音乐 / 音效 / 演出特效：没有"一包一图"的对应关系，只能按类别整批补。
+    # advfx 是 1.1.x 才加进公共素材的类别（2 个包 / 7 MB）：老用户的 stamp 里
+    # 没有这个键 → new_public() 判为"从没下过" → 这里顺手补下，更新目录即可生效，
+    # 不用让用户自己去设置页找「剧情演出特效」勾选。
+    bulk = {k: v for k, v in add.items() if k in ("bg", "bgm", "sfx", "advfx")}
     if bulk:
         desc = "、".join(f"{k} +{v} 个" for k, v in bulk.items())
         job.log(f"公共素材有新增：{desc}，开始自动补下（已有的会跳过）…")
@@ -648,6 +655,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                    "/apple-touch-icon-precomposed.png")
     NOISE_PREFIX = ("/.well-known/",)
     NOISE_SUFFIX = (".map",)
+
+    #: **可选数据文件**：缺失是正常状态（前端 <script onerror> 静默降级），
+    #: 不是"程序坏了"。这类请求在文件不存在时直接回 204：
+    #:   · 浏览器控制台不会留红色 404；
+    #:   · 启动的 cmd 窗口不会刷一行 404（用户看到会以为项目有问题，2026-11-09 反馈）。
+    #: 注意判的是"文件不存在"，装了素材（文件已生成）时照常 200 返回内容。
+    OPTIONAL_DATA = ("/data/advfx.js",       # 演出特效（下载公共素材后生成）
+                     "/data/mediaindex.js",  # 已装素材清单
+                     "/data/imgmap.x2.js",   # 超分覆盖层
+                     "/data/imgmap.base.js",  # 基础映射覆盖层
+                     "/data/sfxmap.js",      # 音频映射（运行时产物）
+                     "/data/stand_box.js")   # 立绘落点（缺失退回贴底布局）
 
     @classmethod
     def is_noise(cls, path: str) -> bool:
@@ -831,6 +850,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 不留 404 记录，免得用户以为后台出问题。
             if self.is_noise(path):
                 return self._no_content()
+            # 可选数据文件缺失（比如还没装演出特效素材）：同样静默成 204
+            if path in self.OPTIONAL_DATA and not os.path.exists(
+                    self.translate_path(path)):
+                return self._no_content()
             return super().do_GET()
         except (BrokenPipeError, ConnectionResetError,
                 ConnectionAbortedError):
@@ -850,7 +873,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         # 少数探测工具用 HEAD 扫 favicon/源映射，同样给 204 而不是 404
-        if self.is_noise(urllib.parse.urlparse(self.path).path):
+        path = urllib.parse.urlparse(self.path).path
+        if self.is_noise(path):
+            return self._no_content()
+        if path in self.OPTIONAL_DATA and not os.path.exists(self.translate_path(path)):
             return self._no_content()
         return super().do_HEAD()
 
@@ -1172,7 +1198,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 # 标题要写全类别：任务条/操作记录里显示的这句，以前只写
                 # 「背景 / BGM / 音效」，用户以为头像和剧情横幅不在这条流程里
                 # （2026-11-04 反馈：更新页文案与安装页对不上）。
-                "base", "下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅）",
+                "base", "下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅 / 演出特效）",
                 lambda j: cdn_install.install_base(j, workers, tuple(parts)))
             return self._json({"job": job.snapshot()})
         if path == "/api/uninstall":

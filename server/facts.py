@@ -57,6 +57,11 @@ PUBLIC_PARTS = {
     "avatar": ("角色头像", "bundle_chara_c-panel_", 20),
     # 剧情横幅：角色剧情入口图 + 主线/活动/其他的章节横幅（播放器当标题用）
     "banner": ("剧情横幅", "bundle_episodeicons_episode_character_|bundle_image_story_", 40),
+    # 演出特效：表情符号（汗/怒り/落ち込み…）与画面特效的原图集与逐帧参数表。
+    # 剧本里的 ShowStandEffect 只有名字，真正的气泡框、水滴跳几下、出现/收起
+    # 节奏全在这两个包里（bundle_image_adv 6.5 MB + advdummy 0.5 MB）。
+    # 没装时播放器自动退回 emoji 版，不会报错，但演出会失真。
+    "advfx": ("剧情演出特效", "bundle_image_adv", 7),
 }
 
 # ---------------------------------------------------------------- 耗时（秒）

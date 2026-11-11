@@ -839,6 +839,8 @@ $('#q').oninput = e => {
     renderGrid();
   }, 160);
 };
+// 搜索框尾部的清除叉（清空后走同一条 input 路径，角色墙与格子一起恢复）
+if (window.ESC && ESC.searchClear) ESC.searchClear($('#q'));
 
 /* 排序方式记忆（与卡片大小同套做法） */
 const SORT_KEY = 'escah_cg_sort';
