@@ -711,21 +711,29 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #hPager button:hover:not(:disabled){color:var(--gold)}
 #hPager button:disabled{opacity:.25;cursor:default}
 #hCount{font-size:14px;color:var(--fg3);font-weight:400;margin-left:6px}
-.hItem{padding:5px 42px 5px 8px;border-radius:6px;cursor:pointer;margin-bottom:3px;
+/* 条目固定「两行一列」：第 1 行 = 名字 + 两个复制按钮（右侧同一行），
+   第 2 行 = 台词，整行宽度全部给台词。
+   以前整块右侧硬留 42px（padding-right）给绝对定位的复制按钮，于是台词的**每一行**
+   都被砍掉 42px 宽（252px 面板约少 3 个字），p99 那种 83 字长句白白多折一行 ——
+   用户 2026-11-11 反馈「复制按钮占了两行一列，文本被截断、浪费很多空间」。
+   改 grid 后按钮只占第 1 行，彻底不参与台词行的宽度计算。 */
+.hItem{padding:5px 8px;border-radius:6px;cursor:pointer;margin-bottom:3px;
   border-left:2px solid transparent;font-size:14px;line-height:1.5;
-  color:var(--fg2);transition:background .12s;position:relative}
-.hItem .hcpy2{position:absolute;right:21px;top:5px;opacity:0;cursor:pointer;
+  color:var(--fg2);transition:background .12s;
+  display:grid;grid-template-columns:1fr auto auto;column-gap:2px;row-gap:1px;
+  grid-template-areas:"name c2 c" "text text text";align-items:start}
+.hItem .hcpy2{grid-area:c2;opacity:0;cursor:pointer;line-height:1.5;
   color:var(--fg3);font-size:14px;padding:0 2px;transition:opacity .12s}
 .hItem:hover .hcpy2{opacity:1}
 .hItem .hcpy2:hover{color:var(--cyan)}
-.hItem .hcpy{position:absolute;right:5px;top:5px;opacity:0;cursor:pointer;
+.hItem .hcpy{grid-area:c;opacity:0;cursor:pointer;line-height:1.5;
   color:var(--fg3);font-size:14px;padding:0 2px;transition:opacity .12s}
 .hItem:hover .hcpy{opacity:1}
 .hItem .hcpy:hover{color:var(--cyan)}
 .hItem:hover{background:var(--bg3);color:var(--fg)}
 .hItem.on{background:#252b3d;border-left-color:var(--gold);color:#fff}
-.hItem .hw{color:var(--gold);font-size:14px;font-weight:600;display:block;
-  margin-bottom:1px}
+.hItem .hw{grid-area:name;color:var(--gold);font-size:14px;font-weight:600;
+  line-height:1.5}
 /* 台词一律**完整显示**，不截断。
    以前是 -webkit-line-clamp:3 + overflow:hidden，于是「そんな場所に今日も一人、
    新たなメイド――否、楽園で戯れる天使が生まれた。」这种三行台词（面板 252px，
@@ -735,7 +743,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
    按 252px 面板约 15 字/行算，最长一句 ≈15 行 —— 极端但可接受，
    列表本身可滚动，所以不设 max-height（不引入"点开才看得到"的二级交互）。
    white-space:pre-wrap 保留游戏原文里的换行，读起来和对话框一致。 */
-.hItem .ht{display:block;white-space:pre-wrap;overflow-wrap:anywhere}
+.hItem .ht{grid-area:text;display:block;white-space:pre-wrap;overflow-wrap:anywhere}
 .hItem.narr .hw{color:var(--fg3);font-weight:400}
 #hTab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:71;
   background:rgba(18,22,32,.95);border:1px solid var(--line);border-right:none;
