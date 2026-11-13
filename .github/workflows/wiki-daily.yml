@@ -16,6 +16,7 @@ name: wiki-daily
 on:
   schedule:
     - cron: '23 4 * * *'       # UTC 04:23 = 日本时间 13:23（避开整点，GitHub 调度整点最堵）
+    - cron: '23 6 * * 2,4'     # UTC 06:23 = 日本时间 15:23，仅周二 / 周四
   workflow_dispatch: {}         # 也支持手动触发
 
 permissions:
