@@ -5125,7 +5125,20 @@ function refilterIfFav() {
 
 /** 当前剧情每收到一句台词就记一次进度（内存立即更新，落盘由 UD 合并） */
 let _progTitleKey = null, _progTitle = '';
+/* ?noprog=1 测试钩子：自动化截图/联调时**不写播放进度**。
+   无头浏览器一打开就会 hydrate 服务端的 marks.json，再把自己看到的那一段推回去
+   —— 2026-11-14 就这么把用户真实进度从「第 1 段」改成了「第 8 段」（测试点了 ?part=8）。
+   测试隔离优先于"记得进度"：截图/验证一律带这个参数。 */
+let _noProg = null;
+function noProg() {
+  if (_noProg === null) {
+    try { _noProg = new URLSearchParams(location.search).has('noprog'); }
+    catch (e) { _noProg = false; }
+  }
+  return _noProg;
+}
 function noteProgress() {
+  if (noProg()) return;
   if (!UD || !ST.key || ST.curMsgIdx == null || !ST.lineMap) return;
   const line = ST.lineMap[ST.curMsgIdx];
   if (line == null) return;
@@ -5490,7 +5503,7 @@ function renderSidebarBody(filter = '') {
     d.title = `${nm}${m.zh ? ' / ' + m.zh : ''}\n` +
       `ID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}` +
       (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '') +
-      (st === 'soft-missing' ? '\n公共素材未下载：可播放但可能缺背景/音乐' : '');
+      (st === 'soft-missing' ? '\n无语音：官方源未提供该语音包' : '');
     /* 图片要不要请求，必须"能确定磁盘上有图"才发 —— 横幅和头像都不随程序分发，
        全新环境里 384 行一次会打出 5000 多个 404，把启动窗口刷成一片红。
        两道关，缺一不可：
@@ -6234,6 +6247,72 @@ if (btnHist) {
   };
 }
 
+/* ==================== 剧本归一化：标题段并进第 1 段 ====================
+   官方剧本包的 ``_0`` 段只是**目录标题**：一句「別次元から来たあのこ」加一条念标题
+   的语音，一条画面指令都没有。真正的标题演出（logo 背景 + ``タイトルロゴ`` 立绘 +
+   **同一条语音**）在 ``_1`` 段开头。旧做法把 ``_0`` 当独立一段播，于是：
+     · 第 1 段黑屏只飘一句字幕（用户说的"有字幕没图片"）；
+     · 第 2 段 logo 出现时消息窗口已关（"没字幕"），那句语音还连放两遍。
+   2026-11-14 用户报的「活动剧情只有八段，第一二段该合在一起」就是这个。
+
+   规则与 server/cdn/stages.py 的 merge_title_part() 必须一致（新解包的数据已经
+   合并过，这里对旧数据兜底；两边都幂等：合并后 parts[0].file 不再是 _0）。 */
+const TITLE_ONLY = new Set(['WaitMotion', 'ShowMessage', 'ShowMessageWindow',
+  'VOICE', 'PlayVoice']);
+/* 与 stages.TITLE_PLACEHOLDER / MOJIBAKE_RE 同一份口径：这些不是标题文本 */
+const TITLE_PLACEHOLDER = new Set(['タイトルコール', 'タイトル', 'アイキャッチ',
+  'オープニング', 'オープニングムービー', 'つづく', 'おわり', '完',
+  'ＥＮＤ', 'END']);
+const MOJIBAKE_RE = /[縲繧繝繿譁隸隹]/;
+const NAME_TAG_RE = /^[〇○]?名札（[^）]{1,24}）\s*/;
+
+/** `_0` 段里那句到底是不是一个可读的标题（占位词 / 官方乱码都不算） */
+function titleUsable(m0) {
+  return m0.some(m => {
+    if (m.Method !== 'ShowMessage') return false;
+    const t = String(m.Message || '').trim().replace(NAME_TAG_RE, '')
+      .replace(/^[「」『』"' ]+|[「」『』"' ]+$/g, '');
+    return !!t && !TITLE_PLACEHOLDER.has(t) && !MOJIBAKE_RE.test(t);
+  });
+}
+
+function normalizeStory(d) {
+  const parts = d && d.parts;
+  if (!parts || parts.length < 2) return d;
+  const p0 = parts[0];
+  if (!String(p0.file || '').endsWith('_0')) return d;
+  const m0 = p0.methods || [];
+  // 有画面指令 = 正文/演出段（event_38、event_40 的 _0 是标题动画）；
+  // 台词超过 3 句也是正文（adv_other_1 的 _0 是 26 句人気投票说明）—— 都不动。
+  if (m0.some(m => !TITLE_ONLY.has(m.Method))) return d;
+  if (m0.filter(m => m.Method === 'ShowMessage').length > 3) return d;
+
+  const p1 = parts[1], m1 = p1.methods || [];
+  const v0 = new Set(m0.filter(m => m.Method === 'VOICE' && m.Voice).map(m => m.Voice));
+  let at = -1, same = false;
+  for (let i = 0; i < Math.min(m1.length, 20); i++) {
+    const m = m1[i];
+    if (m.Method !== 'PlayVoice' || !m.Voice) continue;
+    if (at < 0) at = i;                        // 兜底：念标题的那条语音
+    if (v0.has(m.Voice)) { at = i; same = true; break; }
+  }
+  if (v0.size && !same) at = -1;               // 语音对不上：别插进别人的语音里
+  let ins = m0.filter(m => m.Method !== 'WaitMotion');
+  // 取不到可读标题 = 那句是占位词（event_91「タイトルコール」）或官方乱码
+  // （event_95 / main_47）：不是正文台词，别搬进第 1 段当字幕
+  if (!titleUsable(m0)) ins = [];
+  if (same) ins = ins.filter(m => m.Method !== 'VOICE');
+  const merged = Object.assign({}, p1, {
+    methods: m1.slice(0, at + 1).concat(ins, m1.slice(at + 1)),
+  });
+  ['voices', 'stand', 'full', 'back', 'cg', 'music', 'sound'].forEach(k => {
+    const a = p0[k] || [], b = p1[k] || [];
+    merged[k] = b.concat(a.filter(x => b.indexOf(x) < 0));
+  });
+  d.parts = [merged].concat(parts.slice(2));
+  return d;
+}
+
 /** 剧情数据缓存上限：227 部全接进来后不能无限堆内存（每部 0.1–0.5 MB） */
 const STORY_CACHE_MAX = 6;
 
@@ -6256,8 +6335,9 @@ function loadStoryData(key) {
     s.onload = () => {
       const d = isCharKey(key) ? window.__CHAR : window.__STORY;
       if (!d) { rej(new Error('data/' + key + '.js 没有产出数据')); return; }
-      cacheStory(key, d);
-      res(d);
+      const nd = normalizeStory(d);      // 标题段并进第 1 段（旧数据兜底）
+      cacheStory(key, nd);
+      res(nd);
     };
     s.onerror = () => rej(new Error('无法加载 data/' + key + '.js'));
     document.head.appendChild(s);
@@ -6279,9 +6359,10 @@ async function openStory(key, opt) {
     }
     return;
   }
-  if (pst === 'soft-missing') {
-    toast('公共素材未下载：可以播放，但可能缺背景/音乐（资源管理里可补齐）');
-  }
+  /* soft-missing 的含义是「剧本在、语音目录不在」（见 server/cdn/install.py 的
+     unit_state）——多数 adv 剧情官方源本来就没语音包，属于正常状态，和背景/音乐
+     无关。以前这里弹「公共素材未下载：可到资源管理补齐」，既吓人又误导
+     （那些语音根本补不出来），故不再弹提示。 */
   stopAll();
   S.key = key;
   S.char = isCharKey(key) ? +String(key).slice(5) : null;
@@ -7582,6 +7663,15 @@ document.querySelectorAll('#srcRow button').forEach(x =>
    必须排在下面的 renderSidebar() 之前，否则首次绘制还是普通列表。
    save=false —— 刚读出来的值不用再打时间戳。 */
 setHistView(readHistPref(), false);
+/* ?hist=1 / ?hist=0 是**只切视图、不写偏好**的测试钩子（无头截图 / 自动化用）：
+   「播放记录」列表的行布局（长标题截断、⧉ ✕ 不换行）只有它才截得到。
+   千万别改成 setHistView(v, true) —— 那会把偏好经 UD.syncPref 写进
+   userdata/prefs.json 并同步到用户真机，让人下次打开就进了播放记录。 */
+(function histTestHook() {
+  let v = null;
+  try { v = new URLSearchParams(location.search).get('hist'); } catch (e) { return; }
+  if (v === '1' || v === '0') setHistView(v === '1', false);
+})();
 /* 语言也走偏好层：浏览器里的 escah_lang 被清掉（换浏览器 / 清缓存 / 新设备）时，
    用偏好层记的语言把界面切回来。L10N 自己只认 localStorage，这里补一刀。 */
 (function applyPrefLang() {

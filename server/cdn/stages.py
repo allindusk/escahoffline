@@ -202,6 +202,84 @@ def _has_visual(parts: list) -> bool:
                for p in parts for m in (p.get("methods") or []))
 
 
+#: 纯标题段（``_0``）里只会出现这几种指令。出现画面指令就不是标题段
+#: （``event_38`` / ``event_40`` 的 ``_0`` 是标题动画，``other_1`` 是 26 句说明），
+#: 台词超过 3 句同理（最多是几名角色各念半句拼标题，见 :func:`_part_title`）。
+TITLE_ONLY_METHODS = frozenset(("WaitMotion", "ShowMessage", "ShowMessageWindow",
+                                "VOICE", "PlayVoice"))
+
+
+def _is_title_part(parts: list) -> bool:
+    """``parts[0]`` 是不是那种「只有一句标题、没有任何画面」的标题段。"""
+    if len(parts) < 2:
+        return False
+    p0 = parts[0]
+    if not str(p0.get("file") or "").endswith("_0"):
+        return False
+    ms = p0.get("methods") or []
+    if any(m.get("Method") not in TITLE_ONLY_METHODS for m in ms):
+        return False
+    return sum(1 for m in ms if m.get("Method") == "ShowMessage") <= 3
+
+
+def merge_title_part(parts: list) -> tuple:
+    """把 ``_0`` 标题段并进第 1 段，返回 ``(新 parts, 标题文本)``。
+
+    官方剧本包里 ``_0`` 段只是**目录标题**：一句「別次元から来たあのこ」加一条念
+    标题的语音，没有任何画面（实测 83 个包：这段只用 WaitMotion / ShowMessageWindow
+    / ShowMessage / VOICE 四种指令）。真正的标题演出 —— logo 背景 + ``タイトルロゴ``
+    立绘 + **同一条语音** —— 在 ``_1`` 段开头。
+
+    旧数据把 ``_0`` 当独立一段播，于是：第 1 段黑屏只飘一句字幕，第 2 段 logo 出来
+    时消息窗口已经关掉（没字幕），同一句语音还连放两遍。用户 2026-11-14 报的
+    「活动剧情应该只有八段，第一第二段该合在一起」就是它。
+
+    合并规则（顺序即优先级）：
+      1. ``_1`` 里播了同一条语音 → 标题字幕插到那条 ``PlayVoice`` 之后（字幕与 logo 同步），
+         并丢掉标题段自己的 VOICE（不重复播）；
+      2. ``_1`` 没有这条语音，但前 20 条里有 ``PlayVoice``（念标题的那条）→ 插到它之后；
+      3. 都对不上（``_1`` 直接进正文，如 event_16 / event_24）→ 标题字幕放在正文最前面
+         当片头字幕，语音照原样保留（不与别人的语音重叠）。
+    空标题段（``Methods`` 为空，如 event_25 / event_29）直接消失，不插任何东西。
+
+    **幂等**：合并后 ``parts[0].file`` 不再是 ``_0``，再调一次原样返回（返回的空标题
+    也不会覆盖调用方已有的标题）。
+    """
+    parts = list(parts or [])
+    if not _is_title_part(parts):
+        return parts, ""
+    title = _part_title(parts)
+    p0, p1 = parts[0], parts[1]
+    m0 = p0.get("methods") or []
+    m1 = p1.get("methods") or []
+    v0 = {m.get("Voice") for m in m0
+          if m.get("Method") == "VOICE" and m.get("Voice")}
+    at, same = -1, False
+    for i, m in enumerate(m1[:20]):
+        if m.get("Method") != "PlayVoice" or not m.get("Voice"):
+            continue
+        if at < 0:
+            at = i                              # 兜底：念标题的那条语音
+        if m.get("Voice") in v0:
+            at, same = i, True
+            break
+    if v0 and not same:
+        at = -1                                 # 语音对不上：别插进别人的语音里
+    ins = [m for m in m0 if m.get("Method") != "WaitMotion"]
+    if not title:
+        # 取不到标题 = 那句是占位词（event_91 的「タイトルコール」）或官方乱码
+        # （event_95 / main_47）—— 不是正文台词，别搬进第 1 段当字幕，整段丢掉
+        ins = []
+    if same:
+        ins = [m for m in ins if m.get("Method") != "VOICE"]
+    merged = dict(p1)
+    merged["methods"] = list(m1[:at + 1]) + ins + list(m1[at + 1:])
+    for k in ("voices", "stand", "full", "back", "cg", "music", "sound"):
+        a, b = list(p0.get(k) or []), list(p1.get(k) or [])
+        merged[k] = b + [x for x in a if x not in b]
+    return [merged] + [dict(p) for p in parts[2:]], title
+
+
 def extract_scenario(cid, force: bool = False) -> str | None:
     """从已下载的剧本包解出精简 JSON，写 ``web/data/char_<id>.js``。
 
@@ -246,8 +324,11 @@ def extract_adv(kind: str, no, force: bool = False) -> str | None:
         print(f"  已存在 {os.path.basename(out_path)}（--force 可重解）")
         return out_path
 
-    parts = _parts_from_bundle(src)
+    parts, title = merge_title_part(_parts_from_bundle(src))
     data = {"id": key, "kind": kind, "no": no, "parts": parts}
+    if title:
+        # 标题段被并掉了，标题文本必须跟着存下来 —— 否则侧栏会退回「活动剧情 第N话」
+        data["title"] = title
     select.dump_story(key, data)
     print(f"  {key}.js：{len(parts)} 段 / {_count_lines(parts)} 句")
     return out_path
@@ -406,6 +487,10 @@ def sync_advindex() -> int:
         vdir = os.path.join(AUDIO, key)
         kind = d.get("kind") or key.split("_")[1]
         n = d.get("no")
+        # 标题段（``_0``）要先算标题、再并进第 1 段：播放器里它不再是一段，
+        # 列表上的「N 段」也得跟播放器一致（见 merge_title_part 的说明）。
+        _title = d.get("title") or titles.get(key) or _part_title(d["parts"])
+        d = dict(d, parts=merge_title_part(d["parts"])[0])
         # 空占位包（官方只放了包壳）不要进列表 —— 否则就是一行点不开的空条目。
         # 判定**不能只看台词数**：漫画活动（event_42 / 51 / 52 / 59 / 96）整集没有
         # 一句 ShowMessage，内容全在 ShowEventCg 逐格翻页里，那是能看的。
@@ -440,7 +525,7 @@ def sync_advindex() -> int:
             "no": n,
             # 优先级：剧本自带的 title（序章这类）> 标题表 > ``_0`` 段台词。
             # 标题表放中间：它只在剧本完全没有标题时补位，不会盖掉剧本里的文本。
-            "title": d.get("title") or titles.get(key) or _part_title(d["parts"]),
+            "title": _title,
             "order": order,
             "cover": cover,
             "first": _first_line(d["parts"]),
@@ -848,8 +933,9 @@ def export_adv_voices(key: str, bundles: list, dry: bool = False) -> dict:
     """导出非角色剧情语音 -> ``audio/<story_key>/``（main_1 / event_3 / op …）。
 
     实测主线/活动的语音就在 ``bundle_voice_adv_{kind}_<n>_<seg>`` 里，
-    段号与剧本 parts 一一对应（main_1 有 9 段 = 9 个语音包，570 个 clip 里
-    568 个正好是剧本引用的名字）。
+    段号用的是**官方**段号：``_0`` 标题段也有自己的语音包（main_1 是 9 个，其中
+    ``_0`` 那条就是念目录标题的语音），而剧本 `parts` 合并标题段后只剩 8 段 ——
+    两者不再一一对应，语音按名字取，跟段号无关（见 merge_title_part）。
     """
     out_dir = os.path.join(AUDIO, key)
     os.makedirs(out_dir, exist_ok=True)

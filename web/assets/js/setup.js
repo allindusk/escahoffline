@@ -431,19 +431,40 @@
   // 之前两边各写一次，页面上就成了「约 约 24.7 GB」
   $('#ovAll').textContent = total ? FACT.unitsSize(total) : '—';
 
+  /* 译文部数的分母（用户 2026-11-14 问「608 是不是漏了 adv_tutorial」）：
+     总数就是全部剧情单元（角色 + 主线/活动/其他 + 教程/开场），其中 5 部是
+     漫画活动 —— 整集都是 ShowEventCg 逐格翻页、**一句台词都没有**（advindex
+     里 lines=0），本来就没有可译的东西；剩下 608 部全部有译文。
+     所以卡片改成「608 / 613 部」，跟「已安装剧情」同一套写法，再把那 5 部
+     写进悬停说明 —— 只写「608 部剧情」会被读成"剧情总数只有 608"。 */
+  const trS = (ST.state && ST.state.trans) || {};
+  const trUnits = trS.units || 0;
+  const allKeys = Object.keys(us);
+  const noTextKeys = new Set(((window.__ADV) || [])
+    .filter(r => !(r.lines > 0)).map(r => r.key));
+  const textTotal = allKeys.filter(k => !noTextKeys.has(k)).length || trUnits;
+  const noTextNote = allKeys.length - textTotal;
+  const trTip = trUnits + ' 部有台词的剧情已全部译完；共 ' + allKeys.length + ' 部，'
+    + (noTextNote > 0
+      ? '另外 ' + noTextNote + ' 部是漫画活动（整集都是图、没有台词，不用翻译）。'
+      : '没有需要翻译却缺译文的剧情。');
+  // 剧情清单还没拉下来时 ST.units 是空的：分母先不写，别显示「608 / 0 部」
+  const trSub = allKeys.length ? `${trUnits} / ${allKeys.length} 部`
+    : `${trUnits} 部剧情`;
+
   const cards = [
     ['已安装剧情', `${done}`, `/ ${total || '?'} 部`],
     ['资源包缓存', human((cov.bundleCache || {}).bytes),
       `${(cov.bundleCache || {}).files || 0} 个包`],
     ['剩余磁盘', human((ST.state && ST.state.free) || 0), ''],
-    ['翻译', `${(ST.state.trans && ST.state.trans.messages) || 0}<small>句</small>`,
-      `${(ST.state.trans && ST.state.trans.units) || 0} 部剧情`],
+    ['翻译', `${trS.messages || 0}<small>句</small>`, trSub, trTip],
     ['下载来源',
       cdn.manifestReady ? '官方地址' : '还没弄好',
       (cdn.cdn || '').replace(/^https?:\/\//, '').split('/')[0] || '点「更新」页更新剧情目录'],
   ];
   $('#ovStats').innerHTML = cards.map(function (c) {
-    return '<div class="stat"><div class="k">' + esc(c[0]) + '</div>' +
+    return '<div class="stat"' + (c[3] ? ' title="' + esc(c[3]) + '"' : '') + '>' +
+      '<div class="k">' + esc(c[0]) + '</div>' +
       '<div class="v">' + c[1] + '</div><div class="k">' + esc(c[2]) + '</div></div>';
   }).join('');
 
@@ -2566,14 +2587,18 @@
   /* 认剧情标识：**只认本页导出时写的那一行** `# 剧情标识 : char_415`。
    * 认不出来就明确告诉用户"重新导出原文再翻"，不再退化成拿整个文件名当标识 ——
    * 那样 `char_415_トキサダ.txt` 会变成 unit「char_415_トキサダ」，导入必然失败，
-   * 报的还是"没有剧情数据：data/xxx.js"这种用户看不懂的错（用户 2026-11-02）。 */
+   * 报的还是"没有剧情数据：data/xxx.js"这种用户看不懂的错（用户 2026-11-02）。
+   *
+   * 合法标识有四种：char_13 / adv_main_10 / adv_event_10 / adv_other_15 / adv_op。
+   * 以前只写 (?:char|adv)_\d+，主线 / 活动 / 其他的译文全部被当成"认不出"。 */
+  const UNIT_PAT = '(?:char_\\d+|adv_[a-z]+(?:_\\d+)?)';
   function detectUnit(text) {
-    const m = String(text || '').match(/#\s*剧情标识\s*:\s*((?:char|adv)_\d+)/i);
+    const m = String(text || '').match(new RegExp('#\\s*剧情标识\\s*:\\s*(' + UNIT_PAT + ')', 'i'));
     return m ? m[1] : '';
   }
   /** 文件名里带合法编号（导出时就是 char_415_角色名.txt）也可以认 */
   function unitFromName(fname) {
-    const m = String(fname || '').match(/(?:^|[^\w])((?:char|adv)_\d+)/i);
+    const m = String(fname || '').match(new RegExp('(?:^|[^\\w])(' + UNIT_PAT + ')', 'i'));
     return m ? m[1] : '';
   }
   function setTrSel(s) { $('#trBulkInfo').textContent = s; }

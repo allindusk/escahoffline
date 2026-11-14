@@ -126,12 +126,23 @@ select,input,button{font-family:inherit}
 .char-btn .fav.on{color:var(--gold);text-shadow:0 0 8px rgba(224,181,102,.55)}
 .char-btn .pg{flex:0 0 auto;color:var(--cyan);opacity:.9;white-space:nowrap}
 .char-btn.on .pg{color:inherit;opacity:.85}
+/* 侧栏普通行（角色 / 主线 / 活动 / 其他话）的信息行本来就挤：标题（可省略）+
+   「8 段 570 句 143 语音」+ ⧉ + ☆ 刚好占满一行，再塞一个「第1/8段 2%」就把行尾
+   两个图标挤出界（用户 2026-11-14 反馈）。**行内干脆不显示进度**：播放信息看
+   鼠标悬停的详情浮窗就够了（#bnrTip 本来就有「上次看到」一行），不用再额外做
+   一套角标/浮窗（用户 2026-11-14 第二次确认）。
+   播放记录视图（.hist）是两行布局，进度照常显示在第二行，不走这套。 */
+#charList .char-btn:not(.hist) .pg{display:none}
 /* 播放记录行：与角色列表**同一套两行卡片**（横幅 + 名字/信息，用户 2026-11-14 要求），
    只是行尾多了「复制名字 ⧉」和「删记录 ✕」两个小图标，所以不再需要左侧那条竖条。 */
 /* 记录行的信息比角色行多（段 / 进度 / 句数 / 时间）：
    第一行 = 名字 + ⧉ + ✕，第二行 = 那一排进度信息（整行占满，不会被压成竖排） */
 #charList .char-btn.hist .info{flex-wrap:wrap;row-gap:2px}
-#charList .char-btn.hist .info .nm{order:1;flex:1 1 auto;min-width:0}
+/* flex-basis 必须是 0（不是 auto）：.info 带 flex-wrap，basis:auto 时标题按**内容宽**
+   参与排布，长标题（「偽サンタ現る！？聖夜のデート大作戦！」这种）一行放不下就
+   整块换行，把 ⧉ / ✕ 顶到第二行去（用户 2026-11-14 反馈）。basis:0 让它先压缩、
+   由 .nm 自己的 ellipsis 截断，两个图标永远跟标题同一行。 */
+#charList .char-btn.hist .info .nm{order:1;flex:1 1 0;min-width:0}
 #charList .char-btn.hist .info .cpy{order:2}
 #charList .char-btn.hist .info .del{order:3}
 #charList .char-btn.hist .info .sub{order:4;flex:1 0 100%;flex-wrap:wrap;
@@ -802,11 +813,18 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #charList .char-btn.bnr{width:100%;box-sizing:border-box}
 #charList .char-btn.bnr .info{display:flex;flex-direction:row;align-items:center;
   gap:7px;min-width:0}
-#charList .char-btn.bnr .info .sub{flex:0 0 auto;display:flex;gap:7px;align-items:center;
-  white-space:nowrap}
-#charList .char-btn.bnr .info .cpy{flex:0 0 auto}
-#charList .char-btn.bnr .info .nm{display:flex;align-items:center;gap:5px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 信息行是一行排开：标题可以省略（flex-shrink），段/句/语音尽量整块显示；
+   真到了极限（窄窗口、长语音数、多一个「未下载」徽标）就在信息行里裁掉尾巴，
+   **绝不能让行尾的 ⧉ / ☆ 溢出到列表外面**。 */
+#charList .char-btn.bnr:not(.hist) .info .sub{flex:0 1 auto;min-width:0;display:flex;
+  gap:7px;align-items:center;white-space:nowrap;overflow:hidden}
+#charList .char-btn.bnr:not(.hist) .info .sub > span{flex:0 0 auto}
+#charList .char-btn.bnr:not(.hist) .info .cpy{flex:0 0 auto}
+/* flex-shrink 给得极大：空间不够时**先**把标题压成省略号（「8 段 570 句 143 语音」
+   一个字都不许少），只有信息行自己长到容器都装不下时才裁它的尾巴。 */
+#charList .char-btn.bnr:not(.hist) .info .nm{flex:1 1 auto;flex-shrink:999;min-width:0;
+  display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
 #charList .char-btn.bnr .info .nm .srcTag{flex:0 0 auto}
 
 /* 悬停横幅 → 信息浮窗（与剧情页、CG 页同一套观感） */

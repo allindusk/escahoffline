@@ -814,8 +814,14 @@ def _run_import(items: list[dict], mode: str, j=None) -> dict:
     return out
 
 
-_UNIT_RE = re.compile(r"^(?:char|adv)_\d+$")
-_UNIT_IN_NAME = re.compile(r"(?:^|[^\w])((?:char|adv)_\d+)", re.I)
+# 合法剧情标识：char_13 / adv_main_10 / adv_event_10 / adv_other_15 / adv_op / adv_tutorial
+# 以前只认 char_N、adv_N，导致「其他剧情」「活动剧情」「主线剧情」的译文全部
+# 被当成"认不出是哪部剧情"，批量导入只成功角色剧情。
+# adv 系列既有带编号的（adv_main_10），也有不带的（adv_op / adv_tutorial），
+# 所以用 adv_[a-z]+(?:_\d+)? 一次覆盖，不再逐个列举 kind。
+_ONE_UNIT = r"(?:char_\d+|adv_[a-z]+(?:_\d+)?)"
+_UNIT_RE = re.compile(r"^%s$" % _ONE_UNIT, re.I)
+_UNIT_IN_NAME = re.compile(r"(?:^|[^\w])(%s)" % _ONE_UNIT, re.I)
 
 
 def _unit_of_text(text: str) -> str:

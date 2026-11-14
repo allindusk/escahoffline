@@ -298,7 +298,8 @@ def cmd_adv(a) -> int:
         # 2) 解剧本 -> adv_<kind>_<no>.js
         if not stages.extract_adv(kind, no, force=a.force):
             continue
-        # 2.5) 语音：bundle_voice_adv_<kind>_<no>_<seg>，段号与 parts 顺序对应
+        # 2.5) 语音：bundle_voice_adv_<kind>_<no>_<seg>，段号是**官方**段号
+        #      （含已被并进第 1 段的 `_0` 标题段），语音按名字取，与 parts 序号无关
         if not a.no_voice:
             vbundles = select.adv_voice_bundles(mf.index, kind, no)
             if vbundles:

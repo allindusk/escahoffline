@@ -186,6 +186,11 @@ curl -s -o /dev/null -w "%{time_total}s\n" http://127.0.0.1:8123/api/stats   # �
   会一直等到预算耗尽。测试钩子：`?notour=1` 跳过引导。
 - 播放器有内置调试面板：按 `D` 显示 `idx/run/bg/stand/cg/window` 与最近 JS 报错，
   排查"某处 null 抛错导致流程中断"最快。
+- **截图/联调播放器一律带 `?noprog=1`**：无头浏览器会 hydrate 服务端的
+  `userdata/marks.json` 播放进度，再把自己看到的那一段推回去。不带这个参数就是拿
+  用户的"接着看"当真机测试（2026-11-14 已踩过：测 `?part=8` 把用户进度从第 1 段
+  改成了第 8 段）。另外 `?nodisclaimer=1` 跳过免责声明、`?pause=N` 开机 N ms 后暂停
+  （冻结台词推进，截图卡得住）、`?autoplay` 连续播。
 
 ---
 
