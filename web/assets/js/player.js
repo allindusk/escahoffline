@@ -5348,24 +5348,66 @@ function renderHistList(box, filter = '') {
   bar.appendChild(clr);
   box.appendChild(bar);
 
+  /* 每一条都跟左侧「角色」列表用**同一套两行卡片**（用户 2026-11-14 要求）：
+     横幅 + 名字 + 进度信息，行尾换成「复制名字」和「删记录」两个小图标；
+     鼠标移上去同样出 #bnrTip 详情浮窗（横幅原尺寸、左对齐）。 */
   list.forEach(r => {
     const key = r.key;
     const title = r.t || storyTitle(key);
-    const kind = isCharKey(key) ? 'char' : String(key).split('_')[1];
+    const isChar = isCharKey(key);
+    const cid = isChar ? String(key).slice(5) : '';
+    const kind = isChar ? 'char' : String(key).split('_')[1];
+    const st = window.PACKSTATE ? PACKSTATE.status(key) : 'unknown';
+    const L = imgLayer();
+    const inst = st === 'ready' || st === 'soft-missing';
+    // 横幅 / 头像都先问本机清单，缺图时退回首字色块，别对不存在的文件发请求
+    const bnr = (L.banners || inst) ? bannerOf(key) : '';
+    const avs = (cid && (L.avatars || inst)) ? avatarCands(cid) : [];
+    const chain = (bnr ? [imgSrc(bnr)] : []).concat(avs);
+    const meta = (cid && window.__CHARMETA ? (window.__CHARMETA[cid] || {}) : {});
+    const rar = cid ? rarityOf(cid) : '';
+
     const d = document.createElement('div');
-    d.className = 'char-btn hrow' + (key === S.key ? ' on' : '');
+    d.className = 'char-btn bnr hist' + (key === S.key ? ' on' : '');
     d.dataset.key = key;
+    if (cid) d.dataset.id = cid;
     d.title = `${title}\n上次看到：第 ${r.p + 1} 段，第 ${UD.lineNo(r)} 句 / 共 ${r.n} 句`
       + `\n${new Date(r.ts).toLocaleString()}`;
-    d.innerHTML = `<span class="info"><span class="nm">`
-      + (kind === 'char' ? '' : `<span class="srcTag" data-k="${kind}">${ADV_TAG[kind] || '剧'}</span>`)
+    d.innerHTML =
+      `<span class="bnr">` + (chain.length ? '<img alt="" loading="lazy">'
+        : `<span class="ava-ph">${esc(String(title).slice(0, 1))}</span>`) + `</span>` +
+      `<span class="info"><span class="nm">`
+      + (isChar ? '' : `<span class="srcTag" data-k="${kind}">${ADV_TAG[kind] || '剧'}</span>`)
       + `${esc(title)}</span>`
       + `<span class="sub"><span>第 ${r.p + 1} 段</span>`
       + `<span class="pg">看到 ${UD.progPct(r)}%</span>`
       + `<span>${UD.lineNo(r)}/${r.n} 句</span>`
-      + `<span>${UD.ago(r.ts)}</span></span></span>`
-      + `<span class="del" title="从记录里删掉这一条（不影响收藏）">✕</span>`;
+      + `<span>${UD.ago(r.ts)}</span></span>`
+      + `<span class="cpy" title="复制名字">⧉</span>`
+      + `<span class="del" title="从记录里删掉这一条（不影响收藏）">✕</span>`
+      + `</span>`;
+    if (chain.length) applyChain(d.querySelector('img'), chain);
+    bindTip(d, () => {
+      const parts = r.n ? `第 ${r.p + 1} 段 · 共 ${r.n} 句` : '';
+      return (bnr ? `<img src="${esc(imgSrc(bnr))}" alt="" `
+        + `onerror="this.style.display='none'">` : '')
+        + `<div style="font-weight:600;margin-bottom:4px">${esc(title)}</div>`
+        + `<dl>`
+        + (cid ? `<dt>ID</dt><dd>${cid}</dd>` : '')
+        + (cid ? `<dt>稀有度</dt><dd>${esc(meta.r || '未收录')}`
+          + `${meta.d ? ' · 实装 ' + esc(meta.d) : ''}</dd>` : '')
+        + `<dt>剧情</dt><dd>${parts || '—'}</dd>`
+        + `<dt>上次看到</dt><dd>第 ${r.p + 1} 段 · 第 ${UD.lineNo(r)}/${r.n} 句`
+        + `（${UD.progPct(r)}%，${UD.ago(r.ts)}）</dd>`
+        + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载'
+          : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+        + `</dl>`;
+    });
     d.onclick = () => openStory(key);
+    d.querySelector('.cpy').onclick = ev => {
+      ev.stopPropagation();
+      copyText(title, `已复制：${title}`);
+    };
     d.querySelector('.del').onclick = ev => {
       ev.stopPropagation();
       UD.clearProg(key);
@@ -6540,6 +6582,773 @@ function toggleLanPanel() {
   });
 }
 
+/* ================= 分享：当前画面 + 勾选台词 → 一张长图 =================
+ * 入口是顶栏的「分享」图标（header.js 注入，位置在「局域网二维码」左边）。
+ *
+ * 图片**不是系统截图**，而是把 #stage 里此刻正在显示的那几张图按各自的
+ * 渲染矩形重画一遍（背景 → 立绘 → CG），所以：
+ *   · 拿到的是 2560×1440 的清晰图，不受窗口缩放 / 浏览器缩放影响；
+ *   · 只有画面、没有对话框 —— 台词按勾选顺序排在图片下方（像电影台词图）。
+ * 滤镜只需复刻两类：
+ *   · MulColor（feColorMatrix 对角线乘法）→ 读 SVG 的 values，用 multiply 重合成；
+ *   · TalkCharacter 压暗 / DrawMode（brightness、sepia…）→ 直接交给 ctx.filter。
+ */
+/* 成品宽：**1080p = 1920×1080**（默认）/ 720p = 1280×720（游戏原生）。
+   注意「1080」指的是高度，不是宽度 —— 用户 2026-11-14 纠正过这一点。 */
+const SHARE_W = 1920;
+const SHARE_DESIGN = 1080;   // 版式的设计基准宽：所有字号/间距按这个算，再等比放大
+/* 舞台截图倍率：2 = 2560×1440（超采样）。输出只有 1920 宽，但立绘大多有 2 倍超分图，
+   按 2 倍采再缩回 1920 才不糊；显卡/内存代价只有一瞬间。 */
+const SHARE_SHOT = 2;
+const SHARE_MAX_PICK = 20;   // 一次最多拼 20 句（再多图会长到没法看）
+
+function shareStoryTitle() {
+  return (window.ESC && ESC.storyTitle && ESC.storyTitle(ST.key || ''))
+    || (S.data && S.data.title) || '剧情';
+}
+
+/** 取 SVG 乘算滤镜（feColorMatrix）的对角线 = R/G/B 三个乘法系数 */
+function mulMatrixDiag(id) {
+  const node = document.getElementById(id);
+  const cm = node && node.querySelector('feColorMatrix');
+  if (!cm) return null;
+  const v = (cm.getAttribute('values') || '').trim().split(/[\s,]+/).map(Number);
+  if (v.length !== 20) return null;
+  return [v[0], v[6], v[12]];
+}
+
+/** 把 el 到 stage 之间的滤镜拆成两半：可乘算的 RGB 系数 + 其余 CSS 滤镜。
+ *  drop-shadow 丢掉（海报里不需要一层阴影，而且投影会被画框裁掉半截）。 */
+function shareFilterInfo(el, stop) {
+  const mul = [1, 1, 1];
+  const parts = [];
+  for (let n = el; n; n = n.parentElement) {
+    const f = getComputedStyle(n).filter;
+    if (f && f !== 'none') {
+      const reUrl = /url\(["']?#([^)"']+)["']?\)/g;
+      let m;
+      while ((m = reUrl.exec(f))) {
+        const d = mulMatrixDiag(m[1]);
+        if (d) { mul[0] *= d[0]; mul[1] *= d[1]; mul[2] *= d[2]; }
+      }
+      const reFx = /(brightness|contrast|saturate|grayscale|sepia|hue-rotate)\([^)]*\)/g;
+      let m2;
+      while ((m2 = reFx.exec(f))) parts.push(m2[0]);
+    }
+    if (n === stop) break;
+  }
+  const needMul = mul[0] < 0.999 || mul[1] < 0.999 || mul[2] < 0.999;
+  return { mul: needMul ? mul : null, filter: parts.join(' ') };
+}
+
+/** 按 object-fit 把一个 <img> 画进 box（box 是它在画布上的矩形） */
+function sharePaintImage(g, im, box, fit, alpha, fi) {
+  const iw = im.naturalWidth, ih = im.naturalHeight;
+  if (!iw || !ih) return;
+  let dw = box.w, dh = box.h, dx = box.x, dy = box.y;
+  if (fit === 'cover' || fit === 'contain') {
+    const s = fit === 'cover' ? Math.max(box.w / iw, box.h / ih)
+      : Math.min(box.w / iw, box.h / ih);
+    dw = iw * s; dh = ih * s;
+    dx = box.x + (box.w - dw) / 2;
+    dy = box.y + (box.h - dh) / 2;
+  } else if (fit === 'none') {
+    dw = iw; dh = ih;
+    dx = box.x + (box.w - iw) / 2;
+    dy = box.y + (box.h - ih) / 2;
+  }
+
+  /* 没有逐图滤镜时直接画（绝大多数情况）。
+     有滤镜时必须先画到临时画布：multiply 合成需要"只作用在这张图自身"的层。 */
+  if (!fi || (!fi.mul && !fi.filter)) {
+    g.save();
+    g.globalAlpha = alpha;
+    g.beginPath(); g.rect(box.x, box.y, box.w, box.h); g.clip();
+    g.drawImage(im, dx, dy, dw, dh);
+    g.restore();
+    return;
+  }
+  const tw = Math.max(1, Math.ceil(box.w)), th = Math.max(1, Math.ceil(box.h));
+  const t = document.createElement('canvas');
+  t.width = tw; t.height = th;
+  const tg = t.getContext('2d');
+  if (fi.filter) tg.filter = fi.filter;
+  tg.drawImage(im, dx - box.x, dy - box.y, dw, dh);
+  tg.filter = 'none';
+  if (fi.mul) {
+    tg.globalCompositeOperation = 'multiply';
+    tg.fillStyle = 'rgb(' + fi.mul.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(',') + ')';
+    tg.fillRect(0, 0, tw, th);
+    // 乘法会把整块矩形都染上色，再用原图的 alpha 把形状取回来
+    tg.globalCompositeOperation = 'destination-in';
+    tg.drawImage(im, dx - box.x, dy - box.y, dw, dh);
+    tg.globalCompositeOperation = 'source-over';
+  }
+  g.save();
+  g.globalAlpha = alpha;
+  g.beginPath(); g.rect(box.x, box.y, box.w, box.h); g.clip();
+  g.drawImage(t, box.x, box.y);
+  g.restore();
+}
+
+/** 把当前舞台画面重画成一张 2560×1440 的画布（失败返回 null） */
+function shareStageShot() {
+  const stage = $('#stage');
+  if (!stage) return null;
+  const sr = stage.getBoundingClientRect();
+  if (!sr.width || !sr.height) return null;
+  const W = 1280 * SHARE_SHOT, H = 720 * SHARE_SHOT;
+  const k = W / sr.width;                    // client px → 画布 px
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#05060a';
+  g.fillRect(0, 0, W, H);
+
+  const boxOf = el => {
+    const r = el.getBoundingClientRect();
+    return { x: (r.left - sr.left) * k, y: (r.top - sr.top) * k,
+      w: r.width * k, h: r.height * k };
+  };
+  // 自身 + 祖先（到 #stage）的不透明度相乘：立绘淡入/退场、TalkCharacter 都在这条链上
+  const alphaOf = el => {
+    let a = 1;
+    for (let n = el; n; n = n.parentElement) {
+      const o = parseFloat(getComputedStyle(n).opacity);
+      if (isFinite(o)) a *= o;
+      if (n === stage) break;
+    }
+    return a;
+  };
+  const paint = (im, prefill) => {
+    if (!im.complete || !im.naturalWidth) return;
+    const cs = getComputedStyle(im);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const a = alphaOf(im);
+    if (a < 0.02) return;                    // 正在淡出的旧图不画
+    const box = boxOf(im);
+    if (box.w < 1 || box.h < 1) return;
+    if (prefill) { g.fillStyle = prefill; g.fillRect(box.x, box.y, box.w, box.h); }
+    sharePaintImage(g, im, box, cs.objectFit || 'fill', a, shareFilterInfo(im, stage));
+  };
+  // 层序与 #stage 的 DOM 顺序一致：背景 → 立绘 → CG（背面雾效/粒子/闪屏不进图）
+  $('#bgLayer').querySelectorAll('img').forEach(im => paint(im));
+  $('#standLayer').querySelectorAll('.stand img').forEach(im => paint(im));
+  $('#cgLayer').querySelectorAll('img').forEach(im => paint(im, '#05060a'));
+
+  // DrawMode（sepia / 灰度）是挂在 #stage 上的整层滤镜
+  const sf = getComputedStyle(stage).filter;
+  if (sf && sf !== 'none' && sf.indexOf('url(') < 0) {
+    const t = document.createElement('canvas');
+    t.width = W; t.height = H;
+    const tg = t.getContext('2d');
+    tg.filter = sf;
+    tg.drawImage(cv, 0, 0);
+    g.clearRect(0, 0, W, H);
+    g.drawImage(t, 0, 0);
+  }
+  return cv;
+}
+
+/** 台词拼成海报时的断行：**只按画面宽度自适应**，不再沿用剧本里的换行。
+ *
+ *  剧本里的 `\n` 是为了在游戏那个 500 多 px 宽的对话框里断行，拿到 1080 宽的海报上
+ *  照着断开，一句话会被拆成两三行、图白白变高一截（用户 2026-11-14 反馈）。
+ *  这里先把这些「排版用换行」合并掉：中日文直接接上；两侧都是拉丁字母/数字时
+ *  补一个空格，避免 "Surrey" + "park" 粘成一个词。然后再逐字量宽断行。 */
+function shareJoin(text) {
+  return String(text || '').replace(/[ \t]*\n+[ \t]*/g, (m, off, all) => {
+    const prev = all[off - 1] || '', next = all[off + m.length] || '';
+    return (/[A-Za-z0-9,.;:!?'"]/.test(prev) && /[A-Za-z0-9]/.test(next)) ? ' ' : '';
+  }).replace(/[ \t]{2,}/g, ' ');
+}
+
+/* ---- 台词排版：说话人**和台词同一行**（金色名字 + 全角空格 + 正文），逐字自适应换行 ----
+ *  以前名字单独占一行，一句普通台词也要多花 32px，一屏拼下来白白高一截
+ *  （用户 2026-11-14 反馈）。现在把名字当成行首的一段（金色、稍小），
+ *  换行时一起参与量宽，读起来就像「时贞　「……」」。
+ *  中日文没有空格可分，只能逐字量宽；返回的行是 [{s:run, gold:bool}] 片段。 */
+function shareLineRuns(meas, who, text, maxW, fs, fsName, fam) {
+  const toks = [];
+  if (who) toks.push({ s: who, gold: true }, { s: '　', gold: true });
+  toks.push({ s: shareJoin(text), gold: false });
+  const fontOf = gold => (gold ? '600 ' + fsName : '400 ' + fs) + 'px ' + fam;
+  const lines = [];
+  let cur = [], curW = 0;
+  toks.forEach(t => {
+    meas.font = fontOf(t.gold);
+    for (const ch of t.s) {
+      const w = meas.measureText(ch).width;
+      if (curW + w > maxW && cur.length) { lines.push(cur); cur = []; curW = 0; }
+      const last = cur[cur.length - 1];
+      if (last && last.gold === t.gold) last.s += ch;
+      else cur.push({ s: ch, gold: t.gold });
+      curW += w;
+    }
+  });
+  if (cur.length) lines.push(cur);
+  return lines;
+}
+
+/** 画一行（居中），金色名字与白色正文分段上色 */
+function shareDrawLine(g, runs, cx, y, fs, fsName, fam) {
+  const fontOf = gold => (gold ? '600 ' + fsName : '400 ' + fs) + 'px ' + fam;
+  /* 必须显式设回左对齐：首句若走播放器样式，会把 ctx.textAlign 改成
+     center/right（跟用户的文字对齐设置走），不还原的话后面每一行都会以
+     "左边缘坐标"当中心画，整块台词往左挤在一起（2026-11-14 用户反馈的错乱）。 */
+  g.textAlign = 'left';
+  let w = 0;
+  runs.forEach(r => { g.font = fontOf(r.gold); w += g.measureText(r.s).width; });
+  let x = cx - w / 2;
+  runs.forEach(r => {
+    g.font = fontOf(r.gold);
+    g.fillStyle = r.gold ? '#e0b566' : '#f2f5fb';
+    g.fillText(r.s, x, y);
+    x += g.measureText(r.s).width;
+  });
+}
+
+/** 读播放器当前对话框的样式（用户在「设置」里调过的那套），单位都是舞台 px（1280 宽）。
+ *  首句要按"播放时的样子"画进图里时用它，这样字体/字号/颜色/对齐/描边/对话框外观
+ *  都跟用户屏幕上看到的一致，而不是海报自带的白字排版。 */
+function shareMsgStyle() {
+  const win = $('#msgWindow'), txt = $('#msgText'), stage = $('#stage');
+  if (!win || !txt || !stage) return null;
+  const cw = getComputedStyle(win), ct = getComputedStyle(txt);
+  const nm = $('#msgName'), cn = nm ? getComputedStyle(nm) : null;
+  const n = (v, d) => { const x = parseFloat(v); return isFinite(x) ? x : d; };
+  const mtx = /matrix\(([^)]+)\)/.exec(ct.transform || '');
+  return {
+    mode: win.classList.contains('wb-bare') ? 'bare'
+      : win.classList.contains('wb-soft') ? 'soft' : 'box',
+    left: n(cw.left, 52), right: n(cw.right, 52), bottom: n(cw.bottom, 26),
+    minH: n(cw.minHeight, 150),
+    padX: n(cw.paddingLeft, 26), padTop: n(cw.paddingTop, 20),
+    radius: n(cw.borderTopLeftRadius, 10),
+    borderW: n(cw.borderTopWidth, 1), borderColor: cw.borderTopColor,
+    bg: cw.backgroundColor,
+    family: ct.fontFamily, weight: ct.fontWeight,
+    size: n(ct.fontSize, 21), lineH: n(ct.lineHeight, 34),
+    color: ct.color, align: ct.textAlign || 'left',
+    stroke: n(getComputedStyle(stage).getPropertyValue('--msgStroke'), 1.2),
+    shiftX: mtx ? (parseFloat(mtx[1].split(',')[4]) || 0) : 0,
+    nameColor: cn ? cn.color : '#ffe9b8',
+    nameSize: cn ? n(cn.fontSize, 16.8) : 16.8,
+    nameWeight: cn ? cn.fontWeight : 700,
+    // 有背景渐变 = 游戏里那个金色名条；无框/无底衬模式下名字只剩金字
+    namePill: !!(cn && cn.backgroundImage && cn.backgroundImage.indexOf('gradient') >= 0),
+    // 名字的三档对齐（设置里的「话者名 → 对齐」）
+    nameAlign: (nm && nm.classList.contains('align-center')) ? 'center'
+      : (nm && nm.classList.contains('align-right')) ? 'right' : 'left',
+  };
+}
+
+/** 纯文本按宽度断行（首句走播放器样式时用，名字另画名条，不混进正文） */
+function shareWrapPlain(meas, text, maxW, font) {
+  meas.font = font;
+  const out = [];
+  let cur = '';
+  for (const ch of shareJoin(text)) {
+    if (cur && meas.measureText(cur + ch).width > maxW) { out.push(cur); cur = ch; }
+    else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out.length ? out : [''];
+}
+
+function shareRoundRect(g, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  g.beginPath();
+  g.moveTo(x + rr, y);
+  g.arcTo(x + w, y, x + w, y + h, rr);
+  g.arcTo(x + w, y + h, x, y + h, rr);
+  g.arcTo(x, y + h, x, y, rr);
+  g.arcTo(x, y, x + w, y, rr);
+  g.closePath();
+}
+
+/** 把一句话画成「播放器里的对话框」（尺寸/位置/字体都按用户设置等比映射到图片上） */
+function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale) {
+  const k = scale;                                   // 1280 舞台 → 图片宽
+  const boxX = st.left * k;
+  const boxW = W - (st.left + st.right) * k;
+  const padX = st.padX * k, padTop = st.padTop * k;
+  const fs = st.size * k, lh = st.lineH * k;
+  const font = st.weight + ' ' + fs.toFixed(1) + 'px ' + st.family;
+  const meas = document.createElement('canvas').getContext('2d');
+  const lines = shareWrapPlain(meas, text, boxW - padX * 2, font);
+  const textH = lines.length * lh;
+  const boxH = Math.max(st.minH * k, textH + padTop + Math.round(18 * k));
+  const boxY = imgH - st.bottom * k - boxH;
+
+  // 对话框底色：有框模式画面板，无框模式只垫一层柔光（跟 CSS 的 wb-soft 一致）
+  if (st.mode === 'box') {
+    g.save();
+    shareRoundRect(g, boxX, boxY, boxW, boxH, st.radius * k);
+    g.fillStyle = st.bg;
+    g.fill();
+    if (st.borderW > 0) {
+      g.lineWidth = Math.max(1, st.borderW * k);
+      g.strokeStyle = st.borderColor;
+      g.stroke();
+    }
+    g.restore();
+  } else if (st.mode === 'soft') {
+    const cx = boxX + boxW / 2, cy = boxY + boxH / 2;
+    const rad = Math.max(boxW, boxH) * 0.62;
+    const rg = g.createRadialGradient(cx, cy, rad * 0.25, cx, cy, rad);
+    rg.addColorStop(0, 'rgba(0,0,0,.58)');
+    rg.addColorStop(0.62, 'rgba(0,0,0,.42)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(boxX - padX, boxY - padTop * 2, boxW + padX * 2, boxH + padTop * 4);
+  }
+
+  // 正文
+  const tx = st.align === 'center' ? boxX + boxW / 2
+    : st.align === 'right' ? boxX + boxW - padX : boxX + padX;
+  g.textAlign = st.align === 'center' ? 'center' : st.align === 'right' ? 'right' : 'left';
+  g.textBaseline = 'middle';
+  const shift = st.shiftX * k;
+  lines.forEach((t, i) => {
+    const y = boxY + padTop + i * lh + lh / 2;
+    if (st.stroke > 0.15) {
+      g.font = font;
+      g.lineWidth = Math.max(1, st.stroke * 2 * k);
+      g.lineJoin = 'round';
+      g.miterLimit = 2;
+      g.strokeStyle = 'rgba(0,0,0,.9)';
+      g.strokeText(t, tx + shift, y);
+    }
+    g.font = font;
+    g.fillStyle = st.color;
+    g.fillText(t, tx + shift, y);
+  });
+
+  // 说话人：有金名条就画名条（游戏原样），无框模式只画金字
+  if (who) {
+    const nfs = st.nameSize * k;
+    const font2 = st.nameWeight + ' ' + nfs.toFixed(1) + 'px ' + st.family;
+    g.font = font2;
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    const nw = g.measureText(who).width;
+    const padN = 16 * k, pillH = nfs + 10 * k;
+    // 名条位置跟「设置 → 话者名 → 对齐」一致：左/中/右三档
+    const pillW = nw + padN * 2;
+    const nx = st.nameAlign === 'center' ? boxX + (boxW - pillW) / 2
+      : st.nameAlign === 'right' ? boxX + boxW - 22 * k - pillW
+        : boxX + 22 * k;
+    const ny = boxY - (15 * k) - pillH / 2;
+    if (st.namePill) {
+      const grd = g.createLinearGradient(0, ny - pillH / 2, 0, ny + pillH / 2);
+      grd.addColorStop(0, '#f0d090');
+      grd.addColorStop(1, '#c99b45');
+      shareRoundRect(g, nx, ny - pillH / 2, nw + padN * 2, pillH, 5 * k);
+      g.fillStyle = grd;
+      g.fill();
+      g.fillStyle = '#1a1206';
+    } else {
+      g.lineWidth = Math.max(1, (st.stroke + 1) * 2 * k);
+      g.lineJoin = 'round';
+      g.strokeStyle = 'rgba(0,0,0,.92)';
+      g.strokeText(who, nx + padN, ny);
+      g.fillStyle = st.nameColor;
+    }
+    g.fillText(who, nx + padN, ny);
+  }
+}
+
+/** 画面 + 台词 → 成品长图（picks 是 ST.allLines 的下标，已按顺序排好）
+ *
+ *  版式按「观看页面本来的样子」来（用户 2026-11-14 要求）：
+ *    第一句压在**图片底部**（就是游戏里对话框所在的位置，垫一层需要的暗角），
+ *    其余句子接在图片下方，最后一行是剧名 · 第 N/M 段。
+ *  ownStyle = true 时首句直接按播放器的对话框样式画（字体/颜色/对话框外观都是用户设置），
+ *  false 用海报自带的白字排版。
+ *  W 可传 720（游戏原生分辨率那档），所有尺寸按 1080 基准等比缩放，
+ *  版式完全一样、只是整张图小一圈。 */
+function shareCompose(shot, picks, W, ownStyle, fsBase) {
+  W = W || SHARE_W;
+  const k = W / SHARE_DESIGN;            // 设计基准 1080 → 目标宽（1920 / 1280）
+  const imgH = Math.round(W * 9 / 16);
+  const pad = Math.round(48 * k);
+  /* 间距口径（用户 2026-11-14 指定，以**字号**为单位）：
+     · 行间距 = 0.5 字号 → 行高 = 1.5 字号
+     · 相邻两句台词之间 = 1.0 字号（即比行间距再多 0.5 字号）
+     字号本身可由弹窗里的「字号」下拉调（海报样式下才生效，默认 30）。 */
+  const fsBasePx = Math.max(14, Math.min(60, Number(fsBase) || 30));
+  const fsTxt = Math.round(fsBasePx * k), fsName = Math.round(fsTxt * 0.83);
+  const lhTxt = Math.round(fsTxt * 1.5);          // 行高
+  const gapBlock = Math.round(fsTxt * 0.5);       // 句间比行间多出来的部分
+  /* 首句（图内）→ 第二句（图下）要"看起来"是 1.0 字号：行框本身已经带了
+     (行高 - 字号)/2 的上下留白，这里只补剩下的那一段，一半放在图片里、一半放图片外。 */
+  const leadHalf = Math.max(0, Math.round((lhTxt - fsTxt) / 2));
+  const edgeGap = Math.max(6, fsTxt - leadHalf * 2);
+  const restTopGap = Math.round(edgeGap * 0.6);
+  const headBottom = edgeGap - restTopGap;
+  const fam = getComputedStyle($('#msgText')).fontFamily || 'sans-serif';
+  const meas = document.createElement('canvas').getContext('2d');
+  const maxW = W - pad * 2;
+
+  const blocks = [], src = [];
+  picks.forEach(gi => {
+    const l = ST.allLines[gi];
+    if (!l || !String(l.text || '').trim()) return;
+    src.push(l);
+    blocks.push(shareLineRuns(meas, l.who || '', l.text, maxW, fsTxt, fsName, fam));
+  });
+  if (!blocks.length) return null;
+
+  const rest = blocks.slice(1);
+  let textH = 0;
+  rest.forEach((lines, i) => {
+    if (i) textH += gapBlock;
+    textH += lines.length * lhTxt;
+  });
+  const footH = Math.round(82 * k);
+  const H = imgH + (rest.length ? restTopGap + textH : 0) + footH;
+
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0a0d14';
+  g.fillRect(0, 0, W, H);
+  g.drawImage(shot, 0, 0, W, imgH);
+
+  g.textAlign = 'left';
+  g.textBaseline = 'middle';
+
+  // 图与文字区的收边渐变先画：首句若走播放器样式（对话框），不能被这层压暗
+  if (rest.length) {
+    const fadeH = Math.round(imgH * 0.14);
+    const grd = g.createLinearGradient(0, imgH - fadeH, 0, imgH + 4);
+    grd.addColorStop(0, 'rgba(10,13,20,0)');
+    grd.addColorStop(1, 'rgba(10,13,20,1)');
+    g.fillStyle = grd;
+    g.fillRect(0, imgH - fadeH, W, fadeH + 4);
+  }
+
+  /* 第一句压在图片底部：
+     · ownStyle → 直接照舞台上的对话框重画（字体/字号/颜色/对齐/描边/面板都是用户设置）
+     · 否则 → 海报自带的白字排版 + 暗角 */
+  const st = ownStyle ? shareMsgStyle() : null;
+  if (st) {
+    shareDrawPlayerMsg(g, W, imgH, st, src[0].who || '', src[0].text || '', W / 1280);
+  } else {
+    const head = blocks[0];
+    const headH = head.length * lhTxt;
+    const headTop = imgH - headBottom - headH;
+    const scrTop = Math.max(0, headTop - Math.round(60 * k));
+    const scr = g.createLinearGradient(0, scrTop, 0, imgH);
+    scr.addColorStop(0, 'rgba(10,13,20,0)');
+    scr.addColorStop(0.55, 'rgba(10,13,20,.72)');
+    scr.addColorStop(1, 'rgba(10,13,20,.95)');
+    g.fillStyle = scr;
+    g.fillRect(0, scrTop, W, imgH - scrTop);
+    let y = headTop;
+    head.forEach(runs => {
+      shareDrawLine(g, runs, W / 2, y + lhTxt / 2, fsTxt, fsName, fam);
+      y += lhTxt;
+    });
+  }
+
+  if (rest.length) {
+    /* 金色分隔短线去掉了：首句→第二句只剩 1.0 字号的间距，中间塞一条线太挤，
+       图片下沿本身已经把两块分开了。 */
+    let yy = imgH + restTopGap;
+    rest.forEach((lines, i) => {
+      if (i) yy += gapBlock;
+      lines.forEach(runs => {
+        shareDrawLine(g, runs, W / 2, yy + lhTxt / 2, fsTxt, fsName, fam);
+        yy += lhTxt;
+      });
+    });
+  }
+
+  const total = (S.data && S.data.parts.length) || 1;
+  g.font = '400 ' + Math.max(13, Math.round(19 * k)) + 'px ' + fam;
+  g.fillStyle = '#6b7488';
+  g.textAlign = 'center';
+  g.fillText(shareStoryTitle() + ' · 第 ' + (ST.part + 1) + '/' + total + ' 段',
+    W / 2, H - Math.round(44 * k));
+  return cv;
+}
+
+/** canvas → Blob（**同步**）。
+ *
+ *  不用 canvas.toBlob：它是异步编码，个别环境（无头 Edge、部分老 WebView）编
+ *  大画布时回调根本不触发 —— 用户点「保存图片」就毫无反应。toDataURL 是同步的，
+ *  拿到 base64 再自己解成 Uint8Array，任何环境都一样可靠。
+ *  体积上略微多占一份 base64 字符串（约 1.4 倍），1080 宽的图完全可以接受。 */
+function shareCanvasBlob(cv, type, quality) {
+  let url = '';
+  try { url = cv.toDataURL(type, quality); } catch (e) { return null; }
+  const m = /^data:([^;,]+)[^,]*,(.*)$/.exec(url);
+  if (!m) return null;
+  let bin = '';
+  try { bin = atob(m[2]); } catch (e) { return null; }
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Blob([buf], { type: m[1] });
+}
+
+/** 打开分享弹窗：左边是成品预览，右边勾台词 */
+function openShare() {
+  if (!ST.allLines || !ST.allLines.length) {
+    toast('先在左侧选一部剧情、播到有台词的画面再分享');
+    return;
+  }
+  // 暂停：选台词期间画面不能再变，否则预览和画面就对不上了
+  // （不自动恢复播放 ——「自动」开关必须由用户自己决定）
+  if (ST.running) { pausePlayback(); setPlayBtn(false); }
+  const shot = shareStageShot();
+  if (!shot) { toast('画面还没准备好，先播放一下再分享'); return; }
+
+  const lines = ST.allLines;
+  const sel = new Set();
+  /* 默认选中**当前屏幕上这一句**开头，再顺延 3 句（用户 2026-11-14 反馈：
+     以前是往前摘 4 句，图里那句跟播放器正在显示的对不上）。
+     画面（截图）是当前这一句的，所以图里叠的也必须是同一句。 */
+  const cur = (ST.curLine >= 0 && ST.curLine < lines.length) ? ST.curLine : 0;
+  for (let i = cur; i < Math.min(lines.length, cur + 4); i++) sel.add(i);
+
+  const mask = document.createElement('div');
+  mask.id = 'shareMask';
+  mask.innerHTML =
+    '<div id="shareBox">' +
+      '<div class="shHead"><span class="shT">分享这一段</span>' +
+        '<span class="shS">' + esc(shareStoryTitle()) + '</span>' +
+        '<button class="shX" title="关闭">✕</button></div>' +
+      '<div class="shBody">' +
+        '<div class="shPrev" id="shPrev"></div>' +
+        '<div class="shPick">' +
+          '<div class="shTools"><button data-act="all">全选</button>' +
+            '<button data-act="none">全不选</button>' +
+            '<button data-act="cur">只要当前句</button>' +
+            '<span class="shCnt"></span>' +
+            '</div>' +
+          '<div class="shList" id="shList"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="shFoot"><span class="tip">勾选要放进图里的台词（最多 '
+        + SHARE_MAX_PICK + ' 句）</span><span class="sp"></span>' +
+        /* 图里那一句的画法（跟分辨率并排，别藏在右上角工具行里）：
+           播放器样式 = 完全照「设置」里的字体/字号/颜色/对齐/描边/对话框外观；
+           海报样式 = 用分享图自带的白字排版。 */
+        '<label class="shFmt" title="海报样式（默认）：用分享图自带的白字排版；'
+          + '播放器样式：完全照你在「设置」里调的字体、字号、颜色、对齐和对话框外观来画那一句">'
+          + '首句 <select id="shOwn">'
+          + '<option value="0">海报样式</option>'
+          + '<option value="1">播放器样式</option></select></label>' +
+        /* 海报样式下的台词字号（选「播放器样式」时字号跟播放器设置走，这里会置灰）。
+           选项直接标数字：这是设计基准 1080 宽下的像素数，出图时按分辨率等比缩放。 */
+        '<label class="shFmt" title="海报样式下的台词字号（1080 宽基准的像素）；'
+          + '选「播放器样式」时字号跟你在设置里调的一致，这一项会变灰">'
+          + '字号 <select id="shFs">'
+          + '<option value="20">20</option>'
+          + '<option value="24" selected>24</option>'
+          + '<option value="28">28</option>'
+          + '<option value="32">32</option>'
+          + '<option value="36">36</option>'
+          + '<option value="40">40</option></select></label>' +
+        /* 只出 JPG：分享用图，越轻便越好（用户 2026-11-14 明确不要无损选项）。
+           分辨率按行规说：1080p = 1920×1080（默认），720p = 1280×720（游戏原生）。 */
+        '<label class="shFmt" title="1080p（1920×1080）：默认，聊天里点开也清楚；'
+          + '720p（1280×720）：游戏原生分辨率，体积更小">分辨率 <select id="shSize">'
+          + '<option value="1920">1080p · 1920×1080</option>'
+          + '<option value="1280">720p · 1280×720</option></select></label>' +
+        /* 关闭只在右上角保留一个 ✕（用户 2026-11-14 要求：底部不再重复） */
+        '<button id="shSave">保存图片</button>' +
+        '<button id="shCopy" class="primary">复制图片</button></div>' +
+    '</div>';
+  document.body.appendChild(mask);
+  const q = s => mask.querySelector(s);
+
+  q('#shList').innerHTML = lines.map((l, i) =>
+    '<label class="shRow' + (sel.has(i) ? ' on' : '') + (i === ST.curLine ? ' cur' : '')
+      + '" data-gi="' + i + '">'
+      + '<input type="checkbox" data-gi="' + i + '"' + (sel.has(i) ? ' checked' : '') + '>'
+      + '<span class="who">' + esc(l.who || '旁白') + '</span>'
+      + '<span class="txt">' + esc(l.text || '') + '</span></label>').join('');
+
+  let out = null;
+  let outW = SHARE_W;                    // 默认 1080p（1920 宽），可切 720p（1280 宽）
+
+  /* 首句画法 / 字号 / 分辨率都记进用户配置（UD 的 ui 区，跟语言、筛选同一套同步机制），
+     下次打开弹窗直接复用，不用每次重选（用户 2026-11-14 要求）。 */
+  const FS_OPTS = ['20', '24', '28', '32', '36', '40'];
+  function prefGet(k, def) {
+    return (window.UD && UD.prefValue) ? UD.prefValue('ui', k, def) : def;
+  }
+  function prefSet(k, v) {
+    if (window.UD && UD.syncPref) UD.syncPref('ui', k, v);
+  }
+  if (q('#shOwn')) q('#shOwn').value = String(prefGet('shareOwn', '0')) === '1' ? '1' : '0';
+  if (q('#shFs')) {
+    const fs0 = String(prefGet('shareFs', '24'));
+    q('#shFs').value = FS_OPTS.indexOf(fs0) >= 0 ? fs0 : '24';
+  }
+  if (q('#shSize')) {
+    const res0 = String(prefGet('shareRes', '1920'));
+    q('#shSize').value = res0 === '1280' ? '1280' : '1920';
+    outW = q('#shSize').value === '1280' ? 1280 : SHARE_W;
+  }
+
+  function paint() {
+    const picks = Array.from(sel).sort((a, b) => a - b);
+    const cnt = q('.shCnt');
+    if (cnt) cnt.textContent = picks.length ? '已选 ' + picks.length + ' 句' : '还没选台词';
+    const holder = q('#shPrev');
+    out = null;
+    if (!picks.length) {
+      holder.innerHTML = '<div class="shEmpty">勾一句台词，这里立刻出现成品</div>';
+      return;
+    }
+    const own = q('#shOwn') ? q('#shOwn').value === '1' : false;   // 默认海报样式
+    const fsBase = q('#shFs') ? +q('#shFs').value : 24;
+    const cv = shareCompose(shot, picks, outW, own, fsBase);
+    if (!cv) {
+      holder.innerHTML = '<div class="shEmpty">这几句拼不出来，换几句试试</div>';
+      return;
+    }
+    out = cv;
+    holder.innerHTML = '';
+    holder.appendChild(cv);
+  }
+  paint();
+
+  const list = q('#shList');
+  const curRow = list.querySelector('.shRow.cur');
+  if (curRow) curRow.scrollIntoView({ block: 'center' });
+
+  // 勾选：全表只有一个监听（1000+ 行的列表不逐行绑定）
+  list.addEventListener('change', e => {
+    const cb = e.target;
+    if (!cb || cb.type !== 'checkbox') return;
+    const gi = +cb.dataset.gi;
+    if (cb.checked) {
+      if (sel.size >= SHARE_MAX_PICK) {
+        cb.checked = false;
+        toast('一次最多选 ' + SHARE_MAX_PICK + ' 句，再多一张图就排不下了');
+        return;
+      }
+      sel.add(gi);
+    } else sel.delete(gi);
+    const row = cb.closest('.shRow');
+    if (row) row.classList.toggle('on', cb.checked);
+    paint();
+  });
+  q('.shTools').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const act = b.dataset.act;
+    sel.clear();
+    if (act === 'all') {
+      // 全选只取前 SHARE_MAX_PICK 句：否则 canvas 高度会到几万像素，直接画不出来
+      for (let i = 0; i < Math.min(SHARE_MAX_PICK, lines.length); i++) sel.add(i);
+      if (lines.length > SHARE_MAX_PICK) {
+        toast('一张图最多排 ' + SHARE_MAX_PICK + ' 句：已选前 ' + SHARE_MAX_PICK + ' 句');
+      }
+    } else if (act === 'cur') {
+      if (cur >= 0) sel.add(cur);
+    }
+    list.querySelectorAll('.shRow').forEach(row => {
+      const on = sel.has(+row.dataset.gi);
+      row.classList.toggle('on', on);
+      const cb = row.querySelector('input');
+      if (cb) cb.checked = on;
+    });
+    paint();
+  });
+  function close() { mask.remove(); }
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
+  q('.shX').onclick = close;
+  // 分辨率切换：720p = 1280×720（游戏原生），1080p = 1920×1080（默认）
+  q('#shSize').onchange = e => {
+    const w = parseInt(e.target.value, 10);
+    outW = w === 1280 ? 1280 : SHARE_W;
+    prefSet('shareRes', String(outW));
+    paint();
+  };
+  // 首句画法切换（播放器样式 ↔ 海报样式）：播放器样式下字号由「设置」决定，字号项置灰
+  function syncFsEnabled() {
+    const fsSel = q('#shFs');
+    if (!fsSel || !q('#shOwn')) return;
+    const ownStyle = q('#shOwn').value === '1';
+    fsSel.disabled = ownStyle;
+    fsSel.parentNode.title = ownStyle
+      ? '当前是「播放器样式」：字号跟你在「设置」里调的一致'
+      : '海报样式下的台词字号（1080 宽基准，出图时按分辨率等比缩放）';
+  }
+  if (q('#shOwn')) {
+    q('#shOwn').onchange = () => {
+      prefSet('shareOwn', q('#shOwn').value);
+      syncFsEnabled();
+      paint();
+    };
+    syncFsEnabled();
+  }
+  if (q('#shFs')) {
+    q('#shFs').onchange = () => { prefSet('shareFs', q('#shFs').value); paint(); };
+  }
+  const sizeText = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB'
+    : Math.max(1, Math.round(n / 1024)) + ' KB';
+  function shareName(ext) {
+    return ('超昂大战_' + shareStoryTitle() + '_第' + (ST.part + 1) + '段.' + ext)
+      .replace(/[\\/:*?"<>|]/g, '_');
+  }
+  /* 保存：只出 JPG（分享用图越轻越好，用户明确不要无损选项）。
+     0.90 质量下文字边缘看不出压缩痕，体积只有 PNG 的三成左右。 */
+  function saveImage() {
+    const blob = shareCanvasBlob(out, 'image/jpeg', 0.90);
+    if (!blob) { toast('导出失败：这个浏览器不支持导出图片'); return false; }
+    // 浏览器不认 JPEG 时会静默给回 PNG，扩展名跟着真实编码类型走
+    const name = shareName(/jpe?g/.test(blob.type) ? 'jpg' : 'png');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast('已保存：' + name + '（' + sizeText(blob.size) + '）');
+    return true;
+  }
+  q('#shSave').onclick = () => {
+    if (!out) { toast('先勾选要放进图里的台词'); return; }
+    saveImage();
+  };
+  /* 复制：分享时最顺手的一步（发微信/QQ 直接 Ctrl+V）。
+     剪贴板只接受 PNG，所以这里另编一份 PNG 给剪贴板，保存的那份还是 JPG。
+     http:// 局域网地址不是安全上下文，Clipboard 会被禁 —— 那时退回下载。 */
+  q('#shCopy').onclick = () => {
+    if (!out) { toast('先勾选要放进图里的台词'); return; }
+    const png = shareCanvasBlob(out, 'image/png');
+    const fallback = () => {
+      toast('这个浏览器不允许直接复制图片，已改为下载');
+      saveImage();
+    };
+    if (!png || !navigator.clipboard || !window.ClipboardItem) { fallback(); return; }
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      .then(() => {
+        /* 成功反馈直接写在按钮上（用户 2026-11-14 要求）：
+           按钮变成绿色的「✓ 图片复制成功」，5 秒后自动改回「复制图片」。 */
+        const btn = q('#shCopy');
+        if (!btn) { toast('图片复制成功'); return; }
+        btn.classList.add('ok');
+        btn.textContent = '✓ 图片复制成功';
+        clearTimeout(btn._okT);
+        btn._okT = setTimeout(() => {
+          btn.classList.remove('ok');
+          btn.textContent = '复制图片';
+        }, 5000);
+      })
+      .catch(fallback);
+  };
+}
+if ($('#btnShare')) $('#btnShare').onclick = () => openShare();
+
 /* ================= 事件 ================= */
 $('#btnPlay').onclick = () => {
   /* 手动模式：主按钮、点画面、空格/P 全是「下一句」，
@@ -6655,6 +7464,8 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Escape' || e.key === 'Escape') {
     const kt = $('#keyTip');
     if (kt) { e.preventDefault(); kt.remove(); return; }
+    const sm = $('#shareMask');
+    if (sm) { e.preventDefault(); sm.remove(); return; }
     const st = $('#settings');
     if (st && !st.hidden) {
       e.preventDefault();
@@ -6662,6 +7473,9 @@ document.addEventListener('keydown', e => {
       return;
     }
   }
+  /* 分享弹窗是模态：开着的时候空格/回车/方向键不该去推剧情
+     （焦点在勾选框上时下面的 INPUT 过滤会拦住，但点空白处后焦点就没了） */
+  if ($('#shareMask')) return;
 
   const tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;

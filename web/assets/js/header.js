@@ -14,7 +14,7 @@
 
   // 每页右上角有什么，也在这里声明（id 保持原样，各自 JS 照旧能找到）
   const EXTRA = {
-    'index.html': ['lan', 'lang', 'help'],
+    'index.html': ['share', 'lan', 'lang', 'help'],
     'cg.html': [],
     // 资源管理页不再把「已装 x/x · 缓存 xx GB」塞进顶栏：正文首屏的
     // 「当前状态」已经把同样的数字讲清楚了，顶栏再挂一遍显得挤、还容易误读
@@ -22,6 +22,14 @@
   };
 
   const CTRL = {
+    /* 分享：把「当前画面 + 勾选台词」拼成一张长图。只给播放器页注入（其它页没有舞台）。
+       图标按钮，紧挨在「局域网二维码」左边（顺序见 EXTRA.index.html）。 */
+    share: '<button id="btnShare" title="分享：把当前画面和勾选的台词做成一张图">'
+      + '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">'
+      + '<circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/>'
+      + '<circle cx="18" cy="19" r="2.6"/>'
+      + '<path d="M8.6 10.9l7.2-4.2.9 1.6-7.2 4.2z"/>'
+      + '<path d="M8.6 13.1l7.2 4.2.9-1.6-7.2-4.2z"/></svg></button>',
     // 按钮名必须自解释"点一下会出二维码"：原来叫「局域网访问」，用户以为只是
     // 一个状态标签、不知道能点（2026-11-02 反馈）。
     lan: '<button id="btnLan" title="点一下生成二维码：手机连同一 WiFi 扫码即可打开；另一台电脑可以直接输入下面显示的地址">局域网二维码</button>',
@@ -84,6 +92,14 @@ header[data-shared] button:hover{color:#e6e9f0;border-color:#3a4a60}
 header[data-shared] #btnHelp,header[data-shared] #btnHelp2{width:28px;height:26px;
   padding:0;display:flex;align-items:center;justify-content:center;
   font-size:15.7px;font-weight:700;line-height:1}
+/* 分享：方形图标按钮（与 GitHub / 「?」同尺寸），位置在「局域网二维码」左边 */
+header[data-shared] #btnShare{width:28px;height:26px;padding:0;display:flex;
+  align-items:center;justify-content:center;border-radius:8px;line-height:1;
+  color:#9aa4b8;background:#1c2230;border:1px solid #2a3040;
+  transition:color .15s,background .15s,border-color .15s}
+header[data-shared] #btnShare:hover{color:#e0b566;background:#243040;
+  border-color:#3a4a60}
+header[data-shared] #btnShare svg{display:block}
 /* 右侧控件靠 .hdr-first 统一左推，这里不再用 :first-of-type 兜底 */
 /* 局域网二维码按钮：胶囊形，但**保留描边**（跟「中文」「?」一样有轮廓）——
    以前是 border:transparent，看着像一行灰字标签，用户不知道能点。

@@ -126,25 +126,25 @@ select,input,button{font-family:inherit}
 .char-btn .fav.on{color:var(--gold);text-shadow:0 0 8px rgba(224,181,102,.55)}
 .char-btn .pg{flex:0 0 auto;color:var(--cyan);opacity:.9;white-space:nowrap}
 .char-btn.on .pg{color:inherit;opacity:.85}
-/* 播放记录的每一行：左侧没有头像/横幅，用左边的竖条标一下"这是记录" */
-#charList .char-btn.hrow{padding:6px 8px;margin-bottom:3px;border:1px solid #1f2733;
-  border-left:2px solid #3a6d78;border-radius:6px;background:#121820}
-#charList .char-btn.hrow:hover{border-color:#3a4a5e;border-left-color:var(--cyan);
-  background:#181f2a}
-#charList .char-btn.hrow.on{border-color:rgba(224,181,102,.55);border-left-color:var(--gold);
-  background:linear-gradient(90deg,#3a2d5c,#2a2340)}
-/* 记录行的信息比角色行多（段 / 进度 / 句数 / 时间），
-   必须让每一项整体换行，否则每一项都被压窄、文字在格子里竖着断行 */
-#charList .char-btn.hrow .sub{flex-wrap:wrap;row-gap:1px;column-gap:8px}
-#charList .char-btn.hrow .sub > span{white-space:nowrap}
+/* 播放记录行：与角色列表**同一套两行卡片**（横幅 + 名字/信息，用户 2026-11-14 要求），
+   只是行尾多了「复制名字 ⧉」和「删记录 ✕」两个小图标，所以不再需要左侧那条竖条。 */
+/* 记录行的信息比角色行多（段 / 进度 / 句数 / 时间）：
+   第一行 = 名字 + ⧉ + ✕，第二行 = 那一排进度信息（整行占满，不会被压成竖排） */
+#charList .char-btn.hist .info{flex-wrap:wrap;row-gap:2px}
+#charList .char-btn.hist .info .nm{order:1;flex:1 1 auto;min-width:0}
+#charList .char-btn.hist .info .cpy{order:2}
+#charList .char-btn.hist .info .del{order:3}
+#charList .char-btn.hist .info .sub{order:4;flex:1 0 100%;flex-wrap:wrap;
+  row-gap:1px;column-gap:8px}
+#charList .char-btn.hist .sub > span{white-space:nowrap}
 /* 「主 / 活 / 他」在这里当小标签，不能套用 42×42 的色块 */
-#charList .char-btn.hrow .nm .srcTag{width:auto;height:auto;display:inline-block;
+#charList .char-btn.hist .nm .srcTag{width:auto;height:auto;display:inline-block;
   padding:0 5px;margin-right:5px;font-size:14px;line-height:17px;font-weight:600;
   vertical-align:1px;border-radius:4px}
-#charList .char-btn.hrow .del{flex:0 0 auto;color:var(--fg3);cursor:pointer;
+#charList .char-btn.hist .del{flex:0 0 auto;color:var(--fg3);cursor:pointer;
   padding:0 3px;font-size:14px;opacity:.55}
-#charList .char-btn.hrow:hover .del{opacity:1}
-#charList .char-btn.hrow .del:hover{color:#e06c75}
+#charList .char-btn.hist:hover .del{opacity:1}
+#charList .char-btn.hist .del:hover{color:#e06c75}
 #charList .histBar{display:flex;align-items:center;gap:8px;padding:2px 6px 7px;
   font-size:14px;color:var(--fg3)}
 #charList .histBar button{margin-left:auto;padding:2px 10px;border-radius:6px;
@@ -153,7 +153,9 @@ select,input,button{font-family:inherit}
 #charList .histBar button:hover{color:#e06c75;border-color:#5a3038}
 /* 「播放记录」是 rar-row 的第四格：四个字比 SSR/SR/R 宽，多分一点宽度 */
 .rar-row button[data-f="hist"]{flex:1.3;white-space:nowrap;overflow:hidden}
-#toast{position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:200;
+/* z-index 必须高于所有弹层（分享弹窗 9500 / 局域网浮层 9999）：否则在分享弹窗里
+   点「复制图片」时，提示被遮在弹窗下面，用户以为没反应（2026-11-14 反馈）。 */
+#toast{position:fixed;left:50%;top:56px;transform:translateX(-50%);z-index:10050;
   background:rgba(45,42,74,.97);color:var(--gold);border:1px solid #4a3f78;
   padding:6px 18px;border-radius:20px;font-size:14px;opacity:0;
   transition:opacity .2s;pointer-events:none;
@@ -812,7 +814,12 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
   border:1px solid #3a4a5e;border-radius:9px;padding:9px 11px;font-size:14px;
   color:#dde4ec;box-shadow:0 14px 36px rgba(0,0,0,.6);display:none;pointer-events:none}
 #bnrTip.show{display:block}
-#bnrTip img{width:100%;border-radius:5px;margin-bottom:6px;display:block}
+/* 图按**原尺寸**显示并**左对齐**（2026-11-14 用户反馈）：角色剧情横幅原图只有
+   84~290px 宽，以前写 width:100% 会把它拉到 276px（窄图放大 3 倍多），看着就是一片糊；
+   窄图居中又会在左侧多出一块留白、和下面的信息文字对不齐，所以靠左贴齐面板内边距。
+   这里只做「不超过面板宽」的上限：主线/活动那种 827×146 的宽横幅仍会缩到面板宽。 */
+#bnrTip img{display:block;width:auto;height:auto;max-width:100%;max-height:146px;
+  margin:0 0 6px;border-radius:5px;image-rendering:auto}
 #bnrTip dl{display:grid;grid-template-columns:auto 1fr;gap:2px 9px;margin:0}
 #bnrTip dt{color:#8b95a3}
 #bnrTip dd{margin:0;word-break:break-all}
@@ -867,6 +874,82 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #lanPanel .lan-url{font-size:14px;color:#4dd4c4;word-break:break-all;margin-bottom:8px;
   background:#0b0d12;padding:6px 8px;border-radius:6px;line-height:1.5}
 #lanPanel .lan-hint{font-size:14px;color:#6b7488;line-height:1.6;text-align:left}
+
+/* ================= 分享弹窗（当前画面 + 勾选台词 → 长图） =================
+   左边是成品预览（一张 canvas，随勾选实时重排），右边是台词勾选表。
+   预览按容器等比缩放显示，存图始终是 canvas 自己的原始像素（1080 宽）。 */
+#shareMask{position:fixed;inset:0;z-index:9500;background:rgba(3,6,11,.86);
+  display:flex;align-items:center;justify-content:center;padding:16px}
+/* min-width:0 不能省：舞台预览是一张 1080 宽的 canvas，flex 项默认
+   min-width:auto = 它的固有宽度，手机上会把整个弹窗撑到 1100px（右边全被裁掉）。 */
+#shareBox{position:relative;display:flex;flex-direction:column;width:min(1120px,97vw);
+  min-width:0;max-height:94vh;
+  background:#0f1420;border:1px solid #2d3446;border-radius:12px;overflow:hidden;
+  box-shadow:0 26px 80px rgba(0,0,0,.72)}
+.shHead{display:flex;align-items:center;gap:12px;padding:11px 16px;
+  border-bottom:1px solid #222a38}
+.shHead .shT{font-size:16px;font-weight:600;color:var(--gold);white-space:nowrap}
+.shHead .shS{font-size:14px;color:var(--fg3);min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.shHead .shX{margin-left:auto;flex:none;width:30px;height:28px;padding:0;border-radius:8px;
+  background:var(--bg3);color:var(--fg2);border:1px solid var(--line);cursor:pointer;
+  font-size:15px;line-height:1;font-family:inherit}
+.shHead .shX:hover{color:#fff;border-color:#4a5a72}
+.shBody{display:flex;gap:14px;padding:14px 16px;min-height:0;flex:1}
+.shPrev{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;
+  justify-content:center;background:#05060a;border:1px solid #1e2534;border-radius:8px;
+  padding:10px;overflow:auto}
+.shPrev canvas{display:block;min-width:0;max-width:100%;max-height:60vh;
+  width:auto;height:auto;border-radius:4px;box-shadow:0 8px 26px rgba(0,0,0,.6)}
+.shPrev .shEmpty{font-size:14px;color:var(--fg3);padding:24px 10px;text-align:center}
+.shPick{flex:0 0 320px;display:flex;flex-direction:column;min-height:0}
+.shTools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.shTools button{padding:3px 10px;border-radius:8px;font-size:14px;cursor:pointer;
+  background:var(--bg3);color:var(--fg2);border:1px solid var(--line);font-family:inherit}
+.shTools button:hover{color:var(--gold);border-color:#4a3f78}
+.shTools .shCnt{margin-left:auto;font-size:14px;color:var(--gold);white-space:nowrap}
+.shList{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--line);
+  border-radius:8px;background:#0b1018;padding:4px}
+.shRow{display:flex;gap:8px;align-items:flex-start;padding:5px 7px;border-radius:6px;
+  font-size:14px;line-height:1.5;color:var(--fg2);cursor:pointer}
+.shRow:hover{background:#161d2a}
+.shRow.on{background:#1a2233;color:var(--fg)}
+.shRow input{margin:3px 0 0;flex:none;accent-color:#e0b566;cursor:pointer}
+.shRow .who{flex:none;max-width:6.6em;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:#e0b566}
+.shRow .txt{flex:1;min-width:0;word-break:break-word}
+/* 当前播放到的那一句：左侧一条金边（只在弹窗刚打开时用来看"现在到哪了"） */
+.shRow.cur{box-shadow:inset 2px 0 0 #e0b566}
+.shFoot{display:flex;align-items:center;gap:10px;padding:10px 16px;
+  border-top:1px solid #222a38;background:#0c1119;flex-wrap:wrap}
+.shFoot .tip{font-size:14px;color:var(--fg3)}
+.shFoot .sp{flex:1}
+/* 保存格式：WebP（更小）/ PNG（无损），选完马上生效，不用重开弹窗 */
+.shFoot .shFmt{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--fg3)}
+.shFoot .shFmt select{padding:4px 6px;border-radius:7px;font-size:14px;
+  background:var(--bg3);color:var(--fg2);border:1px solid var(--line);
+  font-family:inherit;cursor:pointer}
+/* 「播放器样式」下字号由设置决定，这一项置灰不可选 */
+.shFoot .shFmt select:disabled{opacity:.45;cursor:default}
+/* 复制成功的反馈直接写在按钮上：变绿 + 文字换成「✓ 图片复制成功」，5 秒后自动还原。
+   min-width 固定住按钮宽度，否则换文案时整个底栏会左右跳一下。 */
+#shCopy{min-width:128px}
+#shCopy.ok{background:#2f7d4f;border-color:#4bbd7a;color:#f2fff6}
+.shFoot button{white-space:nowrap}
+.shFoot button{padding:6px 16px;border-radius:9px;font-size:14px;cursor:pointer;
+  font-family:inherit;background:var(--bg3);color:var(--fg2);border:1px solid var(--line)}
+.shFoot button:hover{color:var(--fg)}
+.shFoot button.primary{background:#2b6ea8;border-color:#4b96d4;color:#fff;font-weight:600}
+.shFoot button.primary:hover{filter:brightness(1.12)}
+/* 窄屏（手机 / 竖屏平板）：上下叠，预览和勾选各占一半，不然两边都挤成一条 */
+@media (max-width:860px){
+  #shareBox{max-height:96vh}
+  .shBody{flex-direction:column;gap:10px;padding:10px}
+  .shPrev{flex:0 0 auto;max-height:32vh}
+  .shPrev canvas{max-height:30vh}
+  .shPick{flex:1 1 auto;min-height:0;max-height:46vh}
+  .shFoot .tip{display:none}
+}
 
 /* ================= 全屏（含手机） ================= */
 /* 伪全屏：iOS Safari 不支持 div 的 requestFullscreen，用 CSS 铺满视口顶上 */
