@@ -64,9 +64,16 @@ SOFT_DEPOTS = ["shared_back", "shared_art", "shared_sfx"]
 #: 索引类数据：很小、所有页面都要 → core
 INDEX_FILES = [
     "data/names.js", "data/index.js", "data/advindex.js", "data/othereps.js",
-    "data/imgmap.js", "data/imgmap.x2.js", "data/imgmap.base.js", "data/sfxmap.js",
-    "data/charmeta.js", "data/cgmap.js",
-    "data/stand_layers.json", "data/stand_slot.json", "data/stand_box.js",
+    "data/imgmap.js", "data/charmeta.js", "data/cgmap.js",
+    "data/stand_layers.json", "data/stand_box.js",
+    # 2026-11-16：imgmap.x2.js / imgmap.base.js / sfxmap.js / stand_slot.json
+    # 是本机产物（超分记录 / WebP 覆盖层 / 音频映射 / 立绘槽位），随剧情 depot
+    # 下发会覆盖用户本机那份，和 pack_app.ps1 / updater 的口径冲突，一律不进 core。
+    # 缺这些文件时启动会补空壳（见 api.py:1786），不影响播放。
+    # 2026-11-16：SD 小人整体停用，sdmap.js 不再随包分发。
+    # 立绘 standmap.js / 原声集 gallery.js 不在这里：它们是**本机磁盘的扫描结果**，
+    # 装机后由 export_standmap.py / export_gallery.py 现生成，随包发只会有害。
+    # "data/sdmap.js",
 ]
 
 UNIT_RE = r"^(char_\d+|adv_(?:main|event|other|side|tutorial|op)(?:_\d+)?)$"

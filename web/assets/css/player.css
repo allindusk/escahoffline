@@ -68,6 +68,9 @@ select,input,button{font-family:inherit}
   color:var(--fg3);border-radius:5px;padding:2px 0;font-size:14px;cursor:pointer}
 .rar-row button:hover{color:var(--fg)}
 .rar-row button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
+/* 播放记录视图里不适用的控件（SSR/SR/R + 两个下拉）**不额外改样式**：
+   置灰和删除线都试过，视觉上割裂（2026-11-15 反馈），改成点下去才浮出
+   「该功能不可用」的提示。守卫写在 player.js 各自的 change / click 里。 */
 /* overflow-x:hidden 是必须的：.char-btn.bnr 原来是写死 296px，加 padding 后
    比列表宽 5px，Windows 上就会出现一条**横向滚动条**（默认样式的浅色轨道 + 深色滑块，
    看起来就是侧栏底部多了一条"黑条+白条"，用户 2026-11-02 截图指出）。
@@ -83,7 +86,7 @@ select,input,button{font-family:inherit}
 .char-btn img{width:42px;height:42px;border-radius:8px;object-fit:cover;
   flex-shrink:0;background:#1a2030;border:1px solid #2d3446}
 /* 横幅图已在 .bnr 里定尺寸，别被上面这条 42×42 规则套上 */
-#charList .char-btn.bnr .bnr img{width:auto;height:81px;object-fit:fill;background:none}
+#charList .char-btn.bnr .bnr img{width:auto;height:var(--mu-bnr-h,81px);object-fit:fill;background:none}
 .char-btn.on img{border-color:rgba(224,181,102,.7)}
 .char-btn .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .char-btn .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -793,11 +796,11 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 /* 横幅统一用 81 高的透明底当"画框"，原图按 81 高左对齐叠在上面：
    宽图右侧被裁掉、窄图右侧自然透出透明 —— 不用改图就能对齐。
    宽度跟着容器走（原来是写死 280px，外层 296px，比列表还宽 → 横向滚动条）。 */
-#charList .char-btn.bnr .bnr{position:relative;display:block;width:100%;height:81px;
+#charList .char-btn.bnr .bnr{position:relative;display:block;width:100%;height:var(--mu-bnr-h,81px);
   border-radius:6px;overflow:hidden;background:transparent;line-height:0;
   border:1px solid #2d3446}
 /* 图自己去边框/圆角：边框画在固定的透明画框上，宽窄不一的原图才不会各自框一个 */
-#charList .char-btn.bnr .bnr img{position:absolute;left:0;top:0;height:81px;width:auto;
+#charList .char-btn.bnr .bnr img{position:absolute;left:0;top:0;height:var(--mu-bnr-h,81px);width:auto;
   max-width:none;display:block;border:0;border-radius:0}
 #charList .char-btn.bnr.on .bnr{border-color:rgba(224,181,102,.7)}
 /* 角色剧情横幅本来就是 81 高（宽 125~298），按高对齐即可；
@@ -807,7 +810,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
   transform:translateY(-50%)}
 /* 横幅没图时（新环境还没下公共素材）用首字色块填满整个画框，
    否则 384 行都是空框，看起来像"图全裂了" */
-#charList .char-btn.bnr .bnr .ava-ph{display:flex;height:81px;align-items:center;
+#charList .char-btn.bnr .bnr .ava-ph{display:flex;height:var(--mu-bnr-h,81px);align-items:center;
   justify-content:center;font-size:16.8px;color:var(--fg3);background:#141a26}
 /* 宽度跟着列表走（原来写死 296px，比列表内容区宽 5px → Windows 上出横向滚动条） */
 #charList .char-btn.bnr{width:100%;box-sizing:border-box}

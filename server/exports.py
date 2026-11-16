@@ -249,6 +249,55 @@ def cg_list() -> dict:
     return {"chars": chars, "total": sum(c["total"] for c in chars)}
 
 
+# ---------------------------------------------------------------- 原声集导出
+def export_audio(job, tracks: list[int] | None = None) -> dict:
+    """把原声集里选中的曲目打包成 zip。
+
+    文件名带编号前缀（``007_バトル.m4a``），解压后在播放器里天然按顺序排。
+    曲目来源以 ``web/data/gallery.js`` 的 ``s`` 字段为准 —— 它已经解析过
+    "能复用现有 BGM 文件"还是"画廊独占曲"，这里不重新猜。
+    """
+    p = os.path.join(paths.DATA, "gallery.js")
+    if not os.path.exists(p):
+        return {"path": "", "files": 0, "note": "还没解包原声集"}
+    try:
+        gal = _load_js(p)
+    except Exception as e:                                       # noqa: BLE001
+        return {"path": "", "files": 0, "note": f"gallery.js 读取失败：{e}"}
+    rows = gal.get("tracks") or []
+    want = set(int(t) for t in (tracks or []))
+    picked = [r for r in rows if (not want or int(r.get("no") or 0) in want)]
+    total = len(picked)
+    if job is not None:
+        job.set_total(total, "首")
+        job.set_items(total)
+    if not total:
+        return {"path": "", "files": 0, "note": "没有选中曲目"}
+
+    out = _unique_path("原声集")
+    written = missing = 0
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+        # **不压缩**：m4a 已经是压缩过的音频，deflate 只多耗 CPU、几乎不减体积
+        for r in picked:
+            if job is not None and job.cancelled:
+                break
+            src = paths.web_path(str(r.get("s") or "")) if r.get("s") else ""
+            if not src or not os.path.exists(src):
+                missing += 1
+                if job is not None:
+                    job.progress(add=1)
+                continue
+            no = int(r.get("no") or 0)
+            title = str(r.get("t") or "").strip() or f"track{no:03d}"
+            z.write(src, f"{no:03d}_{_san(title)}{os.path.splitext(src)[1] or '.m4a'}")
+            written += 1
+            if job is not None:
+                job.progress(add=1, message=f"打包 {written}/{total} 首")
+    if job is not None:
+        job.finish(f"已导出 {written} 首")
+    return {"path": out, "abs": out, "files": written, "missing": missing}
+
+
 def _safe_names(cgmap) -> dict:
     """``{cid: 角色名}``。命名规则统一由 :mod:`server.names` 决定（中文优先）。"""
     from . import names as nameutil

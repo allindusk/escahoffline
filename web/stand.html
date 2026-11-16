@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="assets/js/shellboot.js?v=1130a"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>超昂大战 · 角色立绘</title>
+<link rel="stylesheet" href="assets/css/cg.css?v=1116c">
+    <link rel="stylesheet" href="assets/css/stand.css?v=1116f">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
+</head>
+<body>
+<div class="layout">
+  <aside id="sidebar">
+    <input id="q" placeholder="搜索角色 / 编号…" autocomplete="off">
+    <!-- 两个范围 = 「角色 / 其他」×「立绘」。SD 相关范围已按用户要求注释掉
+         （2026-11-16：本页只保留角色立绘，不再处理 SD 小人）。
+         不再单独区分 NPC 与敌人：官方按编号段分的桶本来就不准（旧后端把敌人都
+         记成 npc，前端只能靠编号 >= 20000 猜），用户要求把角色以外的都归「其他」
+         （2026-11-15 反馈）。 -->
+    <div id="sdScope">
+      <button data-scope="char-stand" class="on">角色立绘</button>
+      <!-- <button data-scope="char-sd">角色 SD</button> -->
+      <button data-scope="other-stand">其他立绘</button>
+      <!-- <button data-scope="other-sd">其他 SD</button> -->
+    </div>
+    <div id="filters">
+      <!-- 选项由 common.js 的 ESC.fillSort 填（和 CG 页共用一份，别在这里另写一套） -->
+      <select id="sortBy"></select>
+      <select id="dlFilter" title="筛选：已下载 / 未下载">
+        <option value="">全部</option>
+        <option value="have">只看已下载</option>
+        <option value="miss">只看未下载</option>
+        <option value="fav">只看已收藏</option>
+      </select>
+    </div>
+    <div id="charList"></div>
+  </aside>
+
+  <main>
+    <div id="bar">
+      <span id="barInfo"></span>
+      <span class="sizes">
+        <span>卡片大小</span>
+        <button class="sz" data-sz="180">小</button>
+        <button class="sz" data-sz="240">中</button>
+        <button class="sz" data-sz="320">大</button>
+        <button class="sz" data-sz="440">特大</button>
+      </span>
+    </div>
+    <div id="grid"></div>
+  </main>
+</div>
+
+<div id="lb">
+  <div id="lbTop">
+    <span id="lbTitle"></span>
+    <span id="lbCount" style="color:var(--fg3)"></span>
+    <span id="lbGroup" style="color:var(--fg3)"></span>
+    <button id="lbFav" title="收藏这一组">☆ 收藏</button>
+    <button id="lbFs" title="全屏浏览 (F)">⛶ 全屏</button>
+    <button id="lbClose">关闭 Esc</button>
+  </div>
+  <div id="lbBody">
+    <button id="lbPrev" title="上一张 ←（第一张时跳上一组）">‹</button>
+    <img id="lbImg" alt="">
+    <!-- SD 灯箱：全部动作一行铺开（由 stand.js 的 paintLB 填充）
+         2026-11-16 起本页不再显示 SD，保留空容器避免 JS 取到 null -->
+    <div id="lbRow" hidden></div>
+    <button id="lbNext" title="下一张 →（最后一张时跳下一组）">›</button>
+  </div>
+  <div id="lbBottom"></div>
+  <div id="lbHint">
+    <kbd>←</kbd><kbd>→</kbd> 上一张 / 下一张（到头自动跳下一组）·
+    <kbd>↑</kbd><kbd>↓</kbd> 直接换组 ·
+    <kbd>Esc</kbd> 关闭
+  </div>
+  <div id="lbRotTip">↻ 把手机横过来 · 画面更大</div>
+</div>
+
+<script src="data/names.js"></script>
+<script src="data/charmeta.js"></script>
+<script src="data/mediaindex.js?v=1115a"
+        onerror="window.__MEDIA=window.__MEDIA||null"></script>
+<script src="data/imgmap.js"></script>
+<script src="data/imgmap.x2.js"></script>
+<script src="data/imgmap.base.js"
+        onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
+<!-- standmap.js 是"本机磁盘扫出来的"，第一次装剧情之前不存在（属正常，不是坏了） -->
+<script src="data/standmap.js"
+        onerror="window.__STANDMAP=window.__STANDMAP||null"></script>
+<!-- 2026-11-16：不再加载 sdmap.js（本页只显示角色立绘，不下载/处理 SD 资源）
+     <script src="data/sdmap.js"
+             onerror="window.__SDMAP=window.__SDMAP||null"></script> -->
+<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/dialog.js?v=1130d"></script>
+<script src="assets/js/mediaui.js?v=1123b"></script>
+<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/packstate.js?v=1103a"></script>
+<script src="assets/js/userdata.js?v=1115g"></script>
+<script src="assets/js/stand.js?v=1116k"></script>
+<script src="assets/js/miniplayer.js?v=1130a"></script>
+<script src="assets/js/disclaimer.js?v=1102a"></script>
+<script src="assets/js/health.js?v=1130a"></script>
+<script src="assets/js/mobile.js?v=1115b"></script>
+<script>DISCLAIMER.auto(); HEALTH.start();</script>
+</body>
+</html>

@@ -1421,6 +1421,70 @@ def compose_stands(nums) -> None:
     _say(f"  合成用时 {time.time() - t0:.0f}s")
 
 
+def clear_x2_pending() -> None:
+    """清空 ``_archive/x2_pending.json``（api 把高清图重做完/删掉之后调）。
+
+    不清的话下次体检还会把它当待办再交一遍 —— 为了「跑了一半也不丢」，
+    这份清单是累积的，清空的责任在处理方。
+    """
+    try:
+        os.remove(os.path.join(ROOT, "userdata", "_archive", "x2_pending.json"))
+    except OSError:
+        pass
+
+
+def repair_stands(job=None) -> dict:
+    """全库体检并修复立绘（资源管理页「检查并修复立绘」按钮 / ``compose_stand_all --repair``）。
+
+    为什么要单独一步：立绘是本机从 CDN 包合成的产物（``web/media/img/stand``），
+    不在更新器白名单里（那边只覆盖程序文件 + 少数 web/data 索引），所以升级程序
+    本身不会修好老图 —— 除非用户重装那部剧情。这条路径就是给老用户补的。
+
+    **不靠任何写死的编号清单**（不能把"哪些素材有问题"传上 GitHub），四项检查
+    全部从图像特征判定：半透明躯体、同组尺寸不一致、**成品与当前逻辑重做结果
+    对不上**（旧图/错位/串包，唯一能看见"源包没问题但页面上的图是错的"的一项）、
+    表情层与底图重叠区亮暗比/对齐色差偏离。重写也改不好的（源素材层面）会记进
+    ``_archive/stand_src_suspect.json``，之后不再重复重做。
+    """
+    lock = os.path.join(ARCHIVE_DIR, ".stand_repair.lock")
+    try:
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        if os.path.exists(lock):
+            _say("  立绘体检已经在跑了，这次跳过")
+            return 0
+        open(lock, "w", encoding="utf-8").close()
+    except OSError:
+        pass
+    report = {"fixed": [], "x2_stale": []}
+    rc = 1
+    try:
+        t0 = time.time()
+        rc = run_script("compose_stand_all.py", "--repair", quiet=True)
+        if rc == 0:
+            _say(f"  立绘体检完成（{time.time() - t0:.0f}s）")
+        else:
+            _say(f"  立绘体检退出码 {rc}")
+    except Exception as e:                                     # noqa: BLE001
+        _say(f"  立绘体检失败：{e}")
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+    # 脚本会把「修了哪些组 / 哪些组还有旧高清图」落盘，调用方（api）据此重做超分。
+    # 注意目录：脚本写的是 ``userdata/_archive``（它自己的 BASE），而 stages 的
+    # ARCHIVE_DIR 是 ``userdata/cdn/archive`` —— 两者不是一个目录，别混用。
+    try:
+        p = os.path.join(ROOT, "userdata", "_archive", "stand_repair_last.json")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                report = json.load(f)
+    except Exception:                                          # noqa: BLE001
+        pass
+    report["rc"] = rc
+    return report
+
+
 def fill_missing_stands(keys, job=None) -> list[str]:
     """给"剧本引用了、但合成不出对应表情"的立绘 key 兜一张同套素体立绘。
 
@@ -1514,9 +1578,30 @@ def regen_sfxmap() -> int:
     return len(mp)
 
 
+def regen_standmap() -> None:
+    """重生成 ``data/standmap.js``（立绘 / SD 页的分组表）。
+
+    为什么不并进 ``gen_imgmap``：imgmap 只登记"剧本引用过的"键，而立绘页要
+    把磁盘上**所有**立绘都列出来（含剧本没提到、但合成时一起产出的服装）。
+    扫 1.9 万个文件名、几百毫秒，装完一部剧情跑一次完全值得 ——
+    否则用户装完新角色，立绘页里还是看不到他。
+    """
+    try:
+        run_script("export_standmap.py", quiet=True)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def regen_maps() -> None:
     regen_imgmap()
     regen_sfxmap()
+    # 立绘分组表：装完剧情要能立刻在「角色立绘」页看到新素材
+    regen_standmap()
+    # 2026-11-16：SD 整体停用，不再重新生成 sdmap.js
+    # try:
+    #     run_script("export_sd.py", "--catalog", quiet=True)
+    # except Exception:
+    #     pass
 
 
 # ================================================================ 角色名 / 元数据

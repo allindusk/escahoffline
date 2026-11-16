@@ -140,6 +140,28 @@ def app_version() -> str:
     return __version__
 
 
+def note_run_version() -> dict | None:
+    """记录本次运行的版本；上次记录的版本与本次不同 → 返回 ``{"from": 旧, "to": 新}``。
+
+    用途：判定「这次是**从旧版本升级上来**」，好让页面弹一次"旧版立绘可能有问题"的
+    提示。新装用户没有旧记录，返回 None（不该打扰）。
+    存在 ``state.json`` 的 ``lastRunVersion``：它不像 config 那样被白名单过滤掉。
+    """
+    cur = (app_version() or "").strip()
+    if not cur:
+        return None
+    st = load_state()
+    prev = (st.get("lastRunVersion") or "").strip()
+    if prev == cur:
+        return None
+    st["lastRunVersion"] = cur
+    try:
+        save_state(st)
+    except OSError:
+        pass
+    return {"from": prev, "to": cur} if prev else None
+
+
 def rel(path: str) -> str:
     """绝对路径 → 站点相对路径（正斜杠），给前端用。"""
     p = os.path.abspath(path)

@@ -157,7 +157,7 @@ body.hc-on{padding-top:44px}
         knownCheck = uc.latest;
         show('启动检查：发现新版本 <b>v' + esc(uc.latest) + '</b>（当前 v'
           + esc(uc.current) + '）。去控制台点一下就能更新', '去更新',
-          () => { location.href = 'setup.html#update'; });
+          () => { (window.__go ? window.__go('setup.html#update') : (location.href = 'setup.html#update')); });
       }
       if (d.warn && !warnedPath) {
         warnedPath = true;

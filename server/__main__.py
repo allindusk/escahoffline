@@ -10,6 +10,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import webbrowser
 
 from . import api, paths
@@ -144,6 +145,43 @@ def main(argv=None) -> int:
     from . import log as applog, proc
     proc.install_signal_handlers()
     applog.log(f"boot v{paths.app_version()} python={ver}", "boot")
+
+    # 这次是**从旧版本升级上来**吗？是就留一个标记，资源管理页打开时弹一次
+    # 「旧版立绘可能有问题，要不要现在修」——立绘是本机合成的产物，更新器不碰它，
+    # 用户不点这个修复就永远不会好。新装用户（没有旧版记录）不打扰。
+    try:
+        _up = paths.note_run_version()
+        if _up:
+            paths.save_json(
+                os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json"),
+                {"from": _up["from"], "to": _up["to"],
+                 "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            applog.log(f"版本升级 {_up['from']} -> {_up['to']}：已登记立绘修复提示",
+                       "boot")
+    except Exception:                                          # noqa: BLE001
+        pass
+
+    # 本机生成的数据表（standmap/gallery/voicemap）不随程序分发，覆盖升级后必然
+    # 丢失；剧情/素材还在，但没人重新触发重建 → 立绘页、原声集页列表全空。
+    # 启动时后台补建一次（有产物、缺索引才做），不阻塞开页面。用户看到的是
+    # "几秒后刷新即可"，而不是一个永远空白的页面（2026-11-16 覆盖升级实测）。
+    def _heal_local_indexes():
+        try:
+            from .cdn import config as _cfg, stages as _st
+            data, img = _cfg.DATA, _cfg.IMG
+            # 立绘：有合成产物却缺分组表 → 重建
+            has_stand = os.path.isdir(os.path.join(img, "stand"))
+            if has_stand and not os.path.exists(os.path.join(data, "standmap.js")):
+                applog.log("启动自愈：立绘产物在、standmap.js 缺失，后台重建索引", "boot")
+                _st.regen_standmap()
+        except Exception as e:                                 # noqa: BLE001
+            try:
+                applog.log("启动自愈本地索引失败：" + str(e), "boot")
+            except Exception:
+                pass
+    threading.Thread(target=_heal_local_indexes, name="heal-indexes",
+                     daemon=True).start()
+
     # 按保留策略收敛日志：当天全量、>1 天只留 ERROR、>7 天删除
     try:
         _pr = applog.prune()
@@ -178,6 +216,10 @@ def main(argv=None) -> int:
         lan = _lan_ip()
         if lan:
             print(f"手机/同网段设备访问：http://{lan}:{port}/{a.page}")
+
+    # 立绘体检**不在启动时跑**：全库比对要读上千个资源包（老机器一两分钟），
+    # 开机自启时风扇转起来用户会以为程序出问题。改由用户在
+    # 「资源管理 → 设置 / 清理空间 → 维护」里点按钮触发（/api/stand/repair）。
     return api.serve(host, port)
 
 

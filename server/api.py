@@ -115,7 +115,10 @@ def run_install(job, units: list[str], workers: int = 32,
     if multi:
         try:
             mf = cdn_install.index_manifest()
-            job.bytes_total = sum(cdn_install._unit_bytes(mf, u) for u in units)
+            # **只算本机还缺的包**：点「补全」时绝大多数包早在盘上，按全部包的
+            # 体积算分母会得出「要下 13.6 GB · 剩 66 小时」（2026-11-15 反馈）。
+            job.bytes_total = sum(cdn_install._unit_bytes(mf, u, pending=True)
+                                  for u in units)
         except Exception:                                      # noqa: BLE001
             job.bytes_total = 0
     job.log(f"共 {len(units)} 部剧情，下载并发 {workers}")
@@ -152,10 +155,36 @@ def run_install(job, units: list[str], workers: int = 32,
         job.items_done = i - 1          # 当前这部从 (i-1)/N 起算
         job.meta["unit"] = u            # 让进度条能显示"当前装到哪部"
         st = cdn_install.unit_state(u)
-        if st == "ready":
+        # 「已就绪」不等于"什么都不缺"：SD 小人与战斗语音是后加的素材，
+        # 老用户装过剧情但没有这两样。这种情况只补附加素材，不重跑剧本/图片
+        # （以前一律跳过，于是"勾 381 部补 SD"全部跳过、界面永远写着缺 SD）。
+        extra = cdn_install.unit_extras_missing(u) if st in ("ready", "soft-missing") else []
+        if st == "ready" and extra:
+            job.log(f"[{i}/{len(units)}] 补附加素材 {u}（缺 "
+                    f"{'/'.join(extra)}）")
+            try:
+                r = cdn_install.install_extras(u, job, workers)
+                ok.append(r)
+                _tally(u, "ready", [])
+            except Exception as e:                             # noqa: BLE001
+                failed.append({"unit": u, "error": str(e)[:300]})
+                job.log(f"[{u}] 补附加素材失败：{e}")
+                _tally(u, "failed", [])
+        elif st == "ready":
             skipped.append(u)
             job.log(f"[{i}/{len(units)}] 跳过 {u}：已就绪")
             _tally(u, "ready", [])
+        elif st == "soft-missing" and extra:
+            job.log(f"[{i}/{len(units)}] 补附加素材 {u}（缺 "
+                    f"{'/'.join(extra)}；语音源本身缺失，跳过剧情部分）")
+            try:
+                r = cdn_install.install_extras(u, job, workers)
+                ok.append(r)
+                _tally(u, "soft-missing", ["语音缺"])
+            except Exception as e:                             # noqa: BLE001
+                failed.append({"unit": u, "error": str(e)[:300]})
+                job.log(f"[{u}] 补附加素材失败：{e}")
+                _tally(u, "failed", [])
         elif st == "soft-missing":
             skipped.append(u)
             job.log(f"[{i}/{len(units)}] 跳过 {u}：软缺（语音源缺失，重跑无解）")
@@ -176,6 +205,8 @@ def run_install(job, units: list[str], workers: int = 32,
                 _tally(u, "failed", [])
         job.items_done = i
         job.progress(done=i)
+    # 整批只重建一次索引；以前每个角色都全盘扫一遍（366 部 = 366 次）
+    cdn_install.rebuild_indexes()
     cdn_install.invalidate_units()
     # 取消时别把 items 顶满：进度条会显示 100% 但状态是「已取消」，自相矛盾
     if not job.cancelled:
@@ -704,9 +735,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # 原样写进启动的 cmd 窗口，用户一开就以为坏了（2026-11-06 反馈）。
         # 现在只留一条 DEBUG（当天日志仍是全量，能查），不进 stderr。
         # 前端也已经改成"先看 data/mediaindex.js，没有就不请求"，这里是最后兜底。
-        if code == 404 and path.startswith("/media/"):
+        # 2026-11-16：所有 404 都只进日志、不写启动 cmd —— 不只是 /media/，
+        # 还有本机生成的数据表（data/gallery.js / standmap.js / voicemap.js 等），
+        # 它们在「装原声集/装剧情之前」本来就不存在，是正常状态不是故障。
+        # cmd 里刷一片 404 只会让人以为程序坏了；真要排查，当天 app.log 全量记着。
+        if code == 404:
             try:
-                applog.debug("素材未安装（不影响使用）：" + (fmt % args),
+                applog.debug("资源未就绪（不影响使用）：" + (fmt % args),
                              tag="http")
             except Exception:                                    # noqa: BLE001
                 pass
@@ -854,6 +889,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path in self.OPTIONAL_DATA and not os.path.exists(
                     self.translate_path(path)):
                 return self._no_content()
+            # 媒体文件走自己的 Range 实现（音频必须能拖进度条）
+            if path.startswith("/media/"):
+                fs = self.translate_path(path)
+                if os.path.isfile(fs):
+                    return self._serve_media(fs)
             return super().do_GET()
         except (BrokenPipeError, ConnectionResetError,
                 ConnectionAbortedError):
@@ -871,6 +911,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pass
             self._log_req("GET", t0)
 
+    def _serve_media(self, fs_path: str):
+        """``/media/`` 下的文件自己发：**必须支持 Range**。
+
+        为什么不能用 stdlib 的 ``SimpleHTTPRequestHandler``：它既不回
+        ``Accept-Ranges``、也不处理 ``Range`` 请求头。浏览器据此判定
+        "这个音频不能跳"，于是拖进度条时**整个流从头重下** ——
+        用户看到的就是「点进度条，歌从头开始播」（2026-11-15 反馈）。
+        """
+        size = os.path.getsize(fs_path)
+        ctype = self.guess_type(fs_path) or "application/octet-stream"
+        start, end = 0, size - 1
+        code = 200
+        m = re.match(r"bytes=(\d*)-(\d*)\s*$", (self.headers.get("Range") or "").strip())
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                if m.group(2):
+                    end = min(int(m.group(2)), size - 1)
+            else:                                  # bytes=-N：末尾 N 字节
+                n = int(m.group(2))
+                start = max(0, size - n)
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self._status = 416
+                return
+            code = 206
+        self._status = code
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(fs_path, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0:
+                buf = f.read(min(256 * 1024, left))
+                if not buf:
+                    break
+                self.wfile.write(buf)
+                left -= len(buf)
+
     def do_HEAD(self):
         # 少数探测工具用 HEAD 扫 favicon/源映射，同样给 204 而不是 404
         path = urllib.parse.urlparse(self.path).path
@@ -878,6 +968,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._no_content()
         if path in self.OPTIONAL_DATA and not os.path.exists(self.translate_path(path)):
             return self._no_content()
+        if path.startswith("/media/"):
+            fs = self.translate_path(path)
+            if os.path.isfile(fs):
+                return self._serve_media(fs)      # HEAD 也会带 Accept-Ranges
         return super().do_HEAD()
 
     def do_POST(self):
@@ -1000,6 +1094,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"missing": miss, "ready": not miss})
         if path == "/api/cglist":
             return self._json(exports.cg_list())
+        if path == "/api/stand/repair/prompt":
+            # 「从旧版本升级上来」的一次性提示（标记由 server/__main__.py 启动时写）。
+            # 只读不删：用户没处理完（比如关了页面）下次打开还会看到。
+            p = os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json")
+            try:
+                with open(p, encoding="utf-8") as f:
+                    d = json.load(f)
+                return self._json({"need": True, "from": d.get("from", ""),
+                                   "to": d.get("to", "")})
+            except (OSError, ValueError):
+                return self._json({"need": False})
         if path == "/api/upscale/plan":
             kinds = (q.get("kinds") or "stand,back,cg").split(",")
             kinds = tuple(k for k in (x.strip() for x in kinds) if k)
@@ -1047,12 +1152,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "needManifest": True,
                     "units": {"char": [], "adv": []},
                     "state": cdn_install.local_units(),
+                    "sd": {},
                 })
             try:
                 u = cdn_install.list_units()
             except Exception as e:                             # noqa: BLE001
                 return self._err(e)
             return self._json({"units": u,
+                               # 2026-11-16：SD 整体停用，不再返回 sd 状态图
+                               # "sd": cdn_install.sd_state_map(),
+                               "vo": cdn_install.voice_state_map(),
                                "state": cdn_install.unit_status_map()})
         return self._err("unknown api", 404)
 
@@ -1154,6 +1263,69 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                               lambda j: media.convert_existing(j, q, kinds),
                               holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
+        if path == "/api/stand/repair/prompt/dismiss":
+            p = os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json")
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            return self._json({"ok": True})
+        if path == "/api/stand/repair":
+            # 全库体检 + 修复立绘。判定完全靠图像特征（半透明 / 脸与身体亮暗比），
+            # 代码里没有任何"哪几个编号有问题"的名单 —— 谁装了素材谁自己就能找出来。
+            _TITLE = "检查并修复立绘"
+            for j in jobs.active():            # 连点两下只跑一份
+                if j.get("title") == _TITLE:
+                    return self._json({"job": j})
+
+            def _fix(j):
+                j.log("正在检查已经装好的立绘（通常 1~3 分钟）…")
+                info = cdn_stages.repair_stands(j) or {}
+                fixed = info.get("fixed") or []
+                stale = info.get("x2_stale") or []
+                if info.get("full_rewrite"):
+                    j.log(f"程序里的立绘合成方式升级过，所以这次把 {len(fixed)} 组全部"
+                          f"按新方式重做了一遍（比平时慢一些，属于一次性）")
+                # 源素材本身对不上的组：重做多少遍都是同一张图，脚本已记名单不再重复
+                # 重做。这里说明一句，免得用户以为"还没修完"。
+                sus = info.get("src_suspect") or []
+                tail = ""
+                if sus:
+                    tail = (f"；另有 {len(sus)} 组属于素材本身的问题（表情贴图与身体"
+                            f"对不上），重做也变不了，已记录、以后不再重复处理")
+                if not fixed and not stale:
+                    j.log("检查完了：没有发现需要修的立绘" + tail)
+                    return
+                if not stale:
+                    j.log(f"修好 {len(fixed)} 组立绘" + tail + "，刷新页面即可看到")
+                    return
+                # 这些组之前做过「提高CG画质」，旧的高清图还是错的 —— 播放器优先读它，
+                # 不处理的话用户会觉得"修了没效果"。stale 是**累积待办**：也可能来自
+                # 上一次没跑完（那时 fixed 已经是空的），所以不能因为 fixed 为空就提前返回。
+                pairs = media.stand_x2_pairs(stale)
+                eng = media.find_engine()
+                done = f"修好 {len(fixed)} 组立绘" if fixed else ""
+                if eng["kind"] == "none" or not pairs:
+                    n = media.drop_stand_x2(stale)
+                    cdn_stages.clear_x2_pending()
+                    j.log((done + "；" if done else "")
+                          + f"清掉了 {n} 张旧的高清图（没找到超分引擎，"
+                          f"这几组先按原图显示）" + tail + "，刷新即可看到")
+                    return
+                try:
+                    scale = int(paths.load_config().get("upscaleScale") or 2)
+                except Exception:                            # noqa: BLE001
+                    scale = 2
+                j.log((done + "，" if done else "上次没做完的高清图继续重做：")
+                      + f"正在把 {len(stale)} 组的高清图重做一遍"
+                      f"（{len(pairs)} 张，可能要几分钟）…")
+                media.upscale_pairs(j, pairs, scale=scale)
+                cdn_stages.clear_x2_pending()
+                j.log(f"全部完成：修好 {len(fixed)} 组立绘、重做高清图 {len(pairs)} 张"
+                      + tail + "，刷新页面即可看到")
+
+            job = jobs.submit("stand", _TITLE, _fix)
+            return self._json({"job": job.snapshot()})
         if path == "/api/delete-originals":
             def _del_orig(j):
                 out = media.delete_originals(j)
@@ -1190,7 +1362,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 以前默认写死 ["bg","bgm","sfx"]，而 avatar 又不在白名单里，
             # 于是"下载公共素材"从来没下过头像 → 侧栏和 CG 页全是首字色块。
             raw = b.get("parts") or list(cdn_install.PUBLIC_PARTS)
-            parts = [p for p in raw if p in cdn_install.PUBLIC_PARTS]
+            parts = [p for p in raw if p in cdn_install.PUBLIC_ALL]
             if not parts:
                 return self._err("没有选择要下载的公共素材")
             workers = max(1, min(64, int(b.get("threads") or 32)))
@@ -1280,25 +1452,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     j, chars=chars or None, groups=groups or None, whole=whole),
                 holds=hold)
             return self._json({"job": job.snapshot()})
-        if path == "/api/export/video":
-            q = self._q()
-            name = urllib.parse.unquote(q.get("name") or "story")
-            n = int(self.headers.get("Content-Length") or 0)
-            if n <= 0:
-                return self._err("没有收到视频数据")
-            os.makedirs(paths.DOWNLOADS, exist_ok=True)
-            tmp = os.path.join(paths.DOWNLOADS, f"upload_{int(time.time())}.webm")
-            left = n
-            with open(tmp, "wb") as f:
-                while left > 0:
-                    buf = self.rfile.read(min(1024 * 1024, left))
-                    if not buf:
-                        break
-                    f.write(buf)
-                    left -= len(buf)
-            info = exports.save_video(tmp, name)
-            return self._json({"ok": True, "file": os.path.basename(info["path"]),
-                               "bytes": info["bytes"]})
+        if path == "/api/export/audio":
+            b = self._body()
+            try:
+                tracks = sorted({int(x) for x in (b.get("tracks") or [])})
+            except (TypeError, ValueError):
+                return self._err("曲目参数不对")
+            job = jobs.submit(
+                "export", f"导出原声集 {len(tracks) or '全部'} 首",
+                lambda j: exports.export_audio(j, tracks=tracks or None))
+            return self._json({"job": job.snapshot()})
+        # 旧版「浏览器上传已录制 webm」端点已删：上面 /api/export/video 是同一路径，
+        # 先 return 后这段永远不可达；且 do_POST 已用 _body() 读光请求体，
+        # 这里再读 self.rfile 只会得到 0 字节。视频导出统一走后台任务。
         if path == "/api/import/trans":
             b = self._body()
             unit = (b.get("unit") or "").strip()

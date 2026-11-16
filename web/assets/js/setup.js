@@ -299,12 +299,167 @@
     }
   }
 
-  /** 底部任务条会占位置，浮窗跟着抬高，避免叠在一起 */
+  /** 右下角操作记录浮窗要抬到任务条之上，避免两块叠在一起。
+      **折叠态也必须按胶囊高度抬**：胶囊收起后和操作记录同在右侧，
+     不抬高的话两块会正好叠住，「展开进度」按钮就点不到了。 */
   function syncActBottom() {
     if (!apPanel) return;
     const bar = $('#jobbar');
-    const h = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+    const h = (!bar || bar.hidden)
+      ? 0 : Math.round(bar.getBoundingClientRect().height);
     apPanel.style.bottom = (h > 0 ? h + 60 : 54) + 'px';
+  }
+
+  /* ---------------------------------------------------------------- 任务条折叠
+     任务条最多 3 行、窄屏每行还会折成 4 行，整条横在底部时下面一大片页面
+     都用不了。三个办法一起上：
+       · --job-h 把 .layout 的内容盒缩短到任务条上沿（CSS 里），可视区里
+         就不存在被盖住的内容，按钮都能点；
+       · 顶部一条细把手，一键收成右下角小胶囊（和操作记录、版本号同一列），
+         折叠态容器透明、不吃鼠标，左边整片让给页面内容；
+       · 偏好记 localStorage；但用户一点「开始安装」就会重新展开，
+         免得点了按钮却像没反应。 */
+  const JOB_FOLD_KEY = 'escah_jobbar_fold';
+
+  function syncJobSpace() {
+    const bar = $('#jobbar');
+    if (!bar) return;
+    const h = bar.hidden ? 0 : Math.round(bar.getBoundingClientRect().height);
+    /* 任务条底边离视口底 52px（版本号 / 免责声明的位置），
+       正文可视区要比任务条顶边再高 8px → 一共让出 h + 60。
+       折叠态也照样让位（只是 h 只剩胶囊那 50px），这样不管展开还是收起，
+       可视区里都不存在被浮层盖住的内容，按钮永远点得到。 */
+    document.documentElement.style.setProperty('--job-h',
+      h > 0 ? (h + 60) + 'px' : '0px');
+  }
+
+  function setJobFold(fold, persist) {
+    const bar = $('#jobbar');
+    const btn = $('#jobFold');
+    if (!bar || !btn) return;
+    bar.classList.toggle('folded', !!fold);
+    btn.textContent = fold ? '展开进度 ▴' : '收起进度 ▾';
+    btn.setAttribute('aria-expanded', fold ? 'false' : 'true');
+    btn.title = fold
+      ? '点开看每个任务下了多少，也能暂停或取消'
+      : '收起后只留右下角一个小提示，页面底部就能点了';
+    if (persist !== false) {
+      try { localStorage.setItem(JOB_FOLD_KEY, fold ? '1' : '0'); } catch (e) { }
+    }
+    syncJobSpace();
+    syncActBottom();
+  }
+
+  function renderJobHead(list) {
+    const bar = $('#jobbar');
+    const txt = $('#jobHeadTxt');
+    const pct = $('#jobHeadPct');
+    const mini = $('#jobHeadBar');
+    if (!bar || !txt || !pct || !mini) return;
+    const running = list.filter(j => j.state === 'running' || j.state === 'queued').length;
+    /* 收起后看不到每一行的红色失败态，所以失败结论必须在把手条上说出来，
+       否则用户只看到「任务已结束」，会以为装好了。 */
+    const failed = list.filter(j => j.state === 'failed').length;
+    /* 多任务取最小的百分比：并行时全部装完才算完，用户关心最慢那条 */
+    const pcts = list.filter(j => j.state !== 'done').map(j => +(j.percent || 0));
+    const slow = pcts.length ? Math.min.apply(null, pcts) : 100;
+    const n = list.length;
+    txt.textContent = failed
+      ? failed + ' 个任务没成功'
+      : (n > 1
+        ? (running ? running + ' 个任务进行中' : '任务已结束')
+        : (running ? '任务进行中'
+          : (list[0] && list[0].state === 'done' ? '任务已完成' : '任务已结束')));
+    pct.textContent = (n > 1 ? '最慢 ' : '') + slow.toFixed(1) + '%';
+    mini.style.width = Math.max(0, Math.min(100, slow)) + '%';
+    bar.classList.toggle('all-done', !running && !failed);
+    bar.classList.toggle('has-failed', failed > 0);
+  }
+
+  (function initJobbar() {
+    const btn = $('#jobFold');
+    if (!btn) return;
+    let fold = false;
+    try { fold = localStorage.getItem(JOB_FOLD_KEY) === '1'; } catch (e) { }
+    setJobFold(fold, false);
+    btn.onclick = () => setJobFold(!$('#jobbar').classList.contains('folded'));
+    /* 窗口变窄时任务行会换行、整条变高，内容区和右下浮窗都要重新让位 */
+    window.addEventListener('resize', () => { syncJobSpace(); syncActBottom(); });
+  })();
+
+  /* 纯 DOM 演示数据（?jobbartest=1 / =fold）：只在渲染阶段替换列表，
+     不请求后端、不写设置、不碰任何真实数据，用于检查遮挡与折叠观感。 */
+  function demoJobs() {
+    const MB = 1048576;
+    return [
+      { id: 'demo-1', title: '安装 366 部剧情', message: '   立绘 / 语音 / 剧本',
+        state: 'running', percent: 2.7,
+        bytesDone: 49.39 * MB, bytesTotal: 49.39 * MB,
+        itemsTotal: 366, itemsDone: 9, meta: { unit: 'char_381' },
+        subTotal: 1, subDone: 1, eta: 10680 },
+      { id: 'demo-2', title: '下载公共素材（背景 / 音乐 / 音效 / 头像 / 剧情横幅 / 演出特效）',
+        message: '处理演出特效 9-16/435（占进度条后 40%）…',
+        state: 'running', percent: 60.5, bytesTotal: 0, phaseLabel: '解包',
+        total: 870, done: 12, unit: '个', phaseBase: 60, phaseSpan: 40 },
+    ];
+  }
+
+  /* 量化自检：正文可视区底边和任务条顶边的间隔、让位高度、
+     以及贴近底部那一带鼠标实际命中的是谁（不能是任务条）。 */
+  window.__jobbarCheck = function () {
+    const bar = $('#jobbar');
+    const m = $('main');
+    const br = bar.getBoundingClientRect();
+    const mr = m.getBoundingClientRect();
+    const y = Math.round(br.top - 20);
+    const hit = document.elementFromPoint(Math.round(window.innerWidth / 2), y);
+    const btn = $('#jobFold');
+    const fr = btn.getBoundingClientRect();
+    const bhit = document.elementFromPoint(
+      Math.round(fr.left + fr.width / 2), Math.round(fr.top + fr.height / 2));
+    return {
+      fold: bar.classList.contains('folded'), hidden: bar.hidden,
+      barH: Math.round(br.height), barTop: Math.round(br.top),
+      mainBottom: Math.round(mr.bottom), gap: Math.round(br.top - mr.bottom),
+      space: getComputedStyle(document.documentElement)
+        .getPropertyValue('--job-h').trim(),
+      hit: hit ? (hit.id || hit.className || hit.tagName) : '',
+      hitInMain: !!(hit && (m === hit || m.contains(hit))),
+      hitInBar: !!(hit && bar.contains(hit)),
+      foldBtnHit: !!(bhit && (bhit === btn || btn.contains(bhit))),
+      btnR: Math.round(fr.right), vw: window.innerWidth,
+    };
+  };
+
+  function showJobDiag() {
+    const d = window.__jobbarCheck();
+    let el = $('#jobDiag');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'jobDiag';
+      el.style.cssText = 'position:fixed;left:8px;top:56px;z-index:9999;'
+        + 'padding:6px 10px;border-radius:6px;background:#10202e;'
+        + 'border:1px solid #2a4159;color:#cfe0ee;font:14px/1.5 Consolas,monospace;'
+        + 'pointer-events:none;white-space:pre';
+      document.body.appendChild(el);
+    }
+    el.textContent = 'gap=' + d.gap + 'px  space=' + d.space
+      + '  barH=' + d.barH + 'px  fold=' + d.fold
+      + '\nhit=' + d.hit + '  inMain=' + d.hitInMain
+      + '  barHit=' + d.hitInBar
+      + '  foldBtn=' + (d.foldBtnHit ? 'OK' : 'BLOCKED')
+      + '\nbtnR=' + d.btnR + '/' + d.vw
+      + '  full=' + (d.btnR <= d.vw - 4);
+  }
+
+  function hideJobbar() {
+    const b = $('#jobbar');
+    const l = $('#jobList');
+    if (!b) return;
+    if (l) l.innerHTML = '';
+    b.hidden = true;
+    syncJobSpace();
+    syncActBottom();
   }
 
   if (apToggle) {
@@ -479,12 +634,13 @@
   $('#ovInstallCore').onclick = async () => {
     $('#btnRefreshManifest') && $('#btnRefreshManifest').click();
   };
-  $('#ovInstallAll').onclick = () => {
+  $('#ovInstallAll').onclick = async () => {
     const keys = ST.units.char.concat(ST.units.adv)
       .filter(k => (ST.units.state[k] || 'missing') === 'missing');
     if (!keys.length) { toastMsg('所有剧情都已安装'); return; }
-    if (!confirm('将安装全部 ' + keys.length + ' 部剧情，约 ' +
-      FACT.unitsSize(keys.length) + '。\n\n建议先装一两个试试再全量。确定吗？')) return;
+    if (!(await Dlg.confirm('将安装全部 ' + keys.length + ' 部剧情，约 ' +
+      FACT.unitsSize(keys.length) + '。\n\n建议先装一两个试试再全量。确定吗？',
+      { ok: '开始安装' }))) return;
     // 注意：**不能**替换 Set 对象 —— storylist 组件握着这个 Set 的引用，
     // 换成新对象后勾选状态就和组件脱钩了（列表看着没勾上）。
     ST.sel.clear();
@@ -510,6 +666,10 @@
     ST.units.char = (d.units || {}).char || [];
     ST.units.adv = (d.units || {}).adv || [];
     ST.units.state = d.state || {};
+    // 2026-11-16：不再下载/补全 SD 资源，忽略后端返回的 sd 状态
+    // ST.units.sd = d.sd || null;
+    ST.units.sd = null;
+    ST.units.vo = d.vo || null;
     ST.units.loaded = true;
     ST.units.at = Date.now();
   }
@@ -519,6 +679,9 @@
     try {
       await api(path, { method: 'POST', body: JSON.stringify(body || {}) });
       toastMsg(tip || '已开始，进度见底部');
+      /* 用户刚点了「开始安装」之类的按钮，就是要看进度：哪怕上次收起过，
+         这次也把条展开（并记住"展开"这个选择）。否则点了像没反应。 */
+      setJobFold(false);
       connectJobs(true);
     } catch (e) {
       toastMsg('启动失败：' + e.message, true);
@@ -559,6 +722,23 @@
   function unitName(key) { return SL.info(key).name; }
 
   const stateOf = key => ST.units.state[key] || 'missing';
+
+  /* 角色还差哪些附加素材：战斗语音（音声）。
+     2026-11-16：SD 小人不再下载/补全，相关判据已注释。
+     后端 `/api/cdn/units` 的 `vo` 是 `{编号: true/false}`，只列**清单里
+     真有这个包**的编号 —— 官方没出的老卡不会出现在这里，也就不会被标成"永远缺"。
+     旧版后端没有这个字段（undefined）→ 一律当"不判断"，不能把所有人标成缺。 */
+  function extrasMissing(key) {
+    const out = [];
+    if (!/^char_\d+$/.test(key)) return out;
+    const cid = key.slice(5);
+    // const sd = ST.units && ST.units.sd;
+    const vo = ST.units && ST.units.vo;
+    // if (sd && sd[cid] === false) out.push('缺 SD 素材');
+    if (vo && vo[cid] === false) out.push('缺音声');
+    return out;
+  }
+  function hasExtraMissing(key) { return extrasMissing(key).length > 0; }
 
   // 软缺（装好了，但官方源没有语音包）的文案按剧情类别区分：
   //  · 其他剧情：本来就没有语音轨 → 「无语音」
@@ -661,6 +841,22 @@
     /* 演出特效（表情符号逐帧数据 + 图集）是 v6 才有的类别：后端进程还没重启时
        没有 advfx 字段，此时不能判成"缺"，否则老用户会看到一个永远补不齐的 0/1。 */
     const advfxOk = pubVer >= 6 ? exact(pub.advfx, pub.advfxTotal) : true;
+    /* 原声集是 v8 才有的**可选**类别（体积大、不是人人要）：
+       默认不装，单独一行一个「安装」按钮。2026-11-16 起 NPC·敌 SD 不再下载/补全。 */
+    const optVer = pubVer >= 8;
+    /* v12 起原声集按「有音频的曲目数 / 清单曲目数」判齐：分母来自官方清单，
+       官方上新曲后分母自动变大 → 这里变回「补全」，点一下就能听到。
+       旧后端（v<12）只有 0/1 或封面张数，沿用封面判，别把缺字段当齐。 */
+    const galOk = optVer
+      ? (pubVer >= 12 ? exact(pub.gallery, pub.galleryTotal)
+        : exact(pub.jacket, pub.jacketTotal))
+      : true;
+    const galHave = pubVer >= 12 ? (pub.gallery || 0) : (pub.jacket || 0);
+    const galCnt = pubVer >= 12
+      ? '曲目 ' + cnt(pub.gallery, pub.galleryTotal) + ' 首'
+        + (pub.jacketTotal ? '（封面 ' + cnt(pub.jacket, pub.jacketTotal) + '）' : '')
+      : '封面 ' + cnt(pub.jacket, pub.jacketTotal) + ' 张';
+    /* 2026-11-16：NPC / 其他分类的音声不再下载/展示，可选区只剩原声集。 */
     const pubAll = ready && !pubStale && bgOk && backRefMiss === 0
       && exact(pub.music, pub.musicTotal) && exact(pub.sfx, pub.sfxTotal)
       && exact(pub.avatar, pub.avatarTotal) && exact(pub.banner, pub.bannerTotal)
@@ -737,6 +933,26 @@
           + (pubAny ? '补全缺失' : '下载') + '</button>') +
       '</div>' +
 
+      // ②' 可选类别：默认不装，各自一个按钮（体积大，不是人人要）
+      (optVer
+        ? '<div class="bp-row"><span class="nm">原声集（封面 + 独占曲）' +
+          '<span class="st none" style="margin-left:6px">可选</span></span>' +
+          '<span class="dim" title="每首一张封面（447×411）。'
+          + '多数曲目与你已经装过的 BGM 是同一份音频，直接复用本地文件，'
+          + '不重复下载；只有画廊独占的曲目会额外下（每首约 2.5 MB）。'
+          + '官方上新曲后这里会重新显示「补全」，点一下就能听到'
+          + '（新曲暂时只有内部编号名，公开曲名补齐后会自动更新）。'
+          + '装好后「原声集」页才有得听、有封面转">' +
+          '约 30 MB · ' + galCnt + '</span>' +
+          (galOk ? '<span class="st ok">已就绪</span>'
+            : '<button id="bpGallery" title="已有的会跳过，重复点不会重下">'
+              + (galHave > 0 ? '补全' : '安装') + '</button>') +
+          '</div>'
+          /* 2026-11-16：NPC / 其他分类的音声不再下载/展示，整行删除
+          + '<div class="bp-row">...NPC / 敌人音声...</div>'
+          */
+        : '') +
+
       // ③ 剧情本体
       '<div class="bp-row"><span class="nm">剧情本体（立绘 / 语音 / 剧本）</span>' +
       '<span class="dim">按剧情单独装，见下方列表</span>' +
@@ -762,19 +978,39 @@
     };
     const bp = $('#bpPub');
     if (bp) {
-      bp.onclick = () => {
+      bp.onclick = async () => {
         const list = missParts.map(k => PART_CN[k] || k).join(' / ');
-        if (!confirm('补齐公共素材？\n\n'
+        if (!(await Dlg.confirm('补齐公共素材？\n\n'
           + '· 这次只补缺的部分：' + (list || '全部')
           + '\n· 已经齐的类别不重跑 —— 不重新下载，也不重新解包'
           + '\n· 只差一两项时通常十几秒就完；缺头像会慢些（385 张要重裁）'
-          + '\n· 期间可关掉页面，任务在后台继续\n\n开始？')) return;
+          + '\n· 期间可关掉页面，任务在后台继续\n\n开始？',
+          { anchor: bp, ok: '开始补齐' }))) return;
         // 空对象 = 后端按默认全量（只有清单没读到时才会落到这里）
         startJob('install/base',
           missParts.length ? { parts: missParts } : {},
           '开始补齐公共素材：' + (list || '全部'));
       };
     }
+
+    /* 可选的额外类别：单独一个按钮，只传自己那一个 part。
+       注意别再并进上面的 missParts —— 那是"公共素材必需项"，混在一起会让
+       "补全缺失"把 412 MB 的敌人 SD 也一起拖下来。 */
+    const optBtn = (sel, part, label, extra) => {
+      const el = $(sel);
+      if (!el) return;
+      el.onclick = async () => {
+        if (!(await Dlg.confirm('安装「' + label + '」？\n\n· ' + extra
+          + '\n· 只补缺的部分，已装好的不会重做'
+          + '\n· 期间可关掉页面，任务在后台继续\n\n开始？',
+          { anchor: el, ok: '开始安装' }))) return;
+        startJob('install/base', { parts: [part] }, '开始安装：' + label);
+      };
+    };
+    optBtn('#bpGallery', 'gallery', '原声集（封面 + 独占曲）',
+      '封面 12 MB；此外只会下"本机没有同曲音频"的曲目，官方新曲也在这里补');
+    // 2026-11-16：NPC / 其他分类的 SD 与音声都不再下载，安装入口已删除
+    // optBtn('#bpSdNpc', 'sd_npc', ...);
 
     const ovc = $('#ovInstallCore');
     if (ovc) {
@@ -919,10 +1155,15 @@
          · soft-missing 官方源本身就没有这语音包，重跑也补不出来（后端会直接跳过）
          这两类点「开始安装」都是白跑，所以直接禁勾。
          只有 partial（解包中断）能勾 —— 重新下载并解包即可修复。 */
-      disabled: k => stateOf(k) === 'ready' || stateOf(k) === 'soft-missing',
+      disabled: k => (stateOf(k) === 'ready' || stateOf(k) === 'soft-missing')
+        && !hasExtraMissing(k),
       badge: k => {
         const st = stateOf(k);
         if (st === 'soft-missing') return { cls: 'must', text: softMissingLabel(k) };
+        // 剧情与立绘都齐、只差音声：单独说清（SD 判据已注释）
+        if (st === 'ready' && hasExtraMissing(k)) {
+          return { cls: 'must', text: extrasMissing(k).join(' / ') };
+        }
         const b = UNIT_BADGE[st] || UNIT_BADGE.missing;
         return { cls: b[0], text: b[1] };
       },
@@ -931,6 +1172,10 @@
         if (st === 'soft-missing') {
           return '剧本与立绘已装好、能正常播放，但' + softMissingLabel(k)
             + '—— 已是最完整状态，无法补齐';
+        }
+        if (st === 'ready' && hasExtraMissing(k)) {
+          return '剧情、立绘都装好了，只差战斗语音'
+            + ' —— 勾上后点「开始安装」只会补这些，不会重下剧情';
         }
         if (st === 'partial') {
           return '剧本文件异常小（上次解包中断）—— 勾上后点「开始安装」重下并重新解包';
@@ -950,17 +1195,18 @@
         }
         return out;
       },
-      onAction: (k, act) => {
+      onAction: async (k, act) => {
         // 补齐：和「开始安装」走同一个任务，只是这一部、只补缺的
         if (act === 'fill') {
           runInstall([k], '正在补齐「' + unitName(k) + '」缺的部分…');
           return;
         }
         if (act !== 'rm') return;
-        if (!confirm('卸载「' + unitName(k) + '」？\n\n'
+        if (!(await Dlg.confirm('卸载「' + unitName(k) + '」？\n\n'
           + '会删除：剧本、语音、头像、该角色独占的立绘（通常几十 MB）。\n'
           + '背景 / CG 可能被别的剧情共用，会保留。\n\n'
-          + '资源包缓存会保留 —— 以后重装不用重新下载。')) return;
+          + '资源包缓存会保留 —— 以后重装不用重新下载。',
+          { danger: true, ok: '卸载' }))) return;
         startJob('uninstall', { units: [k] }, '正在卸载…');
       },
       onChange: () => updateSelBar(),
@@ -970,7 +1216,7 @@
     return packList;
   }
 
-  /** 勾选统计：fresh = 全新安装，fill = 已装但可修复（只有 partial 解包中断）。
+  /** 勾选统计：fresh = 全新安装，fill = 已装但可修复（partial 解包中断 / 缺音声）。
    *  soft-missing 不算 fill：官方源缺语音，补不出来，禁勾且不应计入「补齐」。 */
   function selSummary() {
     const fresh = [];
@@ -979,6 +1225,10 @@
       const st = stateOf(k);
       if (st === 'missing') fresh.push(k);
       else if (st === 'partial') fill.push(k);
+      // 剧情齐了、只差音声：算「补齐」（后端 install_unit 会把缺的补上，
+      // 已有的包全部跳过）
+      else if ((st === 'ready' || st === 'soft-missing')
+               && hasExtraMissing(k)) fill.push(k);
     });
     return { fresh: fresh.length, fill: fill.length,
              todo: fresh.length + fill.length,
@@ -1080,11 +1330,12 @@
     const what = [];
     if (s.fresh) what.push('安装 ' + s.fresh + ' 部（约 ' + FACT.unitsSize(s.fresh) + '）');
     if (s.fill) what.push('补齐 ' + s.fill + ' 部（解包中断，只下缺的包重新解包）');
-    if (!confirm('即将' + what.join(' + ') + '。\n\n' +
+    if (!(await Dlg.confirm('即将' + what.join(' + ') + '。\n\n' +
       '· 每部角色剧情约 ' + FACT.t('unitEach') + '（语音 + 背景 + 立绘 + CG）\n' +
       '· 下载速度：同时下 ' + threads + ' 个\n' +
       '· 单部约 ' + FACT.t('secUnit') + '装好\n' +
-      '· 已经下过的文件会跳过，重复点不会重新下载\n\n开始？')) return;
+      '· 已经下过的文件会跳过，重复点不会重新下载\n\n开始？',
+      { anchor: $('#btnInstall'), ok: '开始安装' }))) return;
     runInstall(s.keys, '已开始安装，进度见底部');
   };
 
@@ -1139,6 +1390,7 @@
 
   function renderJobs(list) {
     const bar = $('#jobbar');
+    const jobList = $('#jobList');
     /* 任务刚结束 → 重拉状态。
        这段原先放在函数末尾，用的还是被 filter + slice(0,3) 裁过的列表：
        底部条只留最近 3 条，被裁掉的终态任务就永远触发不了刷新 ——
@@ -1160,6 +1412,14 @@
           ST.pub = p;
           renderPacks();
         }).catch(() => { });
+        /* 补全原声集/音声会新生成 data/gallery.js、voicemap.js。常驻的原声集
+           播放器（shell 里的 fMusic）只在加载时读一次，不通知就一直是空列表，
+           要手动 F5 才有 —— 让外壳在没播放时重载它（在播则等暂停，不打断）。 */
+        if (window.parent !== window) {
+          try {
+            window.parent.postMessage({ t: 'ost:reload-music' }, location.origin);
+          } catch (e) { /* 忽略 */ }
+        }
       }
       if (!ST._refreshT) {
         ST._refreshT = setTimeout(() => {
@@ -1402,7 +1662,10 @@
       }).catch(() => { });
     }
 
-    if (!list || !list.length) { bar.innerHTML = ''; return; }
+    /* 演示钩子放在所有副作用之后：前面的刷新 / 通知逻辑永远只看真实任务。
+       （纯 DOM，不写后端、不写设置，见上面 demoJobs 的注释） */
+    if (ST._jobDemo) list = demoJobs();
+    if (!list || !list.length) { hideJobbar(); return; }
     const now = Date.now() / 1000;
     // 只有"还在跑"的常驻；结束的也在条上多停一会儿再收：
     // 以前 done 只留 6 秒，刚看到"完成"两个字就没了，用户根本来不及读。
@@ -1415,8 +1678,8 @@
       const keep = j.state === 'failed' ? 40 : 15;
       return now - endAt < keep;
     }).slice(0, 3);
-    if (!list.length) { bar.innerHTML = ''; return; }
-    bar.innerHTML = list.map(j => {
+    if (!list.length) { hideJobbar(); return; }
+    jobList.innerHTML = list.map(j => {
       const pct = j.state === 'done' ? 100 : (j.percent || 0);
       const eta = (j.eta && j.state === 'running') ? j.eta : 0;
       /* 是不是"下载之后"的阶段（解包）：后端 phase(label="解包") 会把字节口径
@@ -1506,8 +1769,15 @@
       : ''}
       </div>`;
     }).join('');
+    bar.hidden = false;
+    renderJobHead(list);
+    /* 任务条高度变了（任务数、终态、窄屏换行都可能），重新量一次：
+       正文让位高度、右下角操作记录的位置都要跟着走。 */
+    syncJobSpace();
+    syncActBottom();
+    if (ST._jobDemo) requestAnimationFrame(showJobDiag);
     // 暂停 / 继续（软暂停：已完成的包不回退，正在传的会传完）
-    bar.querySelectorAll('[data-pause]').forEach(b => {
+    jobList.querySelectorAll('[data-pause]').forEach(b => {
       b.onclick = () => {
         const paused = b.dataset.on === '1';
         api('jobs/' + b.dataset.pause + (paused ? '/resume' : '/pause'),
@@ -1516,7 +1786,7 @@
           .catch(e => toastMsg(e.message, true));
       };
     });
-    bar.querySelectorAll('[data-cancel]').forEach(b => {
+    jobList.querySelectorAll('[data-cancel]').forEach(b => {
       b.onclick = () => api('jobs/' + b.dataset.cancel + '/cancel', { method: 'POST' })
         .then(() => toastMsg('已请求取消')).catch(e => toastMsg(e.message, true));
     });
@@ -1798,8 +2068,9 @@
     const eta = (p && p.total)
       ? `\n本次 ${p.total} 张，单张约 ${p.perImageSec} 秒，预计 ${p.etaText}` : '';
     const scope = units.length ? `所选 ${units.length} 部剧情里的` : '已下载的';
-    if (!confirm(`将对${scope}【${kinds.join(' / ')}】做超分（${$('#upScale').value} 倍）。${eta}\n\n` +
-      `这会占用大量 CPU，期间电脑会变卡；可以随时取消，已完成的不会重做。继续？`)) return;
+    if (!(await Dlg.confirm(`将对${scope}【${kinds.join(' / ')}】做超分（${$('#upScale').value} 倍）。${eta}\n\n` +
+      `这会占用大量 CPU，期间电脑会变卡；可以随时取消，已完成的不会重做。继续？`,
+      { ok: '开始超分' }))) return;
     try {
       await api('upscale', {
         method: 'POST',
@@ -1819,12 +2090,13 @@
   const btnRebuildX2 = $('#btnRebuildX2');
   if (btnRebuildX2) {
     btnRebuildX2.onclick = async () => {
-      if (!confirm('重新登记高清图？\n\n'
+      if (!(await Dlg.confirm('重新登记高清图？\n\n'
         + '· 只是把硬盘上已经做好的高清图数一遍，重新登记给播放器用\n'
         + '· 不会重新做超分，不会改动或删除任何图片，硬盘占用不变\n'
         + '· 大约 ' + FACT.t('secRebuild') + '，随时能关页面\n\n'
         + '平时不用点它。只有「高清图明明做了、播放器里看着还是糊」或者'
-        + '「从别的电脑拷了高清图过来」的时候才用。继续？')) return;
+        + '「从别的电脑拷了高清图过来」的时候才用。继续？',
+        { anchor: btnRebuildX2, ok: '开始登记' }))) return;
       const info = $('#x2RebuildInfo');
       if (info) info.textContent = '正在登记…';
       ST._rbAskAt = Date.now() / 1000 - 2;    // 只认这一次的结果（留 2 秒时钟余量）
@@ -2112,7 +2384,8 @@
     };
   }
   $('#btnDelOrig').onclick = async () => {
-    if (!confirm('删除「已经有超分图」的原图？\n\n只会删有对应超分文件的那部分，删完照样能播放。')) return;
+    if (!(await Dlg.confirm('删除「已经有超分图」的原图？\n\n只会删有对应超分文件的那部分，删完照样能播放。',
+      { anchor: $('#btnDelOrig'), danger: true, ok: '删除' }))) return;
     try {
       await api('delete-originals', { method: 'POST', body: '{}' });
       toastMsg('正在清理'); connectJobs(true);
@@ -2136,9 +2409,10 @@
   }
   const btnPruneGo = $('#btnPruneGo');
   if (btnPruneGo) {
-    btnPruneGo.onclick = () => {
-      if (!confirm('确认删掉这些没人用的旧压缩包？\n\n' +
-        '删掉后如果以后重新装回那部剧情，会重新下载一遍。')) return;
+    btnPruneGo.onclick = async () => {
+      if (!(await Dlg.confirm('确认删掉这些没人用的旧压缩包？\n\n' +
+        '删掉后如果以后重新装回那部剧情，会重新下载一遍。',
+        { anchor: btnPruneGo, danger: true, ok: '删除' }))) return;
       startJob('cdn/prune', { dry: false }, '开始清理没用的旧缓存');
     };
   }
@@ -2168,7 +2442,7 @@
 
   async function runClean(what, btn) {
     const f = CLEAN_CONFIRM[what];
-    if (f && !confirm(f())) return;
+    if (f && !(await Dlg.confirm(f(), { danger: true, ok: '确定清理' }))) return;
     if (btn) btn.disabled = true;
     try {
       await api('space/clean', {
@@ -2357,12 +2631,13 @@
     const parts = vidParts();
     if (!parts.length) { toastMsg('至少选一段', true); return; }
     const units = Array.from(ST.vidSel);
-    if (!confirm('将导出 ' + units.length + ' 条 mp4（每部剧情一条，各含所选 ' +
+    if (!(await Dlg.confirm('将导出 ' + units.length + ' 条 mp4（每部剧情一条，各含所选 ' +
       parts.length + ' 段，连续段落合并成同一条）。\n\n' +
       '· 离线渲染：逐句定格截图后编码，画面稳定、无掉帧\n' +
       '· 实测每句约 ' + FACT.t('secExportLine') + ' → 单段约 '
       + FACT.t('secExportPart') + '，6 段全导约 ' + FACT.t('secExportAll') + '\n' +
-      '· 期间可以关掉这个页面，任务在后台继续\n\n开始？')) return;
+      '· 期间可以关掉这个页面，任务在后台继续\n\n开始？',
+      { anchor: $('#btnVidQueue'), ok: '开始导出' }))) return;
     try {
       await api('export/video', {
         method: 'POST',
@@ -2896,8 +3171,9 @@
     }
   };
   $('#btnApplyUpdate').onclick = async () => {
-    if (!confirm('会先下载新版本，然后程序自动重启一次。\n\n' +
-      '你的素材、译文、设置都不会丢。继续？')) return;
+    if (!(await Dlg.confirm('会先下载新版本，然后程序自动重启一次。\n\n' +
+      '你的素材、译文、设置都不会丢。继续？',
+      { anchor: $('#btnApplyUpdate'), ok: '立即更新' }))) return;
     try {
       await api('update/apply', {
         method: 'POST', body: JSON.stringify({ url: ST.updUrl }),
@@ -2985,10 +3261,62 @@
   $('#btnOpenMedia').onclick = () => api('open', {
     method: 'POST', body: JSON.stringify({ which: 'media' }),
   }).catch(e => toastMsg(e.message, true));
+  async function runStandRepair() {
+    try {
+      await api('stand/repair', { method: 'POST', body: '{}' });
+      toastMsg('正在检查立绘，进度看页面底部');
+      connectJobs(true);
+      return true;
+    } catch (e) {
+      const m = String((e && e.message) || '');
+      // 程序刚更新过、但本地服务还是旧进程 —— 新接口它不认识（404 / unknown api）。
+      const stale = /unknown api|404|not found|failed to fetch|networkerror/i.test(m);
+      toastMsg(stale
+        ? '本地服务还是旧版本：关掉窗口再双击「启动.bat」重开，然后再点一次'
+        : m, true);
+      return false;
+    }
+  }
+  $('#btnFixStands').onclick = async () => {
+    if (!(await Dlg.confirm(
+      '把已经装好的立绘全部检查一遍，发现「半透明色块」「脸亮身体暗」'
+      + '「表情差分错位（眼睛嘴巴贴歪）」的重新生成。\n\n'
+      + '要读一遍素材包，通常 1~3 分钟；做过「提高CG画质」的那几组会连高清图一起重做'
+      + '（再多几分钟）。期间可以继续用别的页面。开始？',
+      { anchor: $('#btnFixStands'), ok: '开始检查' }))) return;
+    runStandRepair();
+  };
+  /* 升级后的一次性提示：立绘是本机合成的产物，更新器碰不到它，老用户不点这个
+     修复就永远是旧图 —— 所以升级完重启后，在资源管理页主动问一次。
+     标记由 server/__main__.py 在检测到版本变化时写入，弹过即清（只打扰一次）。 */
+  async function maybePromptStandRepair() {
+    let d;
+    try { d = await api('stand/repair/prompt'); } catch (e) { return; }  // 老服务没这接口
+    if (!d || !d.need) return;
+    const head = d.from && d.to
+      ? `这次是从 ${d.from} 升级到 ${d.to}。`
+      : '程序刚刚更新过。';
+    const yes = await Dlg.confirm(
+      head + '\n\n'
+      + '旧版本装好的立绘里，个别会出现三种毛病：\n'
+      + '· 脸和身体半透明，透出底色像一块色块\n'
+      + '· 脸偏亮、身体偏暗\n'
+      + '· 表情贴歪了，和脸对不上\n\n'
+      + '这是旧版本合成的问题，更新程序本身改不了已经生成的图。\n'
+      + '要现在检查并修复一遍吗？通常 1~3 分钟，期间可以继续用别的页面。',
+      { title: '旧版立绘可能有显示问题', ok: '现在修复', cancel: '以后再说' });
+    api('stand/repair/prompt/dismiss', { method: 'POST', body: '{}' })
+      .catch(() => { });
+    if (yes) { runStandRepair(); return; }
+    Dlg.alert('想修的时候随时可以来：\n\n'
+      + '左侧「设置 / 清理空间」→「维护」→ 点「检查并修复立绘」。',
+      { title: '位置记一下' });
+  }
   $('#btnClearJobs').onclick = () => api('jobs/clear', { method: 'POST', body: '{}' })
     .then(() => toastMsg('已清空')).catch(e => toastMsg(e.message, true));
   $('#btnShutdown').onclick = async () => {
-    if (!confirm('停止本地服务？页面会失效，需要重新双击「启动.bat」。')) return;
+    if (!(await Dlg.confirm('停止本地服务？页面会失效，需要重新双击「启动.bat」。',
+      { anchor: $('#btnShutdown'), danger: true, ok: '停止服务' }))) return;
     try { await api('shutdown', { method: 'POST', body: '{}' }); } catch (e) { }
     document.body.innerHTML =
       '<div style="padding:60px;text-align:center;color:#7b90a8">' +
@@ -3015,12 +3343,24 @@
   }
   $$('#side button').forEach(b => { b.onclick = () => goto(b.dataset.sec); });
 
+  /* 只切 DOM 的演示钩子：?jobbartest=1 展开、=fold 收起。
+     不改 localStorage 偏好、不请求后端、不动任何真实数据。 */
+  (function initJobDemo() {
+    let v = '';
+    try { v = new URLSearchParams(location.search).get('jobbartest') || ''; } catch (e) { }
+    if (!v) return;
+    ST._jobDemo = true;
+    setJobFold(v === 'fold', false);
+  })();
+
   // ---------------------------------------------------------------- 启动
   (async () => {
     try {
       await loadAll();
       connectJobs();
       loadExports();
+      // 升级后的一次性提示：不 await，别挡首屏；老服务没有这接口就静默跳过
+      maybePromptStandRepair();
       const q = new URLSearchParams(location.search);
       if (q.get('unit')) {
         const u = q.get('unit');
@@ -3064,8 +3404,11 @@
       text: '在上面搜名字、或者按分类翻，找到就把那一行<b>勾上</b>，再点「开始安装」。'
         + '它的画面、声音、立绘会一起帮你下好，<b>你不需要准备任何文件</b>。' },
     { el: '#jobbar', title: '③ 底下那条是进度',
+      // 引导到这一步时先把收起的任务条展开，否则只会高亮到那个小胶囊
+      before: () => setJobFold(false, false),
       text: '能看到下了几成、还剩多久，也能暂停或取消。下完之后还要花点时间「拆开装好」，'
-        + '进度会继续往前走，<b>不是卡住了</b>。关掉网页也没关系，下次打开还能接着来。' },
+        + '进度会继续往前走，<b>不是卡住了</b>。关掉网页也没关系，下次打开还能接着来。'
+        + '<br>挡着页面时可以点右边「收起进度」，只留右下角一个小提示，随时再点开。' },
     { el: '#packList', title: '④ 不想看了可以卸载',
       text: '装好的剧情右边有「卸载」，只删它自己的东西。'
         + '<b>大家共用的背景和音乐会留着</b>，别的剧情照常能看。' },

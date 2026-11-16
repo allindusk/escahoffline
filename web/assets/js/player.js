@@ -5304,13 +5304,16 @@ function syncFilterBar() {
   const flt = $('#filters');
   if (!flt) return;
   flt.style.display = '';
-  const charView = (SRC === 'char') && !HIST_ON;
+  /* 不适用时**不改任何外观**：置灰、删除线都试过，视觉上割裂（2026-11-15 反馈）。
+     控件照常显示，点下去才提示「打开播放记录时该功能不可用」；
+     守卫在各自的 change / click 里。这里只把历史版本加过的 disabled 清掉。
+     （也不能 display:none —— 格子消失后「播放记录」会撑满整行，布局全跳。） */
   const sortEl = $('#sortBy');
-  if (sortEl) sortEl.style.display = charView ? '' : 'none';
+  if (sortEl) sortEl.disabled = false;
   const dlEl = $('#dlFilter');
-  if (dlEl) dlEl.style.display = HIST_ON ? 'none' : '';
+  if (dlEl) dlEl.disabled = false;
   document.querySelectorAll('.rar-row button[data-r]').forEach(b => {
-    b.style.display = charView ? '' : 'none';
+    b.disabled = false;
   });
 }
 
@@ -5346,15 +5349,22 @@ function renderHistList(box, filter = '') {
     return;
   }
 
-  // 顶部一条：条数 + 清空（误积累太多时可以一次性清掉）
+  // 顶部一条：排序说明 + 清空（误积累太多时可以一次性清掉）。
+  // 不再写「共 N 条」——上面 #hit 已经写着「播放记录 N 条」，同一行数字
+  // 重复两遍纯属噪音（2026-11-15 用户指出）。
   const bar = document.createElement('div');
   bar.className = 'histBar';
-  bar.innerHTML = `<span>共 ${list.length} 条</span>`;
+  bar.innerHTML = '<span>按最后观看时间倒序</span>';
   const clr = document.createElement('button');
   clr.textContent = '清空记录';
   clr.title = '删除全部播放记录（收藏不受影响）';
-  clr.onclick = () => {
-    if (!confirm('清空全部播放记录？（收藏不会被动）')) return;
+  clr.onclick = async () => {
+    // 用项目自绘的确认框（原生 confirm 是浏览器白框，跟暗色界面完全割裂）
+    /* 只留主问题。原来那句「（收藏不会被动）」是 passive 的直译，中文不通顺，
+       而且属于多余解释 —— "清空记录不动收藏"已经写在按钮的 title 里了
+       （2026-11-15 反馈）。 */
+    if (!(await Dlg.confirm('清空全部播放记录？',
+      { anchor: clr, danger: true, ok: '清空' }))) return;
     UD.clearAllProg();
     renderHistList(box, filter);
   };
@@ -5490,7 +5500,7 @@ function renderSidebarBody(filter = '') {
   }
 
   list.forEach(c => {
-    const nm = NAMES[c.id] || ('角色 ' + c.id);
+    const nm = NAMES[c.id] || ('ID ' + c.id);
     const m = CHARMETA[c.id] || {};
     const rar = rarityOf(c.id);
     const st = stOf('char_' + c.id);
@@ -6191,12 +6201,28 @@ function revealRow(key) {
 }
 
 $('#sortBy').onchange = e => {
+  /* 播放记录是跨分类的独立视图、非角色分类也没有"角色级排序"：
+     这两处改排序不会生效，把选项弹回去并说明原因（比置灰更好懂）。 */
+  if (HIST_ON || SRC !== 'char') {
+    e.target.value = SET.sortBy || 'id';
+    toast(HIST_ON ? '打开「播放记录」时不能改排序，先关掉它'
+      : '只有「角色剧情」能按这里的方式排序');
+    return;
+  }
   SET.sortBy = e.target.value;
   applySettings();                 // 排序方式跟着设置一起存
   renderSidebar($('#search').value);
 };
 if ($('#dlFilter')) {
-  $('#dlFilter').onchange = () => {
+  $('#dlFilter').onchange = e => {
+    if (HIST_ON) {
+      // 记录列表不参与资源/收藏筛选：把选择弹回原值，别让用户以为改了没用
+      const prev = (window.UD && window.UD.prefValue
+        ? window.UD.prefValue('ui', 'dlf', '') : '') || '';
+      e.target.value = prev;
+      toast('打开「播放记录」时不能筛选，先关掉它');
+      return;
+    }
     FOCUS_KEY = null;            // 用户自己在筛了，深链定位不再插手
     const v = $('#dlFilter').value;
     if (window.UD && window.UD.syncPref) window.UD.syncPref('ui', 'dlf', v);
@@ -6212,6 +6238,11 @@ if ($('#dlFilter')) {
 }
 document.querySelectorAll('.rar-row button[data-r]').forEach(b => {
   b.onclick = () => {
+    if (HIST_ON || SRC !== 'char') {
+      toast(HIST_ON ? '打开「播放记录」时不能用稀有度筛选，先关掉它'
+        : '只有「角色剧情」有稀有度筛选');
+      return;
+    }
     FOCUS_KEY = null;            // 用户自己在筛了，深链定位不再插手
     const r = b.dataset.r;
     let arr = SET.rarSel ? SET.rarSel.split(',') : [];
@@ -6354,8 +6385,8 @@ async function openStory(key, opt) {
     const msg = `「${storyTitle(key)}」的资源还没有下载。\n\n` +
       `缺少：${miss.hard.join('、') || '剧情数据'}\n\n` +
       `现在打开「资源管理」页面去下载吗？`;
-    if (confirm(msg)) {
-      location.href = 'setup.html?unit=' + encodeURIComponent(key);
+    if (await Dlg.confirm(msg, { ok: '去下载' })) {
+      (window.__go ? window.__go('setup.html?unit=' + encodeURIComponent(key)) : (location.href = 'setup.html?unit=' + encodeURIComponent(key)));
     }
     return;
   }
@@ -6364,6 +6395,12 @@ async function openStory(key, opt) {
      无关。以前这里弹「公共素材未下载：可到资源管理补齐」，既吓人又误导
      （那些语音根本补不出来），故不再弹提示。 */
   stopAll();
+  // 开始播放剧情：让常驻外壳暂停原声集，免得剧情台词和 BGM 一起响。
+  // 这个行为可以在「原声集 → ⚙ 跨页播放设置」里关掉。
+  try {
+    if (window.parent !== window)
+      window.parent.postMessage({ t: 'ost:storyplay' }, location.origin);
+  } catch (e) { /* 独立打开时没有外壳，忽略 */ }
   S.key = key;
   S.char = isCharKey(key) ? +String(key).slice(5) : null;
   S.kind = isCharKey(key) ? 'char' : String(key).split('_')[1];
@@ -6375,7 +6412,7 @@ async function openStory(key, opt) {
   // 只切换高亮，不重建列表（重建会把 scrollTop 归零 → 点一下滚回顶部）
   refreshSelection();
   try { S.data = await loadStoryData(key); }
-  catch (e) { alert(e.message); return; }
+  catch (e) { await Dlg.alert(e.message); return; }
   // 先把这部剧情的译文拉下来（失败也只是没译文），再开工，避免第一句先闪日文
   await L10N.loadStory(key);
   $('#empty')?.remove();

@@ -6,6 +6,51 @@
 
   const ESC = (window.ESC = window.ESC || {});
 
+  /* ---------------------------------------------------------------- 选中文字 ≠ 点击
+   * 全站的卡片 / 列表行 / 按钮都是整块可点（onclick）。用户想复制角色名或曲名时，
+   * 按下拖动选字、松手那一刻 click 照样触发 → 卡片打开 / 列表重绘，选区当场
+   * 消失，根本来不及 Ctrl+C（2026-11-15 用户反馈）。
+   *
+   * 在**捕获阶段**吞掉"拖选结束带出的那一次 click"：
+   *   · 拖选完松手：选区非空 → 这次 click 不再往下传，选中的字留住；
+   *   · 输入框 / 文本域 / 可编辑区不拦（那里点一下是定位光标或选词）。
+   * 注意 click 的 detail：鼠标单击/双击是 1/2，键盘触发是 0，后者不拦。
+   *
+   * 2026-11-16 修正：判定条件从"click 时选区非空"改成"这一次按下才拖出来的选区"。
+   * 旧写法假设"点别处时 mousedown 会先清掉旧选区"，但 **Chrome 在 <button> 上按下
+   * 鼠标并不清选区** —— 于是拖选一段文字之后，点「关闭」这类按钮时选区还在，
+   * click 被一直吞掉，表现就是"关闭按钮有时候点不动"（要再点一次空白处才恢复）。
+   * 现在在 mousedown（捕获）记下按下那一刻的选区文本：
+   *   · 与 click 时相同 → 这次不是拖选，是"点别处"：清掉选区并放行 click；
+   *   · 不同（或按下时为空）→ 是这次按下拖出来的 → 照旧吞掉。
+   */
+  var selAtDown = '';
+  function selText() {
+    var s = document.getSelection ? document.getSelection() : null;
+    if (!s || s.isCollapsed) return '';
+    return String(s.toString() || '').trim();
+  }
+  document.addEventListener('mousedown', function () { selAtDown = selText(); }, true);
+  document.addEventListener('click', function (e) {
+    if (!e.detail) return;
+    var cur = selText();
+    if (!cur) return;
+    var t = e.target;
+    if (t && t.closest && t.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"])')) {
+      return;
+    }
+    var pre = selAtDown;
+    selAtDown = '';
+    if (pre === cur) {
+      // 按下之前就有同一个选区 = 用户想点别处，不是要选字：清选区，放行
+      try { document.getSelection().removeAllRanges(); } catch (err) { /* 忽略 */ }
+      return;
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+
   /**
    * 统一排序。
    *
@@ -29,11 +74,12 @@
     const arr = (list || []).slice();
     const p = typeof pick === 'function' ? pick : (it => it || {});
     const m = mode || 'date-desc';
+    // 并列时的兜底顺序：按 ID 自然序（同一天 / 同一张数也不会随机）
+    const byId = (a, b) => String(p(a).id || '').localeCompare(
+      String(p(b).id || ''), 'en', { numeric: true });
 
     if (m === 'date-desc' || m === 'date-asc') {
       const dir = m === 'date-desc' ? -1 : 1;
-      const byId = (a, b) => String(p(a).id || '').localeCompare(
-        String(p(b).id || ''), 'en', { numeric: true });
       arr.sort(function (a, b) {
         const x = String(p(a).date || '');
         const y = String(p(b).date || '');
@@ -48,6 +94,14 @@
       return arr;
     }
 
+    // 「按张数」也用同一份实现：立绘页以前自己写了一个 cmp，
+    // CG 页另写了一段 sort，两边口径不同（2026-11-15 反馈「搞那么多套」）。
+    if (m === 'count') {
+      const cnt = it => +p(it).count || 0;
+      arr.sort((a, b) => cnt(b) - cnt(a) || byId(a, b));
+      return arr;
+    }
+
     if (m === 'name') {
       arr.sort(function (a, b) {
         return String(p(a).name || '').localeCompare(String(p(b).name || ''), 'ja');
@@ -56,11 +110,29 @@
     }
 
     // id / 默认
-    arr.sort(function (a, b) {
-      return String(p(a).id || '').localeCompare(String(p(b).id || ''), 'en',
-        { numeric: true });
-    });
+    arr.sort(byId);
     return arr;
+  };
+
+  /** 侧栏「怎么排」的选项表 —— 立绘页与 CG 页共用这一份。
+   *  role = 排角色（编号 / 名字 / 张数 / 实装日期）
+   *  story = 排剧情（剧情顺序 / 剧情名 / 张数）
+   *  以前两页各写一套（CG 页还在 HTML 里内置了一份），同样的"按名字"
+   *  在两边措辞、顺序、可选项都不一致。 */
+  ESC.SORT_OPTS = {
+    role: [['id', '按编号'], ['name', '按名字（あいうえお）'], ['count', '按张数'],
+      ['date-desc', '实装日期 新→旧'], ['date-asc', '实装日期 旧→新']],
+    story: [['id', '按剧情顺序'], ['name', '按剧情名'], ['count', '按张数']],
+  };
+
+  /** 把统一选项填进 <select>，返回最终生效的值（旧值不在表里就退回 id） */
+  ESC.fillSort = function (sel, mode, keep) {
+    if (!sel) return keep || 'id';
+    const list = ESC.SORT_OPTS[mode] || ESC.SORT_OPTS.role;
+    sel.innerHTML = list.map(o =>
+      '<option value="' + o[0] + '">' + o[1] + '</option>').join('');
+    sel.value = list.some(o => o[0] === keep) ? keep : 'id';
+    return sel.value;
   };
 
   /** 已下载的排前面（稳定排序，各自内部顺序不变） */

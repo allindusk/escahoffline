@@ -130,7 +130,23 @@ def write_mediaindex() -> dict:
     # 头像要把**超分层**也算进来：用户做过「清理空间（删原图）」后只剩
     # media/img_x2/avatar/*.webp，只扫原图目录会让侧栏头像全变首字色块。
     avatars = _stems("avatar") | _stems("avatar", paths.IMG_X2)
-    data = {"avatar": sorted(avatars), "story": sorted(_stems("story"))}
+    # 立绘按**组**登记：文件名是 stand_<编号>_<服装HEX>_<表情HEX>.webp，
+    # 只登记"这一组在不在"（2602 条，约 40 KB），前端据此决定卡片要不要发请求。
+    # 为什么不按单张登记：1.9 万条会把 mediaindex 从 8 KB 撑到 500 KB，
+    # 而画廊一张卡片就是一个组 —— 组在则整组都在（同一次合成产物）。
+    stand_groups = sorted({m.group(1) + "_" + m.group(2)
+                           for m in (re.match(r"^stand_(\d+)_([0-9A-Fa-f]+)_[0-9A-Fa-f]+$", s)
+                                     for s in _stems("stand"))
+                           if m})
+    data = {"avatar": sorted(avatars), "story": sorted(_stems("story")),
+            "stand": stand_groups,
+            # SD 小人：文件名是 `<编号><动作>.webp`（如 1stand / 1attack2 / 10001victory），
+            # 这里只登记"这个编号有没有"—— 立绘/SD 页据此决定卡片要不要发请求。
+            # 动作后缀带数字（attack1 / attack2），所以不能写成 ``[a-z]+``：
+            # 那样会把 2/3 的动作文件漏掉，SD 清单和"已安装"判定一起变少。
+            "sd": sorted({m.group(1) for m in
+                          (re.match(r"^(\d+)[a-z][a-z0-9]*$", s) for s in _stems("sd"))
+                          if m})}
     body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     try:
         os.makedirs(paths.DATA, exist_ok=True)
@@ -141,7 +157,8 @@ def write_mediaindex() -> dict:
     except OSError:
         # 写不进去只是"前端退回老的猜测逻辑"（多几个 404），不该影响启动
         return {"error": "无法写入 mediaindex.js"}
-    return {"avatar": len(data["avatar"]), "story": len(data["story"])}
+    return {"avatar": len(data["avatar"]), "story": len(data["story"]),
+            "stand": len(data["stand"]), "sd": len(data["sd"])}
 
 
 # ---------------------------------------------------------------- 解包
@@ -728,6 +745,46 @@ def _run_upscale(job, eng: dict, pairs, scale: int, extra: str = "") -> dict:
                                    f"（{sp:.1f} 张/秒，失败 {fail}）")
     save_overlay("x2", x2)
     return {"done": ok, "failed": fail, "skipped": 0}
+
+
+def stand_x2_pairs(groups) -> list[tuple]:
+    """把「立绘组 key（``编号_服装``）」展开成重做超分用的 pairs。
+
+    格式与 :func:`_run_upscale` 一致：``(kind, key, 原图相对路径)``；
+    原图取本机实际存在的那份（转过 webp 的优先）。
+    """
+    pres = tuple("stand_" + g + "_" for g in (groups or []))
+    if not pres:
+        return []
+    stems = [s for s in _stems("stand") if s.startswith(pres)]
+    out = []
+    for stem in sorted(stems):
+        rel = src_rel_for("stand", stem)
+        if rel:
+            out.append(("stand", stem, rel))
+    return out
+
+
+def drop_stand_x2(groups) -> int:
+    """删掉这几组立绘的高清图并从 ``imgmap.x2.js`` 移除条目（引擎不可用时的退路）。
+
+    删文件 + 去条目后页面会回落到**修复后的原图** ——「显示正确但没那么清晰」
+    好过「显示错误的旧高清图」。
+    """
+    x2 = load_overlay("x2")
+    st = x2.setdefault("stand", {})
+    pres = tuple("stand_" + g + "_" for g in (groups or []))
+    n = 0
+    for k in [k for k in list(st) if k.startswith(pres)]:
+        p = paths.web_path(st.pop(k))
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                n += 1
+        except OSError:
+            pass
+    save_overlay("x2", x2)
+    return n
 
 
 def upscale_pairs(job, pairs, scale: int = DEMO_SCALE) -> dict:

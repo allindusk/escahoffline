@@ -29,7 +29,7 @@ import re
 import time
 
 from .. import facts
-from ..facts import PUBLIC_PARTS
+from ..facts import PUBLIC_ALL, PUBLIC_OPTIONAL, PUBLIC_PARTS
 from . import config, manifest, net, select, stages
 
 #: 从 net 的日志里抠出 "[123/456]" 当进度
@@ -435,6 +435,497 @@ PROTECTED_PREFIXES = (
 )
 
 
+# ---------------------------------------------------------------- SD 小人
+# def sd_bundle_name(cid) -> str:
+    # """角色 / 敌人 → 它的 SD 包名（``bundle_unit_00001_bc``）。
+
+    # 编号是 5 位补零的；NPC / 敌人是 1xxxx / 2xxxx 段，同样补到 5 位。
+    # """
+    # return "bundle_unit_%05d_bc" % int(cid)
+
+
+def _load_web_js(relpath: str):
+    """读 ``web/`` 下 ``window.__X={...};`` 形式的纯数据文件（不存在返回 None）。"""
+    p = os.path.join(config.WEB, relpath.replace("/", os.sep))
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            s = f.read()
+        i = s.find("=")
+        return json.loads(s[i + 1:].strip().rstrip(";"))
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+_SD_CACHE: dict = {"at": 0.0, "ids": None}
+
+
+# def sd_image_exists(cid) -> bool:
+    # """这个编号的 SD 待机图是否已落盘（比 mediaindex.js 准且零成本）。"""
+    # return os.path.exists(os.path.join(config.IMG, "sd", "%sstand.webp" % int(cid)))
+
+
+# def sd_mark_installed(cid) -> None:
+    # """把刚导出的编号加进内存缓存，避免为了一个 id 重扫整个媒体目录。
+
+    # 以前每装一个角色都调 ``regen_mediaindex()``（扫 1.9 万个文件、重写索引），
+    # 366 部剧情就是 366 次全盘扫描 —— 纯浪费，所以改成末尾统一重建一次。
+    # """
+    # import time as _t
+    # ids = sd_installed_ids()
+    # ids.add(str(int(cid)))
+    # _SD_CACHE["at"] = _t.time()
+
+
+# def sd_installed_ids(force: bool = False) -> set:
+    # """本机已经导出过 SD 的编号集合（来自 ``data/mediaindex.js`` 的 ``sd`` 清单）。
+
+    # 为什么不扫 ``media/img/sd/``：一个角色 4 张图、敌人 435 个，扫目录要
+    # 1700 次 stat；而 mediaindex 是启动 + 每次导出后重写的一份索引，读一次就够。
+    # """
+    # import time as _t
+    # if not force and _SD_CACHE["ids"] is not None and _t.time() - _SD_CACHE["at"] < 8:
+        # return _SD_CACHE["ids"]
+    # data = _load_web_js("data/mediaindex.js") or {}
+    # ids = set(str(x) for x in (data.get("sd") or []))
+    # _SD_CACHE.update(at=_t.time(), ids=ids)
+    # return ids
+
+
+# def sd_state_map() -> dict:
+    # """``{编号: True/False}`` —— 给安装页显示「缺 SD 素材」用。
+
+    # 只列**清单里有 SD 包**的编号：有些角色（老卡、联动临时单位）官方压根没出
+    # SD，不该让它们永远显示"缺"。
+    # """
+    # out = {}
+    # try:
+        # mf = select.Manifest(ensure_manifest())
+    # except Exception:                                            # noqa: BLE001
+        # return out
+    # for name in mf.index:
+        # if not name.startswith("bundle_unit_"):
+            # continue
+        # body = name[len("bundle_unit_"):]
+        # num = body.split("_", 1)[0]
+        # if not num.isdigit():
+            # continue
+        # try:
+            # v = int(num)
+        # except ValueError:
+            # continue
+        # 直接看磁盘（不像 mediaindex.js 那样可能滞后于刚导出的图）
+        # out[str(v)] = sd_image_exists(v)
+    # return out
+
+
+# def _install_sd(mf, cid, job=None, workers: int = 32) -> dict:
+    # """下载并导出某个编号的 SD 小人（跟着角色剧情一起装）。"""
+    # name = sd_bundle_name(cid)
+    # ent = mf.index.get(name)
+    # if not ent:
+        # if job is not None:
+            # job.log(f"   官方没有 {cid} 的 SD 小人，跳过")
+        # return {"ok": False, "note": "no bundle"}
+    # stages.fetch(_entries(mf, [name]), workers, f"SD {cid}", skip=True,
+                 # pause_event=_pe(job), job=job)
+    # path = os.path.join(config.FILES_STORY, name)
+    # if not os.path.exists(path):
+        # raise _E("E-SD", f"SD 包没下下来：{name}（重装这个角色会重新下载）")
+    # rc = stages.run_script("export_sd.py", "--chars", str(int(cid)), quiet=True)
+    # got = os.path.exists(os.path.join(config.IMG, "sd"))
+    # if got:
+        # 不再每装一个就重扫全盘；整批结束由 run_install 统一重建一次
+        # sd_mark_installed(cid)
+    # return {"ok": bool(got), "exit": rc}
+
+
+# ---------------------------------------------------------------- 原声集
+#: 封面包名前缀。主包是 ``bundle_gallerymusicjackets``，官方"增量补图"包
+#: 叫 ``bundle_image_gallerymusicjackets``（新曲目加进来时单独发）。
+#: 按前缀收，将来再发一个新的补图包也不用改代码。
+GALLERY_JACKET_PREFIXES = ("bundle_gallerymusicjacket",
+                           "bundle_image_gallerymusicjacket")
+#: 音频包名：``bundle_gallerymusic_music_00001``。
+#: **编号以官方清单为准** —— 官方每上一批新曲，清单里就会多出几个编号；
+#: 以前只认随程序分发的 ``gallery_tracks.json``，于是新曲永远进不了下载清单、
+#: 也进不了播放列表，必须由开发者手补编号再发版（2026-11-16 用户指出）。
+GALLERY_AUDIO_RE = re.compile(r"^bundle_gallerymusic_music_(\d+)$")
+
+
+def gallery_tracks() -> list:
+    """``server/cdn/data/gallery_tracks.json`` 里的曲目表（随程序分发）。
+
+    现在它只承担一件事：告诉安装器哪些曲目和本机已有的 BGM 是**同一份母带**
+    （``clip`` 字段），从而省掉重复下载。列表里有哪些歌、共几首，都改由
+    官方清单（:func:`gallery_audio_nos`）决定。
+    """
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "data", "gallery_tracks.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return (data or {}).get("tracks") or []
+
+
+def gallery_audio_nos(index) -> list:
+    """清单里原声集音频包的全部编号（升序）。
+
+    ``index`` 可以是 :class:`server.cdn.select.Manifest`（有 ``.index``），
+    也可以直接是 ``{bundle_name: entry}`` —— 状态接口手里只有后者。
+    用清单而不是随程序分发的表：官方上新曲后这里自动多出编号。
+    """
+    idx = getattr(index, "index", index) or {}
+    nos = {int(m.group(1)) for m in
+           (GALLERY_AUDIO_RE.match(str(n)) for n in idx) if m}
+    return sorted(nos)
+
+
+def gallery_jacket_names(index) -> list:
+    """清单里所有原声集封面包（含官方的"增量补图"包）。"""
+    idx = getattr(index, "index", index) or {}
+    return sorted(str(n) for n in idx
+                  if str(n).startswith(GALLERY_JACKET_PREFIXES))
+
+
+def gallery_missing_audio(mf) -> list:
+    """原声集里"本机没有现成音频、必须下自己那份包"的曲目。
+
+    实测 165 首里有 158 首与「BGM 音乐」的 ``bundle_music_*`` **是同一份母带**
+    （解码 PCM 波形相关 1.000、时长精确到 0.001 秒一致），本机已有 m4a 的直接
+    复用，只有画廊独占的那几首（各平台联动曲等）才下自己的包 —— 一首约 2.5 MB，
+    相比把 165 首全下一遍（448 MB）省掉 95%。
+
+    遍历的是**清单里的全部编号**：表里没有的编号（官方新曲）当作独占曲下载，
+    名字等解包时从包里读（公开曲名只在服务端，拿不到就显示内部占位名）。
+    """
+    sfx = _load_web_js("data/sfxmap.js") or {}
+    known = {int(t.get("no") or 0): t for t in gallery_tracks()}
+    out = []
+    for no in gallery_audio_nos(mf):
+        t = known.get(no) or {}
+        clip = str(t.get("clip") or "")
+        if clip and clip in sfx:
+            rel = str(sfx.get(clip) or "")
+            if rel and os.path.exists(os.path.join(config.WEB, rel.replace("/", os.sep))):
+                continue
+        name = "bundle_gallerymusic_music_%05d" % no
+        if name in mf.index:
+            out.append(name)
+    return out
+
+
+def _run_script_progress(job, name: str, label: str, done0: float,
+                         quota: int, progress_file: str, *args) -> int:
+    """跑整包解包脚本，期间按脚本自报的真实进度推进任务条（不再假死在 0%）。
+
+    ``export_gallery.py`` / ``export_adv_effects.py`` 是一次性子进程，跑完才落
+    产物；解包阶段又是按"包数"记账，所以整个脚本运行期间 ``job.done`` 停在
+    起点 —— 用户看到的就是"0% 卡了几分钟"。
+
+    现在子进程会在关键节点把 ``{stage, done, total, pct}`` 写到 ``progress_file``
+    （原子写）。这里的心跳线程每 2 秒读一次，把 pct 映射成"这一类配额的一部分"
+    推进 ``job.done`` 到 ``done0 + quota * pct/100``：顶层百分比因此真实爬升。
+    解包结束后调用方的 ``owe = quota - (done - _d0)`` 只会补剩余差额，不重复计。
+    """
+    import threading
+
+    stop = threading.Event()
+
+    def _beat():
+        while not stop.wait(2):
+            pct = None
+            stage = label
+            detail = ""
+            try:
+                with open(progress_file, encoding="utf-8") as f:
+                    p = json.load(f)
+                pct = float(p.get("pct") or 0)
+                stage = p.get("stage") or label
+                detail = f" {int(p.get('done', 0))}/{int(p.get('total', 0))}"
+            except (OSError, ValueError, TypeError):
+                pass
+            if job is None:
+                continue
+            if pct is not None and quota > 0:
+                # 只前进不后退（与 job 的高水位一致）；上限留到 quota，
+                # 100% 由调用方补配额，避免这里先把 done 顶过 total。
+                target = done0 + quota * min(99.0, pct) / 100.0
+                if target > job.done:
+                    job.progress(done=target,
+                                 message=f"解包{stage}…{detail}")
+                else:
+                    job.progress(message=f"解包{stage}…{detail}")
+            else:
+                job.progress(message=f"{label}…")
+
+    t = threading.Thread(target=_beat, name=f"hb-{name}", daemon=True)
+    t.start()
+    try:
+        return stages.run_script(name, *args, quiet=True)
+    finally:
+        stop.set()
+        t.join(timeout=2)
+
+
+def gallery_have_audio() -> int:
+    """``web/data/gallery.js`` 里"有音频"的曲目数。
+
+    判原声集是否装齐用它，不用"封面张数 == 曲目数"：官方可能只上新曲、
+    不发新封面（或封面包名换了），按封面判会永远差几首、按钮一直亮着。
+    文件不存在/内容坏掉返回 0。
+    """
+    p = os.path.join(config.DATA, "gallery.js")
+    try:
+        with open(p, encoding="utf-8") as f:
+            s = f.read()
+        obj = json.loads(s[s.index("{"): s.rindex("}") + 1])
+    except (OSError, ValueError):
+        return 0
+    return len([t for t in (obj.get("tracks") or []) if t.get("s")])
+
+
+# def _is_npc_sd(name: str) -> bool:
+    # """``bundle_unit_10001_bc`` 这种是不是 NPC / 敌人（编号 ≥ 10000）。"""
+    # if not name.startswith("bundle_unit_"):
+        # return False
+    # num = name[len("bundle_unit_"):].split("_", 1)[0]
+    # return num.isdigit() and int(num) >= 10000
+
+
+# def _is_npc_voice(name: str) -> bool:
+    # """NPC / 敌人的战斗语音包（``bundle_audioclipsprefab_unit_10001``）。"""
+    # if not name.startswith("bundle_audioclipsprefab_unit_"):
+        # return False
+    # num = name[len("bundle_audioclipsprefab_unit_"):]
+    # return num.isdigit() and int(num) >= 10000
+
+
+# def sd_unavailable_ids() -> set[str]:
+    # """本机**导不出 SD 小人**的编号（由 export_sd.py 导出失败时登记）。
+
+    # 有些包只有特效 / Instance 骨架，当前解析器合不出图。这些编号既不进
+    # 「应有 435 个」的分母，也不进「补全」清单：否则页面永远显示差几个、
+    # 补全按钮永远亮着，而反复重导也变不出图（2026-11-15 反馈）。
+    # 导出成功会自动撤销登记，将来解析能力提升后无需手工维护。
+    # 见 ``server/cdn/scripts/export_sd.py`` 的 ``STATE_FILE``。
+    # """
+    # p = os.path.join(config.STATE_DIR, "sd_unavailable.json")
+    # try:
+        # with open(p, encoding="utf-8") as f:
+            # return {str(int(x)) for x in (json.load(f) or [])}
+    # except (OSError, ValueError, TypeError):
+        # return set()
+
+
+# def _npc_missing(mf) -> tuple[set[int], set[int]]:
+    # """NPC / 敌人里**产物确实缺**的编号，返回 ``(缺 SD, 缺战斗语音)``。
+
+    # 「补全」只该补这几个，而不是把 435 个 SD + 435 个语音包全量重导一遍 ——
+    # 用户 2026-11-15 反馈「明明只差几个，解包却从 1/870 开始、进度条 60% 起」。
+
+    # SD 判据必须和页面 ``public_status`` **同源**（mediaindex 的 sd 清单）：
+    # 它按「这个编号有没有任意动作图」登记（见 media.write_mediaindex），
+    # NPC / 敌人里有少数几个只有 ``<编号>attack1.webp``、根本没有 stand 待机图。
+    # 若这里改用 ``sd_image_exists()``（只判 stand.webp），会把那 10 个当成缺，
+    # 而且导完还是没有 stand 图 → 每次点补全都重补、页面数字却永远不变。
+    # 解完会 regen_mediaindex()，所以按索引补完，页面数字必然变齐。
+    # 已登记为导不出 SD 的编号由 ``sd_unavailable_ids()`` 排除。
+    # 语音判 ``media/audio/voice/<编号>/`` 目录（与 public_status 同口径）。
+    # 首次安装时所有编号都缺，结果与全量一致。
+    # """
+    # p_sd, p_vc = "bundle_unit_", "bundle_audioclipsprefab_unit_"
+    # sd_all = {int(n[len(p_sd):].split("_", 1)[0])
+              # for n in mf.index if _is_npc_sd(n)}
+    # sd_all -= {int(x) for x in sd_unavailable_ids()}
+    # vc_all = {int(n[len(p_vc):]) for n in mf.index if _is_npc_voice(n)}
+    # have_idx = set()
+    # for x in sd_installed_ids():
+        # try:
+            # have_idx.add(int(x))
+        # except (TypeError, ValueError):
+            # pass
+    # sd_miss = sd_all - have_idx
+    # vmap = _voice_map_ids()
+    # vc_miss = {x for x in vc_all
+               # if not _voice_installed(x, vmap)}
+    # return sd_miss, vc_miss
+
+
+# ---------------------------------------------------------------- 战斗语音
+def _voice_map_ids(force: bool = False) -> set[str] | None:
+    """``voicemap.js`` 里**已登记**的单位编号（``{"11","10001",...}``）。
+
+    为什么要看清单而不是只看目录：音声的产物有**两份** —— 音频文件在
+    ``media/audio/voice/<编号>/``，清单条目在 ``web/data/voicemap.js``。
+    以前只判目录，于是目录在、清单里却没有条目的单位（并发写覆盖 / 导到一半
+    中断）被当成"已安装"：页面显示 378/385，点补全也不亮（2026-11-15 反馈）。
+    文件不存在（老版本 / 纯静态包）时返回 ``None``，调用方退回"只看目录"的
+    旧口径，避免把全部 821 个包判成缺、触发一次全量重导。
+    """
+    p = os.path.join(config.DATA, "voicemap.js")
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    key = (st.st_mtime, st.st_size)
+    c = _voice_map_ids
+    if not force and getattr(c, "_key", None) == key and getattr(c, "_ids", None) is not None:
+        return c._ids
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            s = f.read()
+        i, j = s.find("{"), s.rfind("}")
+        data = json.loads(s[i:j + 1])
+        ids = {str(int(u["id"])) for u in (data.get("units") or []) if u.get("id") is not None}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    c._key, c._ids = key, ids
+    return ids
+
+
+def _voice_installed(cid, vmap) -> bool:
+    """这个单位算不算"音声已安装"：目录有音频 **且** 清单里有条目。"""
+    vdir = os.path.join(config.AUDIO, "voice", str(int(cid)))
+    if not os.path.isdir(vdir):
+        return False
+    if vmap is None:                 # 没有清单可查 → 退回旧口径
+        return True
+    return str(int(cid)) in vmap
+
+
+def voice_bundle_name(cid) -> str:
+    """单位 → 它的语音包名（``bundle_audioclipsprefab_unit_00011``）。"""
+    return "bundle_audioclipsprefab_unit_%05d" % int(cid)
+
+
+def voice_state_map() -> dict:
+    """``{编号: 本机有没有战斗语音}`` —— 形状与 :func:`sd_state_map` 一致。
+
+    只列**清单里真有语音包**的编号，官方没出的单位不会被标成"永远缺"。
+    """
+    out = {}
+    try:
+        mf = select.Manifest(ensure_manifest())
+    except Exception:                                            # noqa: BLE001
+        return out
+    vdir = os.path.join(config.AUDIO, "voice")
+    vmap = _voice_map_ids()
+    for name in mf.index:
+        if not name.startswith("bundle_audioclipsprefab_unit_"):
+            continue
+        num = name[len("bundle_audioclipsprefab_unit_"):]
+        if not num.isdigit():
+            continue
+        # 包名是 5 位补零（00002），导出目录是去零的（2）—— 别拿包名直接拼路径
+        cid = str(int(num))
+        out[cid] = _voice_installed(cid, vmap)
+    return out
+
+
+def _char_id(unit: str):
+    if not unit.startswith("char_"):
+        return None
+    try:
+        return int(unit[5:])
+    except ValueError:
+        return None
+
+
+def unit_extras_missing(unit: str) -> list[str]:
+    """这部剧情**已经装好**、但还缺哪些"附加素材"（``sd`` / ``voice``）。
+
+    为什么需要它：``run_install`` 碰到 ``ready`` 就直接跳过（免得重跑 20 分钟），
+    可老用户的 SD / 音声是这两个版本才有的 —— 于是"勾上 381 部补 SD"变成了
+    全部跳过、界面一直显示「缺 SD 素材」（2026-11-15 反馈）。
+    """
+    cid = _char_id(unit)
+    if cid is None:
+        return []
+    out = []
+    try:
+        mf = select.Manifest(ensure_manifest())
+        # 2026-11-16：SD 整体停用，不再判定/上报「缺 SD」
+        # if sd_bundle_name(cid) in mf.index and not sd_image_exists(cid):
+        #     out.append("sd")
+        if voice_bundle_name(cid) in mf.index:
+            # 目录在、voicemap.js 里却没有条目：音频导出来了但清单被覆盖掉，
+            # 页面就是「378/385」那种数字，补全也不会亮（2026-11-15 反馈）。
+            if not _voice_installed(cid, _voice_map_ids()):
+                out.append("voice")
+    except Exception:                                            # noqa: BLE001
+        return out
+    return out
+
+
+def rebuild_indexes() -> None:
+    """整批安装结束后**统一重建一次**媒体 / 立绘索引。
+
+    以前每个角色装完都各跑一次 ``regen_mediaindex()`` + ``regen_standmap()``：
+    前者扫全部媒体文件、后者扫 1.9 万张立绘并重写 standmap.js，
+    366 部剧情就是 366 次全盘扫描（日志里 87 次 export_standmap.py）。
+    这两个索引只影响"这个素材在不在"的显示，中途不刷新也无所谓。
+    """
+    for fn in (stages.regen_mediaindex, stages.regen_standmap):
+        try:
+            fn()
+        except Exception:                                        # noqa: BLE001
+            pass
+    # 2026-11-16：SD 停用，不再刷新 SD 安装状态
+    # sd_installed_ids(force=True)
+
+
+def install_extras(unit: str, job=None, workers: int = 32) -> dict:
+    """只补这部剧情的附加素材（SD 小人 / 战斗语音），不重跑剧本与图片解包。"""
+    cid = _char_id(unit)
+    if cid is None:
+        return {"unit": unit, "extras": []}
+    mf = select.Manifest(ensure_manifest())
+    done = []
+    # 2026-11-16：SD 小人整体停用，install_extras 不再补 SD
+    # try:
+    #     if sd_bundle_name(cid) in mf.index and not sd_image_exists(cid):
+    #         _install_sd(mf, cid, job, workers)
+    #         done.append("sd")
+    # except Exception as e:
+    #     ...
+    try:
+        if voice_bundle_name(cid) in mf.index and not _voice_installed(
+                cid, _voice_map_ids()):
+            if job is not None:
+                job.log("   战斗语音")
+            _install_voice(mf, cid, job, workers)
+            done.append("voice")
+    except Exception as e:                                       # noqa: BLE001
+        if job is not None:
+            job.log(f"   战斗语音失败：{str(e)[:120]}")
+    # 立绘分组表跟 SD / 音声无关，补附加素材时不用重扫 1.9 万张立绘；
+    # 整批结束由 run_install 统一重建一次即可。
+    return {"unit": unit, "extras": done}
+
+
+def _install_voice(mf, cid, job=None, workers: int = 32) -> dict:
+    """下载并导出某个单位的语音（战斗语音 + 主页那批），各 1~2 MB。
+
+    两个包：``audioclipsprefab_unit_*``（战斗）与 ``systemvoice_<编号>``（主页/其余，
+    一个角色一整包）。后者也重复存了战斗语音，导出脚本会按名称时长去重。
+    """
+    names = [n for n in (voice_bundle_name(cid), "bundle_systemvoice_%05d" % int(cid))
+             if n in mf.index]
+    if not names:
+        return {"ok": False, "note": "no bundle"}
+    stages.fetch(_entries(mf, names), workers, f"语音 {cid}", skip=True,
+                 pause_event=_pe(job), job=job)
+    if not os.path.exists(net.bundle_path(names[0])):
+        raise _E("E-VOICE", f"语音包没下下来：{names[0]}（重装这个角色会重新下载）")
+    stages.run_script("export_voice.py", "--chars", str(int(cid)), quiet=True)
+    got = os.path.isdir(os.path.join(config.AUDIO, "voice", str(int(cid))))
+    return {"ok": bool(got)}
+
+
 def install_base(job=None, workers: int = 48, parts=None) -> dict:
     """下载并解包「公共素材」：背景 / 音乐 / 音效 / 头像 / 剧情横幅。
 
@@ -469,6 +960,21 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     mf = select.Manifest(ensure_manifest(job))
     out: dict = {"bytes": 0}
 
+    # 原声集 / NPC·敌 SD 的包清单要现算（前者取决于本机已有哪些 BGM，
+    # 后者是一大票 unit 包），算一次复用，别在 _total 与 plan 里各扫一遍。
+    # 封面按前缀收（官方新增补图包也一并下）；音频按清单编号收（含官方新曲）。
+    _gal_names = (gallery_jacket_names(mf) + gallery_missing_audio(mf)) \
+        if "gallery" in parts else []
+    _gal_names = [n for n in _gal_names if n in mf.index]
+    # 2026-11-16：NPC / 敌人的 SD 小人 + 音声整体停用。
+    # 原来这里在 parts 含 "sd_npc" 时收集 435 个 bundle_unit_* 与
+    # 435 个 bundle_audioclipsprefab_unit_*（1xxxx/2xxxx），现在全部注释。
+    # _sd_names, _vc_names = [], []
+    # if "sd_npc" in parts:
+    #     _sd_miss, _vc_miss = _npc_missing(mf)
+    #     _sd_names = [n for n in mf.index if _is_npc_sd(n) ...]
+    #     _vc_names = [n for n in mf.index if _is_npc_voice(n) ...]
+
     # 先把"总共要下多少个包"算出来 —— 否则任务刚启动时 total 是 0，
     # 界面会显示成 0 B/0 B（用户完全看不出在干嘛）。
     _total = 0
@@ -485,6 +991,19 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         _total += len([n for n in mf.index if n.startswith(BANNER_PREFIXES)])
     if "advfx" in parts:
         _total += len([n for n in mf.index if n.startswith(ADVFX_PREFIXES)])
+    if "gallery" in parts:
+        _total += len(_gal_names)
+    # 2026-11-16：sd_npc 已停用
+    # if "sd_npc" in parts:
+    #     _total += len(_sd_names) + len(_vc_names)
+    if not _total:
+        # 页面已就绪时（或自动补的流程里）这类可能一个都不缺：别再走空的
+        # 下载 / 解包循环，进度条也不用经历一次「60% → 100%」的空转。
+        if job is not None:
+            job.log("这些类别已经齐了，没有要补的；已装好的不重做")
+            job.set_total(1, "项")
+            job.progress(done=1, message="已经齐了，无需补全")
+        return out
     fails: list[str] = []
     hints: list[str] = []
 
@@ -528,6 +1047,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
             _bytes += sum(int(e.get("size") or 0)
                           for n, e in mf.index.items()
                           if n.startswith(ADVFX_PREFIXES))
+        if _gal_names:
+            _bytes += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in _gal_names)
+        # 2026-11-16：NPC / 敌人 SD + 音声已整体停用，_sd_names/_vc_names 不再定义，
+        # 这段遗留的字节统计必须一起删掉（否则带 job 装公共素材时 NameError）。
         for _pref in ("bundle_music_", "bundle_sound_"):
             if (_pref == "bundle_music_" and "bgm" not in parts) or \
                (_pref == "bundle_sound_" and "sfx" not in parts):
@@ -577,6 +1100,14 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         ents = [e for n, e in mf.index.items() if n.startswith(ADVFX_PREFIXES)]
         sz = sum(int(e.get("size") or 0) for e in ents)
         plan.append({"tag": "advfx", "label": "演出特效", "ents": ents, "sz": sz})
+    if "gallery" in parts:
+        ents = _entries(mf, _gal_names)
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        plan.append({"tag": "gallery", "label": "原声集", "ents": ents, "sz": sz})
+    # 2026-11-16：sd_npc 下载计划已删除
+    # if "sd_npc" in parts:
+    #     ents = _entries(mf, _sd_names) + _entries(mf, _vc_names)
+    #     plan.append({"tag": "sd_npc", ...})
 
     # ---- 进度条的起点：先把"磁盘上已有、这次不会重下"的字节扫进来 ----
     # 必须是全量已完成字节，而不是本次新下的字节：用户第二次点「补全」时，
@@ -584,18 +1115,22 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     # 以前只累加新下的量，于是任务条上出现「70.9% · 8.40 MB / 893.01 MB」——
     # 8 MB 按总量算才 1%，两个数字互相打脸（用户就是这么报的）。
     _have = 0
-    if job is not None and job.bytes_total:
+    _need_dl = 0
+    if job is not None:
         for step in plan:
             for e in step["ents"]:
                 name = str(e.get("bundle_name") or "")
                 sz = int(e.get("size") or 0)
                 if not name or not sz:
+                    _need_dl += 1        # 信息不全，保守当作要下
                     continue
                 try:
-                    if not net.need_download(net.bundle_path(name), sz):
+                    if net.need_download(net.bundle_path(name), sz):
+                        _need_dl += 1
+                    else:
                         _have += sz
                 except OSError:
-                    pass
+                    _need_dl += 1
         if _have:
             job.bytes_done = max(job.bytes_done, float(_have))
             # 预扫进来的字节不是"这次下载的量"：不设基线的话，任务开头两秒
@@ -603,9 +1138,21 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
             job.bytes_base = float(_have)
             job.log(f"本地已有 {_have / 1048576:.0f} MB 不会重下，进度从这部分开始算")
 
+    # 一个包都不用下载（「补全」最常见：只缺几个产物，源包早就在本地）。
+    # 这时别再用「下载占前 60%」的划分：预扫的字节会把那 60% 瞬间填满，
+    # 用户一打开任务条就是 60%（2026-11-15 反馈「为什么进度条从 60% 开始」）。
+    # 整条 0–100% 都给解包，进度从 0 起；下载循环也整段跳过，省掉上千次 stat。
+    no_download = bool(job is not None and _total > 0 and _need_dl == 0)
+    if no_download:
+        job.restart_percent()          # 清掉预扫阶段钉住的 60% 高水位
+        job.phase(0.0, 100.0, total=max(1, _total), unit="个", label="解包")
+        job.log(f"本地已有全部资源包，这次不下载；进度条从 0% 起，"
+                f"只补 {_total} 个缺的产物")
+
     # ---- 阶段一：下载全部资源包 ----
+    dl_plan = [] if no_download else plan
     done_base = 0
-    for step in plan:
+    for step in dl_plan:
         ents = step["ents"]
         if job is not None and ents:
             job.log(f"下载{step['label']} {len(ents)} 个包 "
@@ -619,18 +1166,21 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         done_base += len(ents)
 
     # ---- 阶段二：逐个类别解包 ----
-    # 百分比分两段：下载 0–60%、解包 60–100%。解包（尤其背景）常常比下载还久，
+    # 有下载时分两段：下载 0–60%、解包 60–100%。解包（尤其背景）常常比下载还久，
     # 如果仍按下载字节算，下载一完进度条就顶到 100% 干等十几分钟，像卡死了。
+    # 没下载时（no_download）上面已把 0–100% 整段交给解包，这里不再覆盖。
     #
     # 解包阶段的计数单位是**包**（不是"类"）：只按 6 个类推进的话，背景那一类
     # 要跑十几分钟而进度条纹丝不动，用户还是会当成卡死。背景与头像逐包推进，
     # 其余类别（子进程导出）只能整类补足配额。
-    if job is not None:
+    phase_txt = "占整条进度条" if no_download else "占进度条后 40%"
+    if job is not None and not no_download:
         # 这句要留在"操作记录"里：进度条只有 60% 时最容易让人以为算错了
         # （明明 1 GB 的素材已经下到 900 MB），所以必须说清"下载只占前 60%"。
         job.log("下载阶段结束（进度条 60%）。接下来解包：不再联网，"
                 "把资源包解成图片/音频，占进度条后 40%")
         job.phase(60.0, 40.0, total=max(1, _total), unit="个", label="解包")
+    if job is not None:
         job.progress(done=0)
     for step in plan:
         tag = step["tag"]
@@ -641,7 +1191,7 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         if job is not None and ents:
             extra = "，这步比下载还久" if tag == "bg" else ""
             job.progress(message=f"解包{step['label']}（{len(ents)} 个包{extra}，"
-                                 "占进度条后 40%）…")
+                                 f"{phase_txt}）…")
         if tag == "bg":
             stages.export_images(mf, {"back": set(step["keys"]),
                                       "stand": set(), "cg": set()},
@@ -705,16 +1255,91 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                     job.log(f"   章节横幅导出失败：{e}")
             out["banner"] = len(ents)
             out["bytes"] += sz
+        elif tag == "gallery":
+            # 封面 + 少数几首画廊独占曲：解包 + 写 web/data/gallery.js
+            # 子进程写真实进度文件，这里按它推进 job.done —— 顶层百分比会
+            # 随"解包封面 N/165 → 解析曲目 N/165"真实爬升，不再假死在 0%。
+            cnt = _run_script_progress(
+                job, "export_gallery.py", "解包原声集（封面 + 独占曲）",
+                _d0, quota,
+                os.path.join(config.WS, "_archive", "gallery_progress.json"))
+            ok = os.path.exists(os.path.join(config.DATA, "gallery.js"))
+            if not ok:
+                fails.append("原声集：包下到了但没能解出曲目表"
+                             f"（导出脚本 exit={cnt}，详见日志）")
+                hints.append("重试一次「补全缺失」；仍失败请反馈日志里的 gallery 段落")
+            out["gallery"] = 1 if ok else 0
+            out["bytes"] += sz
+        # 2026-11-16：sd_npc 解包/导出分支已删除（NPC 敌 SD + 音声整体停用）
+        # elif tag == "sd_npc":
+        # elif tag == "sd_npc":
+            # NPC / 敌人的 SD 小人 + 战斗语音：只合成 _sd_names/_vc_names 里
+            # 那些「产物真缺」的编号（补全时可能只有几个，首次安装才是全 435）。
+            # 以前一律按清单全量重跑，差 8 个也要把 870 个包重导一遍。
+            # sd_nums = sorted({int(mm.group(1)) for mm in
+                              # (re.match(r"^bundle_unit_(\d+)_bc$", n) for n in _sd_names)
+                              # if mm})
+            # vc_nums = sorted({int(n.rsplit("_", 1)[-1]) for n in _vc_names
+                              # if n.rsplit("_", 1)[-1].isdigit()})
+            # 一批 8 个：一个单位约 2 秒（UnityPy 解包 + 合成），整包一次跑完
+            # 435 个会让进度条四十多分钟纹丝不动（2026-11-15 又反馈「卡在 60%」）。
+            # 8 个 → 每 15~20 秒走一格；每批**先记一半、跑完再记一半**，
+            # 这样连"这一批正在跑"的那十几秒里进度也有变化，不会看着像死机。
+            # BATCH = 8
+            # bad_batches = 0
+            # for label, nums, script in (("SD 小人", sd_nums, "export_sd.py"),
+                                        # ("战斗语音", vc_nums, "export_voice.py")):
+                # for bi in range(0, len(nums), BATCH):
+                    # if job is not None and job.cancelled:
+                        # break
+                    # chunk = nums[bi:bi + BATCH]
+                    # half = len(chunk) / 2.0
+                    # if job is not None:
+                        # job.progress(add=half,
+                                     # message=f"合成 NPC / 敌人 {label} "
+                                             # f"{bi + 1}-{bi + len(chunk)}/{len(nums)}"
+                                             # f"（{phase_txt}）…")
+                    # rc = stages.run_script(script, "--chars",
+                                           # ",".join(str(x) for x in chunk), quiet=True)
+                    # if rc != 0:
+                        # bad_batches += 1
+                    # if job is not None:
+                        # job.progress(add=half)
+            # try:
+                # stages.regen_mediaindex()
+            # except Exception:                                    # noqa: BLE001
+                # pass
+            # sd_installed_ids(force=True)
+            # d = os.path.join(config.IMG, "sd")
+            # n_ok = 0
+            # try:
+                # n_ok = len([f for f in os.listdir(d) if f.endswith(".webp")])
+            # except OSError:
+                # pass
+            # if not n_ok:
+                # fails.append("NPC/敌人 SD：包下到了但一张图都没合成出来"
+                             # f"（{bad_batches} 批导出失败，详见日志）")
+                # hints.append("重试一次；仍失败请反馈日志里的 export_sd 段落")
+            # out["sd_npc"] = n_ok
+            # out["bytes"] += sz
         elif tag == "advfx":
             # 演出特效不能直接给前端：包里是 CPE 数据结构 + 一张 512² 图集，
             # 必须在本机解成「逐帧 JSON（web/data/advfx.js）+ 无损 webp」，
             # 播放器才能按 30fps 摆部件。逻辑全在 export_adv_effects.py。
-            if job is not None:
-                job.progress(message="解包演出特效（表情符号逐帧数据）…")
-            cnt = stages.run_script("export_adv_effects.py", quiet=True)
-            oks = os.path.exists(os.path.join(config.WEB, "data", "advfx.js"))
+            # 特效脚本暂不写进度文件：传空路径让心跳只更新 message
+            # （它只有 1 个包配额、耗时也比原声集短，不需要百分比映射）。
+            cnt = _run_script_progress(
+                job, "export_adv_effects.py", "解包演出特效（表情符号逐帧数据）",
+                _d0, quota,
+                os.path.join(config.WS, "_archive", "_advfx_no_progress.json"))
+            # 判定必须与 public_status() 一致（advfx_ok）：三样产物齐全才算装上。
+            # 只查 advfx.js 会在缺 msg_heart.png（官方撤 heart 包）时误写 stamp，
+            # 于是界面永远显示"演出特效缺 0/1"、自动补全又不再触发。
+            oks = (os.path.exists(os.path.join(config.DATA, "advfx.js"))
+                   and os.path.exists(os.path.join(config.IMG, "advfx", "mark.webp"))
+                   and os.path.exists(os.path.join(config.IMG, "advfx", "msg_heart.png")))
             if not oks:
-                fails.append("演出特效：包下到了但没能解出逐帧数据"
+                fails.append("演出特效：包下到了但产物不齐（逐帧数据/图集/台词心形）"
                              f"（导出脚本 exit={cnt}，详见日志）")
                 hints.append("重装一次公共素材；仍失败请反馈日志里的 advfx 段落")
             out["advfx"] = 1 if oks else 0
@@ -757,7 +1382,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                                       ("音效", "sfx", "sfxTotal"),
                                       ("头像", "avatar", "avatarTotal"),
                                       ("横幅", "banner", "bannerTotal"),
-                                      ("演出特效", "advfx", "advfxTotal")):
+                                      ("演出特效", "advfx", "advfxTotal"),
+                                      ("原声集封面", "jacket", "jacketTotal"),
+                                      ("NPC/敌 SD", "sdNpc", "sdNpcTotal"),
+                                      ("战斗语音", "voice", "voiceTotal")):
             have, total = int(st.get(have_k) or 0), int(st.get(total_k) or 0)
             if total and have < total * 0.98:
                 short.append(f"{name} {have}/{total}")
@@ -1102,6 +1730,26 @@ def public_status() -> dict:
                 and os.path.exists(os.path.join(config.IMG, "advfx", "mark.webp"))
                 and os.path.exists(os.path.join(config.IMG, "advfx", "msg_heart.png")))
 
+    # 原声集：产物 = gallery.js 里"有音频"的曲目。分母按**官方清单编号**算，
+    # 官方上新曲后分母自动变大 → 按钮从「已就绪」变回「补全」，点一下就能听到。
+    # （2026-11-16：以前分母是随程序分发的表，新曲永远不出现也不提示。）
+    gal_have = gallery_have_audio()
+    n_gal_jacket = _count(os.path.join(config.IMG, "jacket"), (".webp", ".png"))
+    gal_total = len(gallery_audio_nos(idx)) or len(gallery_tracks()) or 165
+    # NPC / 敌 SD：清单里编号 ≥ 10000 的那批，齐了才算装上。
+    # 扣掉「本机导不出 SD」的编号：它们不该占分母，否则界面永远
+    # 2026-11-16：SD 小人 + NPC/敌音声整体停用，这几项统计不再需要。
+    # 前端已删除对应展示，这里固定返回 0，避免别的调用方 KeyError。
+    # sd_ids = sd_installed_ids()
+    # npc_nums = {...}; n_sd_npc = len(npc_nums & sd_ids)
+    # sd_npc_total = len(npc_nums) or 435
+    # npc_voice_nums = {...}; n_voice = ...
+    # voice_total = len(npc_voice_nums) or 435
+    n_sd_npc = 0
+    sd_npc_total = 0
+    n_voice = 0
+    voice_total = 0
+
     return {"back": n_back, "backTotal": back_total,
             # 背景的三个补充口径：
             #   backPacks   = 清单里的 bgimage 包数（612）
@@ -1130,10 +1778,24 @@ def public_status() -> dict:
             # 5 = 加 backVerified（前端据此对"已核对过"的背景按 1:1 严格判齐）；
             # 6 = 加 advfx（演出特效：表情符号逐帧数据 + 图集）。
             # 7 = advfx 追加台词行内图标 msg_heart.png（<sprite=0>）。
+            # 10 = voice/voiceTotal 只统计 NPC / 敌人（不再把角色音声混进分母）。
+            # 11 = 音声是否装上 = 目录有音频 **且** voicemap.js 里有条目
+            #      （以前只判目录，清单被并发覆盖掉的单位会显示"已安装"却听不到）。
+            # 12 = 原声集改成"有音频的曲目数 / 清单曲目数"（gallery/galleryTotal
+            #      不再是 0-1 布尔值）；分母含官方新曲，上新后按钮会变回「补全」。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
             "advfx": 1 if advfx_ok else 0, "advfxTotal": 1,
-            "v": 7,
+            # 原声集：已导出音频的曲目数 / 清单里的曲目数。v12 起按真实曲目算
+            # （以前是 1/1，只看 gallery.js 在不在 → 官方新曲不会被发现）。
+            "gallery": min(gal_have, gal_total), "galleryTotal": gal_total,
+            # 封面数单独给，只用于展示（缺封面不该判成"没装好"）
+            "jacket": min(n_gal_jacket, gal_total), "jacketTotal": gal_total,
+            # NPC / 敌人 SD：已合成的编号数 / 清单里的编号数
+            "sdNpc": n_sd_npc, "sdNpcTotal": sd_npc_total,
+            # 战斗语音：已导出的 NPC 单位数 / 清单里的 NPC 单位数
+            "voice": n_voice, "voiceTotal": voice_total,
+            "v": 12,
             "bytes": 0}
 
 
@@ -1434,7 +2096,26 @@ def _bname(n) -> str:
     return str(n or "")
 
 
-def _unit_bytes(mf, key: str) -> int:
+def _sz_of(mf, names, pending: bool = False) -> int:
+    """一批包名 -> 字节数。
+
+    ``pending=True`` 时**只算本机还缺的**：点「补全」时绝大多数包早就在盘上，
+    按"全部包的体积"当分母会算出「要下 13.6 GB / 剩 66 小时」这种吓人的数字
+    （2026-11-15 反馈：补 382 个角色的 SD，界面写着 13.61 GB）。
+    """
+    tot = 0
+    for n in names or ():
+        if not n:
+            continue
+        ent = mf.index.get(n) or {}
+        size = int(ent.get("size") or 0)
+        if pending and not net.need_download(net.bundle_path(n), size):
+            continue
+        tot += size
+    return tot
+
+
+def _unit_bytes(mf, key: str, pending: bool = False) -> int:
     """预估某部剧情的全部 bundle 字节数（剧情 + 语音 + 头像 + 图片包）。
 
     多单元安装时要在**开始前**就知道总字节，才能给进度条一个稳定的分母
@@ -1448,8 +2129,13 @@ def _unit_bytes(mf, key: str) -> int:
                 + list(mf.meta_images(cid))
             # 清单条目可能是 dict（带 bundle_name）或包名字符串，统一成名字
             names = [nm for nm in (_bname(x) for x in raw) if nm]
-            sz = sum(int((mf.index.get(n) or {}).get("size") or 0)
-                     for n in names if n)
+            # 战斗语音 + 主页语音：装角色剧情时会一并下（第 ⑧ 步），保留。
+            # 2026-11-16：SD 小人已停用，不再把 sd_bundle_name(cid) 计进来。
+            for extra in (voice_bundle_name(cid),
+                          "bundle_systemvoice_%05d" % cid):
+                if extra in mf.index:
+                    names.append(extra)
+            sz = _sz_of(mf, names, pending)
             try:
                 assets = select.collect_assets(select.load_char(cid))
             except Exception:                                  # noqa: BLE001
@@ -1468,7 +2154,7 @@ def _unit_bytes(mf, key: str) -> int:
                         if full:
                             need.append(_bname(full))
             need = sorted({n for n in need if n})
-            sz += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in need)
+            sz += _sz_of(mf, need, pending)
             return sz
         m = _UNIT_RE.match(key)
         if not m:
@@ -1481,8 +2167,7 @@ def _unit_bytes(mf, key: str) -> int:
                       (select.adv_voice_bundles(mf.index, kind, no) or ())]
         except Exception:                                      # noqa: BLE001
             pass
-        sz = sum(int((mf.index.get(n) or {}).get("size") or 0)
-                 for n in names if n)
+        sz = _sz_of(mf, names, pending)
         try:
             assets = select.collect_assets(select.load_story(key))
         except Exception:                                      # noqa: BLE001
@@ -1501,7 +2186,7 @@ def _unit_bytes(mf, key: str) -> int:
                     if full:
                         need.append(_bname(full))
         need = sorted({n for n in need if n})
-        sz += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in need)
+        sz += _sz_of(mf, need, pending)
         return sz
     except Exception:                                          # noqa: BLE001
         return 0
@@ -1733,6 +2418,20 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
             _warn_stand_output(job, nums)
         # 剧本引用了、但包里没有对应表情的立绘（表情码其实是文本）→ 素体顶替
         stages.fill_missing_stands(assets.get("stand") or (), job)
+
+    # 2026-11-16：SD 小人整体停用，原 ⑦ 步已删除
+    # if image:
+    #     _install_sd(mf, cid, job, workers)
+    if image:
+        # 战斗语音（音声）：同一个单位的另一类素材，约 1 MB，装好后
+        # 「原声集 → 角色音声」里就能听。角色音声保留，不受 SD 停用影响。
+        if job is not None:
+            job.log("⑦ 战斗语音（音声）")
+        try:
+            _install_voice(mf, cid, job, workers)
+        except Exception as e:                                   # noqa: BLE001
+            if job is not None:
+                job.log(f"   战斗语音没装上（不影响剧情播放）：{str(e)[:120]}")
 
     if upscale and image:
         _upscale_assets(job, assets, scale, engine)

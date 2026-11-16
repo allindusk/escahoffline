@@ -1,16 +1,17 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script src="assets/js/shellboot.js?v=1130a"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>资源管理 · 超昂大战 角色剧情离线阅读器</title>
-<link rel="stylesheet" href="assets/css/setup.css?v=1113a">
+<link rel="stylesheet" href="assets/css/setup.css?v=1117e">
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 <!-- 剧情列表（②剧情安装 / ③提高CG画质 / ⑤翻译 三页共用），与播放器侧栏同一套观感 -->
-<link rel="stylesheet" href="assets/css/storylist.css?v=1113a">
+<link rel="stylesheet" href="assets/css/storylist.css?v=1124a">
 <!-- 「自己动手翻」教程浮窗的样式：与播放器共用同一份 -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1113a">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
 </head>
 <body>
 <div class="layout">
@@ -63,7 +64,7 @@
       <div class="tip">
         <b>第一次用建议：</b>先点「下载基础数据」（目录 + 公共素材一次下齐）→再去「剧情安装」勾一个想看的角色 →「开始安装」→ 等 <span data-fact="secUnit">…</span> →回「角色剧情」页点它就能播。全程不用你准备任何文件。
         <br>
-        <b>下载前提醒：</b><b>最好先关掉代理 / VPN 再下载</b> —— 代理按流量计费，一部剧情 <span data-fact="unitEach">…</span>、全部 <span data-fact="allAssets">…</span>，很容易把额度用光；直连反而更快。
+        <b>下载前提醒：</b><b>最好先关掉代理 / VPN 再下载</b> —— 代理按流量计费，一部剧情 <span data-fact="unitEach">…</span>、全部 <span data-fact="allAssets">…</span>，很容易把额度用光。挂代理的话梯子速度决定下载速度。
       </div>
     </section>
 
@@ -642,10 +643,21 @@
       <div class="panel">
         <h3>维护</h3>
         <div class="optrow">
+          <button id="btnFixStands">检查并修复立绘</button>
           <button id="btnClearJobs">清空已完成任务</button>
           <button id="btnShutdown">停止本地服务</button>
         </div>
         <p class="dim">
+          <b>检查并修复立绘</b>：早前版本装好的立绘，个别会出现三种毛病 ——
+          <b>脸和身体半透明、透出底色像一块色块</b>，
+          <b>脸偏亮、身体偏暗</b>，
+          以及<b>表情差分错位</b>（眼睛嘴巴贴歪了、和脸对不上）。
+          更新程序本身改不了已经生成的图，
+          点一下这里让程序把装好的立绘全部检查一遍，有问题的重新生成。
+          如果你之前做过「提高CG画质」，这些组的高清图也会一起重做
+          （不然页面读的还是那张旧的）；没做过高清化就快得多。
+          通常 1~3 分钟，做过高清化的会再久一些，期间可以继续用别的页面；
+          本来没问题的不会动。<br>
           <b>清空已完成任务</b>：把页面底部进度条里的历史记录清掉（只清显示，已经装好的剧情、导出的文件都不受影响）。看着乱就点一下。<br>
           <b>停止本地服务</b>：关掉后台程序，本页面会立刻失效。想再用就重新双击
           <code>启动.bat</code>。
@@ -770,7 +782,19 @@
   </main>
 </div>
 
-<div id="jobbar"></div>
+<!-- 底部任务条。结构固定：轮询每 1.2 秒只重画 #jobList，
+     把手条和「收起」按钮是常驻节点，不会因为重画丢焦点/点空。
+     有任务时才显示；收起后只剩右下角一个小胶囊，和操作记录同一列。 -->
+<div id="jobbar" hidden>
+  <div id="jobHead">
+    <span class="jhDot" aria-hidden="true"></span>
+    <span class="jhTxt" id="jobHeadTxt">任务进行中</span>
+    <span class="jhMini" aria-hidden="true"><i id="jobHeadBar"></i></span>
+    <span class="jhPct" id="jobHeadPct"></span>
+    <button type="button" id="jobFold" aria-expanded="true">收起进度 ▾</button>
+  </div>
+  <div id="jobList"></div>
+</div>
 
 <!-- ============ 画质对比：全屏，两张图叠在一起，中间一条竖线左右拖 ============
      两张图是**同一段剧情的同一个画面**（背景 + 立绘），位置、裁切完全一致，
@@ -853,20 +877,23 @@
 <!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（见 web/index.html 的说明） -->
 <script src="data/mediaindex.js?v=1106a"
         onerror="window.__MEDIA=window.__MEDIA||null"></script>
-<script src="assets/js/common.js?v=1113a"></script>
+<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/dialog.js?v=1130d"></script>
+<script src="assets/js/mediaui.js?v=1123b"></script>
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
-<script src="assets/js/storylist.js?v=1113a"></script>
-<script src="assets/js/header.js?v=1114a"></script>
-<script src="assets/js/tour.js?v=1102a"></script>
+<script src="assets/js/storylist.js?v=1124a"></script>
+<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/tour.js?v=1130a"></script>
+<script src="assets/js/miniplayer.js?v=1130a"></script>
 <script src="assets/js/disclaimer.js?v=1101a"></script>
-<script src="assets/js/health.js?v=1101a"></script>
+<script src="assets/js/health.js?v=1130a"></script>
 <!-- 「自己动手翻」教程（唯一文案，播放器也用这一份） -->
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
 <!-- 容量 / 耗时的唯一来源（server/facts.py → api/facts）：必须比 setup.js 先加载，
      setup.js 里拼的提示文案直接用 FACT.t(...) -->
 <script src="assets/js/facts.js?v=1131a"></script>
-<script src="assets/js/setup.js?v=1114e"></script>
-<script src="assets/js/mobile.js?v=1113a"></script>
+<script src="assets/js/setup.js?v=1116j"></script>
+<script src="assets/js/mobile.js?v=1115b"></script>
 </body>
 </html>

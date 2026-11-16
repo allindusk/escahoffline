@@ -31,7 +31,8 @@
 
   btn.onclick = async () => {
     if (!window.PACKSTATE || !PACKSTATE.online) {
-      alert('导出需要本地服务：请用「启动.bat」（python -m server）打开本页面。');
+      await Dlg.alert('导出需要本地服务：请用「启动.bat」（python -m server）打开本页面。',
+        { anchor: btn });
       return;
     }
     const scope = window.CGPAGE ? CGPAGE.scope() : 'char';
@@ -41,17 +42,23 @@
       // 剧情 CG（主线/活动/其他）：按组导出，服务端 exports.export_cg 的 groups 参数
       const gs = CGPAGE.groupsForExport();
       const c = CGPAGE.visibleCounts();
-      if (!gs.length) { alert('当前筛选没有 CG 可导出。'); return; }
-      if (!confirm(`导出「${CGPAGE.scopeName()}」的 ${c.groups} 组 / ${c.imgs} 张 CG？\n\n` +
-        `（想只导一部剧情，先在左侧点一部再点导出）\n\n继续？`)) return;
+      if (!gs.length) {
+        await Dlg.alert('当前筛选没有 CG 可导出。', { anchor: btn });
+        return;
+      }
+      if (!(await Dlg.confirm(`导出「${CGPAGE.scopeName()}」的 ${c.groups} 组 / ${c.imgs} 张 CG？\n\n` +
+        `（想只导一部剧情，先在左侧点一部再点导出）\n\n继续？`,
+        { anchor: btn, ok: '开始导出' }))) return;
       body = { groups: gs };
     } else if (cur) {
-      if (!confirm(`导出角色「${CGPAGE.nameOf(cur)}」的全部 CG？`)) return;
+      if (!(await Dlg.confirm(`导出角色「${CGPAGE.nameOf(cur)}」的全部 CG？`,
+        { anchor: btn, ok: '开始导出' }))) return;
       body = { chars: [cur] };
     } else {
       const c = window.CGPAGE ? CGPAGE.counts() : { chars: 0, total: 0 };
-      if (!confirm(`当前是「全部角色」，将打包 ${c.chars} 个角色、共 ${c.total} 张 CG。\n\n` +
-        `（不含主线/活动/其他的剧情 CG；想只导一个角色，先在左侧点一个角色再点导出）\n\n继续？`)) return;
+      if (!(await Dlg.confirm(`当前是「全部角色」，将打包 ${c.chars} 个角色、共 ${c.total} 张 CG。\n\n` +
+        `（不含主线/活动/其他的剧情 CG；想只导一个角色，先在左侧点一个角色再点导出）\n\n继续？`,
+        { anchor: btn, ok: '开始导出' }))) return;
       // 显式给角色列表，不用 whole：whole 会把 -1/-2/-3 三个剧情桶也算进去
       body = { chars: window.CGPAGE ? CGPAGE.allCharIds() : [] };
     }

@@ -1,0 +1,1326 @@
+{
+ "v": 1,
+ "note": "原声集曲目：no=游戏内画廊顺序；dur=秒；clip=与本机 BGM 同曲的键（同母带，可直接复用 media/audio/sfx 里的文件）；name=公开曲名（由 gallery_names.json 覆盖，2026-11-15 已逐条补齐，null 表示尚未补到）；orig=包内占位名（如 music_00001 / 戦士のテーマ）；group=按 orig 用途自动分类",
+ "tracks": [
+  {
+   "no": 1,
+   "dur": 104.2,
+   "clip": null,
+   "name": "Brave your heart(Game size)",
+   "group": "其他",
+   "orig": "music_00001"
+  },
+  {
+   "no": 2,
+   "dur": 90.6,
+   "clip": "89B98A79_90ED8E6D82CC8365815B837D",
+   "name": "Over Beat(Ha.ver)(Arrange Ver.)",
+   "group": "角色曲",
+   "orig": "戦士のテーマ"
+  },
+  {
+   "no": 3,
+   "dur": 130.3,
+   "clip": "89B98A79_94458ED282CC8365815B837D",
+   "name": "旋風",
+   "group": "角色曲",
+   "orig": "忍者のテーマ"
+  },
+  {
+   "no": 4,
+   "dur": 113.0,
+   "clip": "89B98A79_905F8B5282CC8365815B837D",
+   "name": "Beat Valkyrie",
+   "group": "角色曲",
+   "orig": "神騎のテーマ"
+  },
+  {
+   "no": 5,
+   "dur": 138.1,
+   "clip": "89B98A79_96828F9782CC8365815B837D",
+   "name": "Beat Witch",
+   "group": "角色曲",
+   "orig": "魔女のテーマ"
+  },
+  {
+   "no": 6,
+   "dur": 127.1,
+   "clip": "89B98A79_8F8388A4",
+   "name": "センチメントに触れて(Arrange Ver.)",
+   "group": "其他",
+   "orig": "純愛"
+  },
+  {
+   "no": 7,
+   "dur": 100.3,
+   "clip": "89B98A79_97BD904A8347838D",
+   "name": "聖辱",
+   "group": "其他",
+   "orig": "凌辱エロ"
+  },
+  {
+   "no": 8,
+   "dur": 91.7,
+   "clip": "music_system_home",
+   "name": "Wind from far Away(Beat Wars)",
+   "group": "系统",
+   "orig": "music_system_home"
+  },
+  {
+   "no": 9,
+   "dur": 63.0,
+   "clip": "BGMBattle",
+   "name": "Prepare",
+   "group": "战斗",
+   "orig": "BGMBattle"
+  },
+  {
+   "no": 10,
+   "dur": 133.6,
+   "clip": "music_battle_001",
+   "name": "Battle Theme #1",
+   "group": "战斗",
+   "orig": "music_battle_001"
+  },
+  {
+   "no": 11,
+   "dur": 117.2,
+   "clip": "89B98A79_88AB",
+   "name": "闇の予感",
+   "group": "严肃",
+   "orig": "悪"
+  },
+  {
+   "no": 12,
+   "dur": 54.5,
+   "clip": "89B98A79_834D8383834F",
+   "name": "天の邪鬼",
+   "group": "日常",
+   "orig": "ギャグ"
+  },
+  {
+   "no": 13,
+   "dur": 240.1,
+   "clip": "89B98A79_88A382B582A2",
+   "name": "哀しみ",
+   "group": "严肃",
+   "orig": "哀しい"
+  },
+  {
+   "no": 14,
+   "dur": 109.2,
+   "clip": "89B98A79_90D882C882A2",
+   "name": "想いの雫",
+   "group": "严肃",
+   "orig": "切ない"
+  },
+  {
+   "no": 15,
+   "dur": 131.5,
+   "clip": "89B98A79_89B882E282A9",
+   "name": "Calm",
+   "group": "日常",
+   "orig": "穏やか"
+  },
+  {
+   "no": 16,
+   "dur": 71.9,
+   "clip": "89B98A79_94DF9173",
+   "name": "Pathetic",
+   "group": "严肃",
+   "orig": "悲壮"
+  },
+  {
+   "no": 17,
+   "dur": 114.0,
+   "clip": "89B98A79_905E96CA96DA",
+   "name": "Usual",
+   "group": "严肃",
+   "orig": "真面目"
+  },
+  {
+   "no": 18,
+   "dur": 117.7,
+   "clip": "89B98A79_97459173",
+   "name": "Brave",
+   "group": "严肃",
+   "orig": "勇壮"
+  },
+  {
+   "no": 19,
+   "dur": 75.5,
+   "clip": "89B98A79_8BD99497",
+   "name": "Strain",
+   "group": "严肃",
+   "orig": "緊迫"
+  },
+  {
+   "no": 20,
+   "dur": 64.3,
+   "clip": "89B98A79_957389B8",
+   "name": "Unrest",
+   "group": "严肃",
+   "orig": "不穏"
+  },
+  {
+   "no": 21,
+   "dur": 101.1,
+   "clip": "89B98A79_837383938360",
+   "name": "危機",
+   "group": "严肃",
+   "orig": "ピンチ"
+  },
+  {
+   "no": 22,
+   "dur": 104.3,
+   "clip": "89B98A79_836F8367838B",
+   "name": "ライト&アクション(Arrange Ver.)",
+   "group": "战斗",
+   "orig": "バトル"
+  },
+  {
+   "no": 23,
+   "dur": 115.2,
+   "clip": "89B98A79_8BAD9347",
+   "name": "夜よりも長き牙(Arrange Ver.)",
+   "group": "战斗",
+   "orig": "強敵"
+  },
+  {
+   "no": 24,
+   "dur": 106.7,
+   "clip": "89B98A79_88AB82CC91679044",
+   "name": "グリゴリ",
+   "group": "严肃",
+   "orig": "悪の組織"
+  },
+  {
+   "no": 25,
+   "dur": 90.6,
+   "clip": "89B98A79_89F6906C",
+   "name": "侵略する帝国(Arrange Ver.)",
+   "group": "严肃",
+   "orig": "怪人"
+  },
+  {
+   "no": 26,
+   "dur": 111.5,
+   "clip": "89B98A79_93568A45",
+   "name": "天界",
+   "group": "其他",
+   "orig": "天界"
+  },
+  {
+   "no": 27,
+   "dur": 129.5,
+   "clip": "89B98A79_8349838B835E8369",
+   "name": "Alterna-Stein",
+   "group": "其他",
+   "orig": "オルタナ"
+  },
+  {
+   "no": 28,
+   "dur": 133.5,
+   "clip": "89B98A79_93FA8FED",
+   "name": "午後のひととき",
+   "group": "日常",
+   "orig": "日常"
+  },
+  {
+   "no": 29,
+   "dur": 106.4,
+   "clip": "89B98A79_96E9",
+   "name": "まどろみのStay",
+   "group": "严肃",
+   "orig": "夜"
+  },
+  {
+   "no": 30,
+   "dur": 108.4,
+   "clip": "89B98A79_8CB38B43",
+   "name": "爽やかなStart",
+   "group": "日常",
+   "orig": "元気"
+  },
+  {
+   "no": 31,
+   "dur": 50.3,
+   "clip": "music_battle_003",
+   "name": "乙女颯爽",
+   "group": "战斗",
+   "orig": "music_battle_003"
+  },
+  {
+   "no": 32,
+   "dur": 101.6,
+   "clip": "music_battle_005",
+   "name": "修羅ノ道",
+   "group": "战斗",
+   "orig": "music_battle_005"
+  },
+  {
+   "no": 33,
+   "dur": 128.9,
+   "clip": "89B98A79_836F8367838B814583708358836083838C6E92CA8FED",
+   "name": "Toward the wind",
+   "group": "战斗",
+   "orig": "バトル・パスチャ系通常"
+  },
+  {
+   "no": 34,
+   "dur": 254.0,
+   "clip": "music_battle_008",
+   "name": "Awaking of BIND",
+   "group": "战斗",
+   "orig": "music_battle_008"
+  },
+  {
+   "no": 35,
+   "dur": 229.8,
+   "clip": "89B98A79_836F8367838B8145836F8343839383688C6E837B83588251",
+   "name": "That time came",
+   "group": "战斗",
+   "orig": "バトル・バインド系ボス２"
+  },
+  {
+   "no": 36,
+   "dur": 115.3,
+   "clip": "music_battle_011",
+   "name": "Last General",
+   "group": "战斗",
+   "orig": "music_battle_011"
+  },
+  {
+   "no": 37,
+   "dur": 147.1,
+   "clip": "89B98A79_89E482AA89688CF5",
+   "name": "My Glorious Days",
+   "group": "严肃",
+   "orig": "我が栄光"
+  },
+  {
+   "no": 38,
+   "dur": 111.2,
+   "clip": null,
+   "name": "ランランランス",
+   "group": "其他",
+   "orig": "music_00038"
+  },
+  {
+   "no": 39,
+   "dur": 97.0,
+   "clip": null,
+   "name": "かわいいのでてきた",
+   "group": "其他",
+   "orig": "music_00039"
+  },
+  {
+   "no": 40,
+   "dur": 82.9,
+   "clip": "music_battle_015",
+   "name": "来たら、倒す",
+   "group": "战斗",
+   "orig": "music_battle_015"
+  },
+  {
+   "no": 41,
+   "dur": 118.0,
+   "clip": "music_battle_016",
+   "name": "来たら、倒される",
+   "group": "战斗",
+   "orig": "music_battle_016"
+  },
+  {
+   "no": 42,
+   "dur": 130.4,
+   "clip": "music_battle_004",
+   "name": "疾走回楼",
+   "group": "战斗",
+   "orig": "music_battle_004"
+  },
+  {
+   "no": 43,
+   "dur": 139.6,
+   "clip": "music_battle_010",
+   "name": "Death Game",
+   "group": "战斗",
+   "orig": "music_battle_010"
+  },
+  {
+   "no": 44,
+   "dur": 117.6,
+   "clip": "music_battle_014",
+   "name": "煉獄",
+   "group": "战斗",
+   "orig": "music_battle_014"
+  },
+  {
+   "no": 45,
+   "dur": 113.5,
+   "clip": "89B98A79_8B5E9866",
+   "name": "黒は誰か？",
+   "group": "严肃",
+   "orig": "疑惑"
+  },
+  {
+   "no": 46,
+   "dur": 86.5,
+   "clip": "89B98A79_836F8367838B8145838C8343836881458353815B838B83668393836E836A815B",
+   "name": "Samba de Hanny",
+   "group": "战斗",
+   "orig": "バトル・レイド・ゴールデンハニー"
+  },
+  {
+   "no": 47,
+   "dur": 134.2,
+   "clip": "music_battle_018",
+   "name": "Boss Battle",
+   "group": "战斗",
+   "orig": "music_battle_018"
+  },
+  {
+   "no": 48,
+   "dur": 124.1,
+   "clip": null,
+   "name": "RANCE02 BGM24",
+   "group": "其他",
+   "orig": "music_00048"
+  },
+  {
+   "no": 49,
+   "dur": 80.3,
+   "clip": null,
+   "name": "RANCE02 BGM13",
+   "group": "其他",
+   "orig": "music_00049"
+  },
+  {
+   "no": 50,
+   "dur": 99.5,
+   "clip": "music_battle_021",
+   "name": "RANCE02 BGM17",
+   "group": "战斗",
+   "orig": "music_battle_021"
+  },
+  {
+   "no": 51,
+   "dur": 136.4,
+   "clip": "music_battle_020",
+   "name": "RANCE02 BGM18",
+   "group": "战斗",
+   "orig": "music_battle_020"
+  },
+  {
+   "no": 52,
+   "dur": 88.8,
+   "clip": "89B98A79_835E8343834B815B814583578387815B",
+   "name": "Like a whirlwind",
+   "group": "其他",
+   "orig": "タイガー・ジョー"
+  },
+  {
+   "no": 53,
+   "dur": 129.4,
+   "clip": "89B98A79_82D982CC82DA82CC",
+   "name": "束の間のWarm",
+   "group": "日常",
+   "orig": "ほのぼの"
+  },
+  {
+   "no": 54,
+   "dur": 105.6,
+   "clip": "89B98A79_974482B582A2",
+   "name": "Over Beat(MB.ver)(Arrange Ver.)",
+   "group": "日常",
+   "orig": "優しい"
+  },
+  {
+   "no": 55,
+   "dur": 123.5,
+   "clip": "89B98A79_E35997ED",
+   "name": "It reached from you",
+   "group": "其他",
+   "orig": "綺麗"
+  },
+  {
+   "no": 56,
+   "dur": 127.3,
+   "clip": "89B98A79_928B89BA82AA82E8",
+   "name": "微睡みの五分前",
+   "group": "日常",
+   "orig": "昼下がり"
+  },
+  {
+   "no": 57,
+   "dur": 84.8,
+   "clip": "89B98A79_835A834E8356815B",
+   "name": "Little bit",
+   "group": "其他",
+   "orig": "セクシー"
+  },
+  {
+   "no": 58,
+   "dur": 120.5,
+   "clip": "89B98A79_8E768DF5",
+   "name": "琥珀色の時間",
+   "group": "严肃",
+   "orig": "思索"
+  },
+  {
+   "no": 59,
+   "dur": 67.9,
+   "clip": "89B98A79_836E836A815B82CC8365815B837D",
+   "name": "ハニーのテーマ",
+   "group": "角色曲",
+   "orig": "ハニーのテーマ"
+  },
+  {
+   "no": 60,
+   "dur": 109.4,
+   "clip": "89B98A79_82A882B582E182EA",
+   "name": "Santos guild",
+   "group": "日常",
+   "orig": "おしゃれ"
+  },
+  {
+   "no": 61,
+   "dur": 117.9,
+   "clip": "89B98A79_8366815B8367",
+   "name": "Little finger and...",
+   "group": "日常",
+   "orig": "デート"
+  },
+  {
+   "no": 62,
+   "dur": 102.6,
+   "clip": "89B98A79_944D8C8C",
+   "name": "アガレスタ・スピリッツ",
+   "group": "战斗",
+   "orig": "熱血"
+  },
+  {
+   "no": 63,
+   "dur": 121.7,
+   "clip": "89B98A79_905F94E9",
+   "name": "Space of no wisdom",
+   "group": "其他",
+   "orig": "神秘"
+  },
+  {
+   "no": 64,
+   "dur": 76.2,
+   "clip": "89B98A79_90E2965D",
+   "name": "冷たい刻(Arrange Ver.)",
+   "group": "严肃",
+   "orig": "絶望"
+  },
+  {
+   "no": 65,
+   "dur": 49.8,
+   "clip": "89B98A79_95A88E599357",
+   "name": "BU! SAN! TEN!",
+   "group": "其他",
+   "orig": "物産展"
+  },
+  {
+   "no": 66,
+   "dur": 92.7,
+   "clip": "89B98A79_88C09ED9",
+   "name": "あなたがいれば",
+   "group": "日常",
+   "orig": "安樂"
+  },
+  {
+   "no": 67,
+   "dur": 97.3,
+   "clip": "89B98A79_9473966B",
+   "name": "そんな最後(Arrange Ver.)",
+   "group": "严肃",
+   "orig": "敗北"
+  },
+  {
+   "no": 68,
+   "dur": 267.5,
+   "clip": "89B98A79_E35997ED8251",
+   "name": "その先の祈り",
+   "group": "其他",
+   "orig": "綺麗２"
+  },
+  {
+   "no": 69,
+   "dur": 118.9,
+   "clip": "music_battle_013",
+   "name": "Boss Theme #1",
+   "group": "战斗",
+   "orig": "music_battle_013"
+  },
+  {
+   "no": 70,
+   "dur": 152.3,
+   "clip": "89B98A79_94DF91738251",
+   "name": "勝者なき結末",
+   "group": "严肃",
+   "orig": "悲壮２"
+  },
+  {
+   "no": 71,
+   "dur": 127.6,
+   "clip": "89B98A79_837683608AB493AE",
+   "name": "Small happiness",
+   "group": "其他",
+   "orig": "プチ感動"
+  },
+  {
+   "no": 72,
+   "dur": 149.7,
+   "clip": "music_battle_029",
+   "name": "THE BIND SEEKER (fight)",
+   "group": "战斗",
+   "orig": "music_battle_029"
+  },
+  {
+   "no": 73,
+   "dur": 97.8,
+   "clip": "music_battle_006",
+   "name": "罪因",
+   "group": "战斗",
+   "orig": "music_battle_006"
+  },
+  {
+   "no": 74,
+   "dur": 132.2,
+   "clip": "89B98A79_89F682B582A2",
+   "name": "Breath of poison",
+   "group": "严肃",
+   "orig": "怪しい"
+  },
+  {
+   "no": 75,
+   "dur": 106.0,
+   "clip": "89B98A79_836F8367838B81458341834A836C",
+   "name": "First Stage",
+   "group": "战斗",
+   "orig": "バトル・アカネ"
+  },
+  {
+   "no": 76,
+   "dur": 91.0,
+   "clip": "89B98A79_836F8367838B8145835E8343834B815B814583578387815B",
+   "name": "The decadent Juliets",
+   "group": "战斗",
+   "orig": "バトル・タイガー・ジョー"
+  },
+  {
+   "no": 77,
+   "dur": 144.9,
+   "clip": "89B98A79_836F8367838B8145836E8363836C",
+   "name": "Atlach_nacha～Huge battle",
+   "group": "战斗",
+   "orig": "バトル・ハツネ"
+  },
+  {
+   "no": 78,
+   "dur": 107.7,
+   "clip": "89B98A79_837D8362834C8393838A815B",
+   "name": "電気椅子と鼠",
+   "group": "其他",
+   "orig": "マッキンリー"
+  },
+  {
+   "no": 79,
+   "dur": 205.4,
+   "clip": "89B98A79_825095948DC58F498FCD",
+   "name": "The demise principle",
+   "group": "战斗",
+   "orig": "１部最終章"
+  },
+  {
+   "no": 80,
+   "dur": 51.2,
+   "clip": "89B98A79_826E826F8349838B8353815B838B",
+   "name": "Brave your heart(Music box)",
+   "group": "主题歌",
+   "orig": "ＯＰオルゴール"
+  },
+  {
+   "no": 81,
+   "dur": 202.1,
+   "clip": "89B98A79_83898358837B835882509594",
+   "name": "Brave your heart(Fight)",
+   "group": "战斗",
+   "orig": "ラスボス１部"
+  },
+  {
+   "no": 82,
+   "dur": 111.5,
+   "clip": "89B98A79_974489EB",
+   "name": "キミに届け",
+   "group": "其他",
+   "orig": "優雅"
+  },
+  {
+   "no": 83,
+   "dur": 118.5,
+   "clip": "89B98A79_94DF82B582DD",
+   "name": "勇者と魔王",
+   "group": "严肃",
+   "orig": "悲しみ"
+  },
+  {
+   "no": 84,
+   "dur": 155.9,
+   "clip": "music_battle_012",
+   "name": "星海の支配者",
+   "group": "战斗",
+   "orig": "music_battle_012"
+  },
+  {
+   "no": 85,
+   "dur": 75.5,
+   "clip": "89B98A79_90CC8CEA82E8814583708358836083838252",
+   "name": "Warm Light",
+   "group": "其他",
+   "orig": "昔語り・パスチャ３"
+  },
+  {
+   "no": 86,
+   "dur": 55.1,
+   "clip": "BGMHomePascha3",
+   "name": "Start waiting",
+   "group": "日常",
+   "orig": "BGMHomePascha3"
+  },
+  {
+   "no": 87,
+   "dur": 166.1,
+   "clip": "music_battle_035",
+   "name": "Capricious step",
+   "group": "战斗",
+   "orig": "music_battle_035"
+  },
+  {
+   "no": 88,
+   "dur": 279.4,
+   "clip": "music_battle_036",
+   "name": "THE BIND SEEKER",
+   "group": "战斗",
+   "orig": "music_battle_036"
+  },
+  {
+   "no": 89,
+   "dur": 80.6,
+   "clip": "89B98A79_836F8367838B8145837B8358814591E592E98D91",
+   "name": "一斉射撃－呂",
+   "group": "战斗",
+   "orig": "バトル・ボス・大帝国"
+  },
+  {
+   "no": 90,
+   "dur": 90.0,
+   "clip": null,
+   "name": "月下擾乱ヒロイズム(Game size)",
+   "group": "其他",
+   "orig": "music_00090"
+  },
+  {
+   "no": 91,
+   "dur": 99.7,
+   "clip": "89B98A79_94458ED282CC8365815B837D8251",
+   "name": "Sennin Next-gen",
+   "group": "角色曲",
+   "orig": "忍者のテーマ２"
+  },
+  {
+   "no": 92,
+   "dur": 105.1,
+   "clip": "BGMHome2",
+   "name": "Command Phase(Beat Wars)",
+   "group": "日常",
+   "orig": "BGMHome2"
+  },
+  {
+   "no": 93,
+   "dur": 81.6,
+   "clip": "89B98A79_90ED93AC8F8094F58251",
+   "name": "Prepare #2",
+   "group": "战斗",
+   "orig": "戦闘準備２"
+  },
+  {
+   "no": 94,
+   "dur": 69.9,
+   "clip": "89B98A79_917A946A",
+   "name": "上弦衆・皆",
+   "group": "其他",
+   "orig": "想破"
+  },
+  {
+   "no": 95,
+   "dur": 131.4,
+   "clip": "89B98A79_88C082E782AC",
+   "name": "木漏れ日",
+   "group": "日常",
+   "orig": "安らぎ"
+  },
+  {
+   "no": 96,
+   "dur": 64.8,
+   "clip": "89B98A79_89F69445",
+   "name": "上弦衆・陣",
+   "group": "严肃",
+   "orig": "怪忍"
+  },
+  {
+   "no": 97,
+   "dur": 109.9,
+   "clip": "89B98A79_96E982CC9597",
+   "name": "夜の風",
+   "group": "严肃",
+   "orig": "夜の風"
+  },
+  {
+   "no": 98,
+   "dur": 90.3,
+   "clip": "89B98A79_836D838D8343",
+   "name": "ノロイ党",
+   "group": "其他",
+   "orig": "ノロイ"
+  },
+  {
+   "no": 99,
+   "dur": 116.1,
+   "clip": "89B98A79_905E96CA96DA8251",
+   "name": "Usual #2",
+   "group": "严肃",
+   "orig": "真面目２"
+  },
+  {
+   "no": 100,
+   "dur": 107.1,
+   "clip": "89B98A79_836C8349836D838D8343937D",
+   "name": "NeoNOROI-Party",
+   "group": "其他",
+   "orig": "ネオノロイ党"
+  },
+  {
+   "no": 101,
+   "dur": 88.4,
+   "clip": "music_battle_024",
+   "name": "Raid Boss Theme #1",
+   "group": "战斗",
+   "orig": "music_battle_024"
+  },
+  {
+   "no": 102,
+   "dur": 86.8,
+   "clip": "BGMHomeRanceC",
+   "name": "気ままな靴跡",
+   "group": "日常",
+   "orig": "BGMHomeRanceC"
+  },
+  {
+   "no": 103,
+   "dur": 77.1,
+   "clip": "BGMTreasureRanceC",
+   "name": "ヴァーティカル↓↑スクローリング",
+   "group": "其他",
+   "orig": "BGMTreasureRanceC"
+  },
+  {
+   "no": 104,
+   "dur": 108.4,
+   "clip": "music_battle_039",
+   "name": "bBattle party",
+   "group": "战斗",
+   "orig": "music_battle_039"
+  },
+  {
+   "no": 105,
+   "dur": 109.7,
+   "clip": "music_battle_040",
+   "name": "死ぬし！死ねし！",
+   "group": "战斗",
+   "orig": "music_battle_040"
+  },
+  {
+   "no": 106,
+   "dur": 89.0,
+   "clip": "music_battle_041",
+   "name": "Boss Theme #2",
+   "group": "战斗",
+   "orig": "music_battle_041"
+  },
+  {
+   "no": 107,
+   "dur": 115.7,
+   "clip": "89B98A79_914D9445",
+   "name": "久遠の果て",
+   "group": "其他",
+   "orig": "閃忍"
+  },
+  {
+   "no": 108,
+   "dur": 184.9,
+   "clip": "89B98A79_836F8367838B82519594",
+   "name": "The emblem of detest",
+   "group": "战斗",
+   "orig": "バトル２部"
+  },
+  {
+   "no": 109,
+   "dur": 160.4,
+   "clip": "music_battle_042",
+   "name": "The emblem of detest(Battle)",
+   "group": "战斗",
+   "orig": "music_battle_042"
+  },
+  {
+   "no": 110,
+   "dur": 112.4,
+   "clip": "BGMHomeRankan",
+   "name": "in the daytime",
+   "group": "日常",
+   "orig": "BGMHomeRankan"
+  },
+  {
+   "no": 111,
+   "dur": 58.6,
+   "clip": "BGMTreasureRankan",
+   "name": "in the night",
+   "group": "其他",
+   "orig": "BGMTreasureRankan"
+  },
+  {
+   "no": 112,
+   "dur": 99.5,
+   "clip": "music_battle_043",
+   "name": "Defense!",
+   "group": "战斗",
+   "orig": "music_battle_043"
+  },
+  {
+   "no": 113,
+   "dur": 147.2,
+   "clip": "music_battle_044",
+   "name": "Duel",
+   "group": "战斗",
+   "orig": "music_battle_044"
+  },
+  {
+   "no": 114,
+   "dur": 99.7,
+   "clip": "music_battle_046",
+   "name": "Battle Theme #2",
+   "group": "战斗",
+   "orig": "music_battle_046"
+  },
+  {
+   "no": 115,
+   "dur": 146.6,
+   "clip": "BGMWideArea",
+   "name": "Combat Theme #1",
+   "group": "其他",
+   "orig": "BGMWideArea"
+  },
+  {
+   "no": 116,
+   "dur": 60.0,
+   "clip": "89B98A79_836E836A815B82CC8365815B837D8251",
+   "name": "はにわネクター",
+   "group": "角色曲",
+   "orig": "ハニーのテーマ２"
+  },
+  {
+   "no": 117,
+   "dur": 80.6,
+   "clip": "89B98A79_836E836A815B82CC8365815B837D8252",
+   "name": "陶器市開催中",
+   "group": "角色曲",
+   "orig": "ハニーのテーマ３"
+  },
+  {
+   "no": 118,
+   "dur": 66.5,
+   "clip": "BGMHomeRanceD",
+   "name": "RANCE4 BGM10",
+   "group": "日常",
+   "orig": "BGMHomeRanceD"
+  },
+  {
+   "no": 119,
+   "dur": 126.8,
+   "clip": "BGMTreasureRanceD",
+   "name": "RANCE4 BGM29",
+   "group": "其他",
+   "orig": "BGMTreasureRanceD"
+  },
+  {
+   "no": 120,
+   "dur": 72.3,
+   "clip": "music_battle_047",
+   "name": "RANCE4 BGM08",
+   "group": "战斗",
+   "orig": "music_battle_047"
+  },
+  {
+   "no": 121,
+   "dur": 82.5,
+   "clip": "music_battle_048",
+   "name": "RANCE4 BGM09",
+   "group": "战斗",
+   "orig": "music_battle_048"
+  },
+  {
+   "no": 122,
+   "dur": 130.1,
+   "clip": "89B98A79_838983938358825882648263",
+   "name": "Ending",
+   "group": "主题歌",
+   "orig": "ランス９ＥＤ"
+  },
+  {
+   "no": 123,
+   "dur": 129.1,
+   "clip": "89B98A79_89EB8A79",
+   "name": "内天",
+   "group": "其他",
+   "orig": "雅楽"
+  },
+  {
+   "no": 124,
+   "dur": 90.6,
+   "clip": "89B98A79_8347834E8356815B838B82648263",
+   "name": "黎明",
+   "group": "主题歌",
+   "orig": "エクシールＥＤ"
+  },
+  {
+   "no": 125,
+   "dur": 121.6,
+   "clip": "music_battle_027",
+   "name": "Raid Boss Theme #2",
+   "group": "战斗",
+   "orig": "music_battle_027"
+  },
+  {
+   "no": 126,
+   "dur": 162.0,
+   "clip": "BGMHomeYorukuru",
+   "name": "Sunlight in the afternoon",
+   "group": "日常",
+   "orig": "BGMHomeYorukuru"
+  },
+  {
+   "no": 127,
+   "dur": 143.0,
+   "clip": "BGMTreasureYorukuru",
+   "name": "Training Time",
+   "group": "其他",
+   "orig": "BGMTreasureYorukuru"
+  },
+  {
+   "no": 128,
+   "dur": 168.0,
+   "clip": "music_battle_049",
+   "name": "Fighting under the blue moon",
+   "group": "战斗",
+   "orig": "music_battle_049"
+  },
+  {
+   "no": 129,
+   "dur": 115.0,
+   "clip": "music_battle_050",
+   "name": "A night comes!(hardrock ver.)",
+   "group": "战斗",
+   "orig": "music_battle_050"
+  },
+  {
+   "no": 130,
+   "dur": 180.3,
+   "clip": "89B98A79_825195948DC58F498FCD",
+   "name": "Venom",
+   "group": "战斗",
+   "orig": "２部最終章"
+  },
+  {
+   "no": 131,
+   "dur": 107.9,
+   "clip": "89B98A79_82519594826E826F83738341836D",
+   "name": "月下擾乱ヒロイズム(Resolve)",
+   "group": "主题歌",
+   "orig": "２部ＯＰピアノ"
+  },
+  {
+   "no": 132,
+   "dur": 150.7,
+   "clip": "89B98A79_83898358837B835882519594",
+   "name": "Genesis",
+   "group": "战斗",
+   "orig": "ラスボス２部"
+  },
+  {
+   "no": 133,
+   "dur": 213.4,
+   "clip": "BGMHomeAtlach",
+   "name": "Red tint",
+   "group": "日常",
+   "orig": "BGMHomeAtlach"
+  },
+  {
+   "no": 134,
+   "dur": 262.1,
+   "clip": "BGMTreasureAtlach",
+   "name": "Running Clouds",
+   "group": "其他",
+   "orig": "BGMTreasureAtlach"
+  },
+  {
+   "no": 135,
+   "dur": 236.2,
+   "clip": "music_battle_052",
+   "name": "Atlach_nacha～Going on",
+   "group": "战斗",
+   "orig": "music_battle_052"
+  },
+  {
+   "no": 136,
+   "dur": 259.9,
+   "clip": "music_battle_053",
+   "name": "Atlach_nacha～Huge battle",
+   "group": "战斗",
+   "orig": "music_battle_053"
+  },
+  {
+   "no": 137,
+   "dur": 113.2,
+   "clip": null,
+   "name": "STAY BRAVE!(Game size)",
+   "group": "其他",
+   "orig": "music_00137"
+  },
+  {
+   "no": 138,
+   "dur": 111.9,
+   "clip": "89B98A79_905F8B5282CC8365815B837D8251",
+   "name": "Beat Valkyrie Next-gen",
+   "group": "角色曲",
+   "orig": "神騎のテーマ２"
+  },
+  {
+   "no": 139,
+   "dur": 82.1,
+   "clip": "BGMHome3",
+   "name": "Command Phase(Beat Wars) #2",
+   "group": "日常",
+   "orig": "BGMHome3"
+  },
+  {
+   "no": 140,
+   "dur": 78.7,
+   "clip": "BGMBattle3",
+   "name": "Prepare #3",
+   "group": "战斗",
+   "orig": "BGMBattle3"
+  },
+  {
+   "no": 141,
+   "dur": 183.2,
+   "clip": "89B98A79_905E96CA96DA8252",
+   "name": "Usual #3",
+   "group": "严肃",
+   "orig": "真面目３"
+  },
+  {
+   "no": 142,
+   "dur": 80.5,
+   "clip": "music_battle_054",
+   "name": "Battle Theme #3",
+   "group": "战斗",
+   "orig": "music_battle_054"
+  },
+  {
+   "no": 143,
+   "dur": 109.1,
+   "clip": "music_battle_055",
+   "name": "Boss Theme #3",
+   "group": "战斗",
+   "orig": "music_battle_055"
+  },
+  {
+   "no": 144,
+   "dur": 100.8,
+   "clip": "89B98A79_8F8388A48251",
+   "name": "Voluptuous",
+   "group": "其他",
+   "orig": "純愛２"
+  },
+  {
+   "no": 145,
+   "dur": 88.3,
+   "clip": "89B98A79_97BD904A8347838D8251",
+   "name": "Humiliation",
+   "group": "其他",
+   "orig": "凌辱エロ２"
+  },
+  {
+   "no": 146,
+   "dur": 110.2,
+   "clip": "89B98A79_91C293568E67",
+   "name": "Revolt",
+   "group": "严肃",
+   "orig": "堕天使"
+  },
+  {
+   "no": 147,
+   "dur": 87.9,
+   "clip": "89B98A79_836F8367838B82529594",
+   "name": "Battle Scene #1",
+   "group": "战斗",
+   "orig": "バトル３部"
+  },
+  {
+   "no": 148,
+   "dur": 116.4,
+   "clip": "BGMHomeRanceE",
+   "name": "Go The Brutal Man",
+   "group": "日常",
+   "orig": "BGMHomeRanceE"
+  },
+  {
+   "no": 149,
+   "dur": 134.4,
+   "clip": "music_battle_058",
+   "name": "Trns Beat?",
+   "group": "战斗",
+   "orig": "music_battle_058"
+  },
+  {
+   "no": 150,
+   "dur": 118.1,
+   "clip": "music_battle_059",
+   "name": "All Your Power",
+   "group": "战斗",
+   "orig": "music_battle_059"
+  },
+  {
+   "no": 151,
+   "dur": 117.5,
+   "clip": "89B98A79_83568358836583808145837A815B8380814593AC905F93738E73",
+   "name": "Title",
+   "group": "系统",
+   "orig": "システム・ホーム・闘神都市"
+  },
+  {
+   "no": 152,
+   "dur": 59.1,
+   "clip": "BGMTreasureTousin",
+   "name": "System - Level goddess -",
+   "group": "其他",
+   "orig": "BGMTreasureTousin"
+  },
+  {
+   "no": 153,
+   "dur": 139.0,
+   "clip": "music_battle_061",
+   "name": "Fight - Normal 2 -",
+   "group": "战斗",
+   "orig": "music_battle_061"
+  },
+  {
+   "no": 154,
+   "dur": 193.5,
+   "clip": "music_battle_062",
+   "name": "Dungeon - Last -",
+   "group": "战斗",
+   "orig": "music_battle_062"
+  },
+  {
+   "no": 155,
+   "dur": 75.5,
+   "clip": "89B98A79_93AC905F93FA8FED",
+   "name": "In the street",
+   "group": "日常",
+   "orig": "闘神日常"
+  },
+  {
+   "no": 156,
+   "dur": 121.8,
+   "clip": "89B98A79_93AC905F91E589EF",
+   "name": "Fight - Tournament -",
+   "group": "战斗",
+   "orig": "闘神大会"
+  },
+  {
+   "no": 157,
+   "dur": 51.7,
+   "clip": "89B98A79_93AC905F835F83438357834683588367",
+   "name": "Toushin digest",
+   "group": "战斗",
+   "orig": "闘神ダイジェスト"
+  },
+  {
+   "no": 158,
+   "dur": 146.3,
+   "clip": "music_battle_060",
+   "name": "Legion",
+   "group": "战斗",
+   "orig": "music_battle_060"
+  },
+  {
+   "no": 159,
+   "dur": 129.6,
+   "clip": "89B98A79_82529594826E826F83738341836D",
+   "name": "STAY BRAVE!(Resolve)",
+   "group": "主题歌",
+   "orig": "３部ＯＰピアノ"
+  },
+  {
+   "no": 160,
+   "dur": 83.9,
+   "clip": "89B98A79_83898358837B835882529594",
+   "name": "STAY BRAVE!(Fight) ADV Edit",
+   "group": "战斗",
+   "orig": "ラスボス３部"
+  },
+  {
+   "no": 161,
+   "dur": 125.6,
+   "clip": "music_battle_065",
+   "name": "STAY BRAVE!(Fight)",
+   "group": "战斗",
+   "orig": "music_battle_065"
+  },
+  {
+   "no": 162,
+   "dur": 107.9,
+   "clip": "BGMHomeRanceF",
+   "name": "ランス6",
+   "group": "日常",
+   "orig": "BGMHomeRanceF"
+  },
+  {
+   "no": 163,
+   "dur": 80.0,
+   "clip": "BGMTreasureRanceF",
+   "name": "空の要塞",
+   "group": "其他",
+   "orig": "BGMTreasureRanceF"
+  },
+  {
+   "no": 164,
+   "dur": 90.1,
+   "clip": "music_battle_066",
+   "name": "戦闘",
+   "group": "战斗",
+   "orig": "music_battle_066"
+  },
+  {
+   "no": 165,
+   "dur": 84.9,
+   "clip": "music_battle_067",
+   "name": "ゼスとの戦闘",
+   "group": "战斗",
+   "orig": "music_battle_067"
+  }
+ ]
+}

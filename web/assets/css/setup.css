@@ -43,7 +43,13 @@ body {
 #btnHelp2:hover { filter: brightness(1.25); }
 
 /* ---------------- 布局 ---------------- */
-.layout { display: flex; height: calc(100% - 50px); }
+/* padding-bottom 由 setup.js 按底部任务条的真实高度写进 --job-h。
+   任务条是 fixed 浮层，光给它留白不够 —— 必须把**滚动容器本身**缩短，
+   否则正文里仍有一段落在任务条背后，那里的按钮看得见却点不到。
+   窄屏（mobile.css 把 .layout 改成 flex:1 / height:auto）同样吃这个 padding，
+   所以一套变量桌面手机都生效。 */
+.layout { display: flex; height: calc(100% - 50px);
+  padding-bottom: var(--job-h, 0px); }
 #side {
   width: 186px; flex: none; padding: 12px 10px;
   background: var(--bg2); border-right: 1px solid var(--line);
@@ -265,16 +271,85 @@ details.explain li { margin-bottom: 2px; }
 }
 
 /* ---------------- 底部任务条 ---------------- */
-/* **必须是不透明的**：这条是压在正文上的浮层，一旦半透明，底下滚动的文字
-   会透过来，变成"两层字叠在一起"，进度和状态就看不清了。
-   容器本身也给底色：行与行之间那 2px 缝、以及左右两侧不会漏出页面内容。
-   （没有任务时容器高度为 0，不会挡住任何东西） */
+/* 以前这条是压在正文上的 fixed 浮层：三条任务叠起来近 200px，底部的按钮
+   被整行盖住，而 .job 又吃鼠标事件 → 看得见却点不到（2026-11-15 反馈）。
+   现在两件事一起做：
+   ① --job-h 把 .layout 的内容盒缩短到任务条上沿（见上面 .layout 注释），
+      可视区里就**不存在**被遮住的内容，按钮都能正常点；
+   ② 顶部一条细「把手」可一键收成右下角小胶囊：和操作记录、版本号归到
+      同一列，左边整片让给页面内容；折叠后容器透明、不吃事件，
+      只剩胶囊那一小块（窄屏尤其明显）。
+   **必须是不透明的**：底下滚动的文字透过来会变成"两层字叠在一起"。 */
 #jobbar {
   /* 底部留 52px 给右下角的「版本号 + 免责声明」，否则两块会叠在一起 */
   position: fixed; left: 0; right: 0; bottom: 52px; z-index: 9000;
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column;
   pointer-events: none;
   background: #0b131d;
+}
+/* hidden 是 UA 样式，优先级低于上面的 display:flex，必须显式写 */
+#jobbar[hidden] { display: none; }
+#jobList { display: flex; flex-direction: column; gap: 2px; }
+
+/* 把手条：展开时是整宽细条，折叠时变胶囊（见下面 .folded） */
+#jobHead {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 32px; padding: 4px 20px;
+  background: #0e1a26; border-top: 1px solid var(--line2);
+  font-size: 14px; color: var(--fg2);
+}
+.jhDot { flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: #7adcff; box-shadow: 0 0 0 3px rgba(122, 220, 255, .16);
+  animation: jobpulse 1.4s ease-in-out infinite; }
+@keyframes jobpulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+#jobbar.all-done .jhDot { animation: none; background: #63d992;
+  box-shadow: 0 0 0 3px rgba(99, 217, 146, .16); }
+/* 收起后看不见每一行的红色失败态，把手条 / 胶囊自己要说出来 */
+#jobbar.has-failed .jhDot { animation: none; background: var(--err);
+  box-shadow: 0 0 0 3px rgba(224, 90, 99, .18); }
+#jobbar.has-failed .jhTxt { color: #ffb3ba; }
+.jhTxt { flex: none; color: var(--fg); font-weight: 600; white-space: nowrap; }
+/* 迷你进度条取「最慢的那条」：多个任务并行时，全部完成才算完 */
+.jhMini { flex: 0 0 120px; height: 6px; border-radius: 4px;
+  background: #17232f; overflow: hidden; }
+.jhMini i { display: block; height: 100%; width: 0; border-radius: 4px;
+  background: linear-gradient(90deg, #3d8fd0, #7adcff);
+  transition: width .35s ease; }
+.jhPct { flex: none; min-width: 46px; color: var(--fg3);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+#jobFold {
+  margin-left: auto; flex: none; padding: 3px 12px; font-size: 14px;
+  border: 1px solid var(--line2); border-radius: 7px;
+  background: #16283a; color: var(--fg2); cursor: pointer; white-space: nowrap;
+}
+#jobFold:hover { color: var(--fg); border-color: var(--acc); }
+
+/* 折叠态：容器透明 + pointer-events:none，只有胶囊自己可点 */
+#jobbar.folded { background: transparent; }
+#jobbar.folded #jobList { display: none; }
+#jobbar.folded #jobHead {
+  /* 靠右，与 #actPanel（right:16px）、#dlBar 排成一列；
+     actPanel 由 syncActBottom() 抬到胶囊上方，两者垂直错开 8px 不重叠 */
+  align-self: flex-end; width: auto;
+  max-width: min(560px, calc(100vw - 32px));
+  margin: 0 16px 8px 0; padding: 6px 10px 6px 14px;
+  background: #11202e; border: 1px solid var(--line2); border-radius: 20px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+}
+#jobbar.folded .jhTxt, #jobbar.folded .jhPct {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#jobbar.folded .jhMini { flex-basis: 70px; }
+/* 窄屏：把手条一整行放不下「文字 + 迷你条 + 百分比 + 按钮」，
+   实测 420px 宽时「收起进度」会被挤出屏幕右边、点不到。
+   迷你条在两种形态下都让位（展开态下面本来就有完整进度条，
+   折叠态还有「最慢 x%」文字），优先保住按钮完整可见。 */
+@media (max-width: 520px) {
+  #jobHead { gap: 6px; padding: 4px 12px; }
+  #jobHead .jhMini { display: none; }
+  #jobHead .jhTxt { flex: 0 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; }
+  #jobFold { padding: 3px 9px; }
 }
 
 /* ---------------- 右下角操作记录浮窗 ----------------
@@ -458,6 +533,9 @@ details.explain li { margin-bottom: 2px; }
   #side { width: 132px; }
   #side button { font-size: 14px; padding: 8px; }
   main { padding: 14px 14px 100px; }
+  /* 窄屏名称列不再"必须一行"：max-content 会把说明列挤没 */
+  .basepack .bp-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .basepack .bp-row .nm { white-space: normal; grid-column: 1 / -1; }
 }
 
 
@@ -526,11 +604,18 @@ details.explain li { margin-bottom: 2px; }
 .basepack .bp-head b { color: #cfe89a; font-size: 15.1px; }
 /* 三列网格：[名称][说明][状态/按钮]。
    状态永远贴在最右一列，不会因为"这行有没有按钮"而左右乱跳。 */
+/* 三列：名称 / 说明 / 状态。
+   名称列用 max-content —— **标题永远一行**（以前写死 200px，长一点的
+   「公共素材（背景图 / 背景音乐 / 音效 / 头像 / 剧情横幅）」被折成两行，
+   看着像两行不同的条目，2026-11-15 用户反馈）。
+   宽度让给名称后，说明列自己会折成两行，正好是要的效果。 */
 .basepack .bp-row { display: grid;
-  grid-template-columns: 200px minmax(0, 1fr) auto;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
   align-items: center; gap: 12px;
   padding: 8px 0; border-top: 1px solid #2a3520; font-size: 14.3px; }
-.basepack .bp-row .nm { color: #dbe8f6; }
+.basepack .bp-row .nm { color: #dbe8f6; white-space: nowrap; }
+/* 行名与它的「可选」徽标同上：徽标本身绝不再折行 */
+.basepack .bp-row .nm .st { white-space: nowrap; margin-left: 6px; }
 /* 说明列**允许换行**，不截断：公共素材那行要写「背景 601/601（另有 11 个未引用）
    · 音乐 · 音效 · 头像 · 横幅（角色/章节）」，单行放不下，以前被 ellipsis 砍掉
    后半截 —— 用户以为"后面的统计没显示"（2026-11-04 反馈）。

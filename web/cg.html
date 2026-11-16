@@ -1,11 +1,12 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script src="assets/js/shellboot.js?v=1130a"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色 CG 查看</title>
-<link rel="stylesheet" href="assets/css/cg.css?v=1113a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1113a">
+<link rel="stylesheet" href="assets/css/cg.css?v=1116c">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
 </head>
 <body>
 <div class="layout">
@@ -22,13 +23,8 @@
       <button data-scope="-3">其他</button>
     </div>
     <div id="filters">
-      <select id="sortBy">
-        <option value="id">按角色 ID</option>
-        <option value="name">按名字（あいうえお）</option>
-        <option value="count">按 CG 数</option>
-        <option value="date-desc">实装日期 新→旧</option>
-        <option value="date-asc">实装日期 旧→新</option>
-      </select>
+      <!-- 选项由 common.js 的 ESC.fillSort 填（和立绘页共用一份，别在这里另写一套） -->
+      <select id="sortBy"></select>
       <select id="dlFilter" title="筛选：资源状态 / 收藏">
         <option value="">全部角色</option>
         <option value="have">只看已下载</option>
@@ -89,22 +85,25 @@
 <!-- 剧情清单：CG 页用它把"主线剧情 CG"里的组名显示成「主线 第N话 · 第X段」 -->
 <script src="data/advindex.js"></script>
 <!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（见 web/index.html 的说明） -->
-<script src="data/mediaindex.js?v=1106a"
+<script src="data/mediaindex.js?v=1115a"
         onerror="window.__MEDIA=window.__MEDIA||null"></script>
 <script src="data/imgmap.js"></script>
 <script src="data/imgmap.x2.js"></script>
 <script src="data/imgmap.base.js"
         onerror="window.__IMGBASE=window.__IMGBASE||{}"></script>
-<script src="assets/js/common.js?v=1113a"></script>
-<script src="assets/js/header.js?v=1114a"></script>
+<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/dialog.js?v=1130d"></script>
+<script src="assets/js/mediaui.js?v=1123b"></script>
+<script src="assets/js/header.js?v=1130b"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <!-- 收藏夹 / 设置：与播放器共用同一份 localStorage（assets/js/userdata.js） -->
-<script src="assets/js/userdata.js?v=1105a"></script>
-<script src="assets/js/cg.js?v=1113a"></script>
-<script src="assets/js/cgexport.js?v=1103a"></script>
+<script src="assets/js/userdata.js?v=1115g"></script>
+<script src="assets/js/cg.js?v=1130d"></script>
+<script src="assets/js/cgexport.js?v=1103b"></script>
+<script src="assets/js/miniplayer.js?v=1130a"></script>
 <script src="assets/js/disclaimer.js?v=1102a"></script>
-<script src="assets/js/health.js?v=1101a"></script>
-<script src="assets/js/mobile.js?v=1113a"></script>
+<script src="assets/js/health.js?v=1130a"></script>
+<script src="assets/js/mobile.js?v=1115b"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
 </body>
 </html>

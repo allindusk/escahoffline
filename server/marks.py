@@ -52,7 +52,21 @@ MAX_PROG = 600
 #: 墓碑（负收藏 / 删除标记）保留天数：超过就清掉，别让文件无限长
 #: 180 天足够覆盖"换设备/重装/很久没开"的场景，再久的旧记录复活也无所谓了
 TOMBSTONE_DAYS = 180
+#: 已知的收藏桶 —— 只当"默认要有"的那两个用。
+#: 别的页面会自己加桶（立绘页用 ``stand`` 按「编号+服装」收藏），读写一律按
+#: 文件里实际出现的 kind 处理：写死的话那些桶会在 normalize / merge / prune
+#: 时被静默丢掉，表现为"收藏过、刷新就没了"（2026-11-16 用户反馈）。
 KINDS = ("story", "cg")
+
+
+def _fav_kinds(fav) -> list:
+    """收藏字典里出现过的所有桶：已知的两个 + 页面自己加的。"""
+    seen = list(KINDS)
+    if isinstance(fav, dict):
+        for k in fav:
+            if isinstance(k, str) and k and k not in seen and isinstance(fav[k], dict):
+                seen.append(k)
+    return seen
 
 
 def _empty() -> dict:
@@ -81,17 +95,18 @@ def normalize(d) -> dict:
         return out
     fav = d.get("fav")
     if isinstance(fav, dict):
-        for kind in KINDS:
+        for kind in _fav_kinds(fav):
             src = fav.get(kind)
             if not isinstance(src, dict):
                 continue
+            dst = out["fav"].setdefault(kind, {})
             for fid, v in src.items():
                 if not isinstance(fid, str) or not fid:
                     continue
                 ts = _int(abs(v) if isinstance(v, (int, float)) else 0)
                 if not ts:                       # 0 = 既没收藏也没取消，丢弃
                     continue
-                out["fav"][kind][fid] = ts if v > 0 else -ts
+                dst[fid] = ts if v > 0 else -ts
     prog = d.get("prog")
     if isinstance(prog, dict):
         for key, rec in prog.items():
@@ -121,8 +136,8 @@ def prune(m: dict) -> int:
     """
     cut = _now_ms() - TOMBSTONE_DAYS * 86400 * 1000
     gone = 0
-    for kind in KINDS:
-        d = m["fav"][kind]
+    for kind in _fav_kinds(m.get("fav") or {}):
+        d = (m.get("fav") or {}).setdefault(kind, {})
         for fid in [f for f, v in d.items() if v < 0 and -v < cut]:
             del d[fid]
             gone += 1
@@ -147,9 +162,9 @@ def merge(base: dict, extra) -> tuple[dict, bool]:
     out = normalize(base)
     add = normalize(extra)
     changed = False
-    for kind in KINDS:
-        dst = out["fav"][kind]
-        for fid, v in add["fav"][kind].items():
+    for kind in _fav_kinds(add.get("fav") or {}):
+        dst = out["fav"].setdefault(kind, {})
+        for fid, v in (add["fav"].get(kind) or {}).items():
             cur = dst.get(fid)
             if cur is None or abs(v) > abs(int(cur)):
                 if cur != v:

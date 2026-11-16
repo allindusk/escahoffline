@@ -80,11 +80,11 @@
 .sl-row.bnr { flex-wrap: wrap; align-items: flex-start; padding: 9px 14px; }
 .sl-bnr {
   position: relative; display: block; flex: 0 0 auto;
-  width: 280px; height: 81px; border-radius: 6px; overflow: hidden;
+  width: 280px; height: var(--mu-bnr-h, 81px); border-radius: 6px; overflow: hidden;
   border: 1px solid #2d3446; background: #0d1620; line-height: 0;
 }
 .sl-bnr img {
-  position: absolute; left: 0; top: 0; height: 81px; width: auto;
+  position: absolute; left: 0; top: 0; height: var(--mu-bnr-h, 81px); width: auto;
   max-width: none; display: block; border: 0; border-radius: 0;
 }
 .sl-bnr img.adv {

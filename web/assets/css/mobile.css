@@ -40,15 +40,33 @@
   body > header[data-shared] h1 { font-size: 15px; }
   /* 副标题（统计数字）在手机上只会挤掉导航，先收起来 */
   body > header[data-shared] h1 small { display: none; }
+  /* 导航五个入口：**换行 + 居中**，不再横向滚动。
+     以前是 nowrap + overflow-x:auto —— 手机上必须左右滑才知道还有「原声集」，
+     用户根本发现不了（2026-11-15 加了两个页面后暴露）。现在排成独立一行、
+     居中；一行放不下就自己折成两行（3+2），两行都居中，跟底部控制条一个观感。 */
   body > header[data-shared] > nav {
     position: static; left: auto; transform: none;
     order: 10; width: 100%; margin: 0;
-    display: flex; gap: 4px; overflow-x: auto;
-    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 5px 6px;
+    overflow: visible;
   }
-  body > header[data-shared] > nav::-webkit-scrollbar { display: none; }
   body > header[data-shared] > nav a {
-    flex: none; padding: 4px 10px; white-space: nowrap;
+    flex: none; padding: 4px 11px; white-space: nowrap;
+  }
+  /* 五个入口在 390px 上下刚好差一点点：硬挤一行会把最后一个切掉半截，
+     顺着折行又会变成「4 + 1」那种孤零零的一颗。这里改成 6 列表格：
+     每项占 2 列 → 第一行 3 个，第二行 2 个**错半格**居中（2-3 / 4-5 列），
+     跟底部控制条一样是"分行居中"的观感。
+     注意：以后入口数量不是 5 个时，这条要跟着改（第 4/5 项的列号是写死的）。 */
+  @media (max-width: 430px) {
+    body > header[data-shared] > nav {
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px 6px;
+    }
+    body > header[data-shared] > nav a {
+      grid-column: span 2; text-align: center; padding: 4px 6px;
+    }
+    body > header[data-shared] > nav a:nth-child(4) { grid-column: 2 / span 2; }
+    body > header[data-shared] > nav a:nth-child(5) { grid-column: 4 / span 2; }
   }
   body > header[data-shared] #btnLan { min-width: 0; padding: 4px 9px; }
 
@@ -96,6 +114,12 @@
     font-family: inherit;
   }
   #mbSideBtn:hover { border-color: #5a6f8a; }
+
+  /* CG / 立绘页顶部那条「共 N 组 · 卡片大小 小中大」：窄屏一行放不下，
+     右侧的「大/特大」会被切掉。允许换行（高度自适应），按钮不缩。 */
+  #bar { flex-wrap: wrap; row-gap: 4px; height: auto; padding: 5px 10px; }
+  #bar .sizes { margin-left: 0; }
+  #bar .sz { flex: none; }
 
   /* 控制条：第一行播放三连，第二行工具按钮横向滚动，进度条独占一行 */
   #controls { gap: 8px; row-gap: 8px; padding: 8px 10px; }

@@ -234,6 +234,21 @@ let scope = (function () {
 })();                     // 'char' = 角色 CG；-1/-2/-3 = 主线/活动/其他剧情 CG
 let curChar = null;      // 角色范围下选中的角色；null = 全部
 let curUnit = null;      // 剧情范围下选中的剧情 key；null = 全部
+/* 选中的角色 / 剧情也记住：刷新（含 shell 里切页回来）后还停在原处。
+   用哪一档由 scope 决定（角色 → cgChar；主线/活动/其他 → cgUnit）。 */
+function saveCur() {
+  if (!UD || !UD.syncPref) return;
+  UD.syncPref('ui', 'cgChar', curChar);
+  UD.syncPref('ui', 'cgUnit', curUnit);
+}
+function pickChar(id) {
+  curChar = id; curUnit = null;
+  saveCur(); renderChars(); renderGrid();
+}
+function pickUnit(u) {
+  curUnit = u; curChar = null;
+  saveCur(); renderChars(); renderGrid();
+}
 let keyword = '';
 let sortBy = 'id';
 /* 每部剧情的本地状态（char_N -> ready/soft-missing/missing），用来做"只看已下载" */
@@ -276,6 +291,18 @@ if (usp.get('char') && chars.has(+usp.get('char'))) {
   scope = 'char';          // 指定了角色就必须在角色范围里，不然侧栏和墙对不上
 }
 
+/* 没有深链时恢复上次选中的角色 / 剧情（深链优先级更高：那是明确要看谁）。
+   恢复前校验一下，避免选到已经删掉的角色 / 剧情。 */
+if (curChar === null && curUnit === null) {
+  if (scope === 'char') {
+    const v = UD ? UD.prefValue('ui', 'cgChar', null) : null;
+    if (v != null && chars.has(+v) && !isCat(+v)) curChar = +v;
+  } else {
+    const v = UD ? UD.prefValue('ui', 'cgUnit', null) : null;
+    if (v != null && (catUnits[scope] || []).some(u => u.u === v)) curUnit = String(v);
+  }
+}
+
 /* ---------- 侧栏 ---------- */
 function thumbOf(c) {
   return avatarCands(c.id)[0];
@@ -284,8 +311,19 @@ function thumbOf(c) {
 function renderChars() {
   const box = $('#charList');
   box.innerHTML = '';
-  if (scope === 'char') return renderCharList(box);
-  return renderCatList(box, scope);
+  if (scope === 'char') renderCharList(box);
+  else renderCatList(box, scope);
+  revealCur(box);
+}
+
+/** 侧栏重画后把选中的那一行滚进视野（只在看不见时动，不抢用户的滚动） */
+function revealCur(box) {
+  const el = box && box.querySelector('.char-btn.on');
+  if (!box || !el) return;
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  if (r.top >= b.top && r.bottom <= b.bottom) return;
+  box.scrollTop += (r.top - b.top) - (b.height - r.height) / 2;
 }
 
 /** 角色范围：allCharList 个角色（不含 -1/-2/-3 剧情桶） */
@@ -295,7 +333,7 @@ function renderCharList(box) {
   all.textContent = favMode
     ? `全部（已收藏 ${favGroupCount()} 组）`
     : `全部角色（${allCharList.length}）`;
-  all.onclick = () => { curChar = null; renderChars(); renderGrid(); };
+  all.onclick = () => pickChar(null);
   box.appendChild(all);
 
   let list = allCharList;
@@ -317,11 +355,10 @@ function renderCharList(box) {
   }
   // 排序走共用函数（和播放器、安装列表同一套规则：
   // 按日期排时**没有日期的沉底**，以前 CG 页是自己写的，未下载的会混在中间）
-  if (sortBy === 'count') {
-    list = [...list].sort((a, b) => b.total - a.total || a.id - b.id);
-  } else {
-    list = ESC.sortItems(list, sortBy, c => ({ id: c.id, name: c.name, date: c.d }));
-  }
+  // 排序（含"按张数"）统一走 common.js —— 立绘页用的是同一份实现
+  list = ESC.sortItems(list, sortBy, c => ({
+    id: c.id, name: c.name, date: c.d, count: c.total,
+  }));
   // 未下载的沉底（播放器一直这么做，CG 页以前没有 → 同一个下拉两页结果不同）
   list = ESC.haveFirst(list, c => dlHave(c.id));
   /* 还没有 CG 组的角色（新实装、没装/没导出）再压到最底：
@@ -349,7 +386,7 @@ function renderCharList(box) {
       `<span class="sub">${c.zh ? c.zh + ' · ' : ''}${c.t ? c.t + ' · ' : ''}${c.groups.length} 组 / ${c.total} 张${dTxt}</span></span>`;
     // 必须走候选链：头像实际是 .png，只写死一个 src 会 404 且不会回退
     if (have) setChain(d.querySelector('img'), cands);
-    d.onclick = () => { curChar = c.id; renderChars(); renderGrid(); };
+    d.onclick = () => pickChar(c.id);
     box.appendChild(d);
   }
 }
@@ -365,7 +402,7 @@ function renderCatList(box, id) {
   all.textContent = favMode
     ? `全部（已收藏 ${units.reduce((a, u) => a + u.groups.filter(gi => isGFav(GROUPS[gi])).length, 0)} 组）`
     : `全部（${units.length} 部 / ${totalG} 组 / ${totalI} 张）`;
-  all.onclick = () => { curUnit = null; renderChars(); renderGrid(); };
+  all.onclick = () => pickUnit(null);
   box.appendChild(all);
 
   const dlf = ($('#dlFilter') || {}).value || '';
@@ -377,12 +414,10 @@ function renderCatList(box, id) {
     const k = keyword.toLowerCase();
     units = units.filter(u => u.title.toLowerCase().includes(k) || u.u.toLowerCase().includes(k));
   }
-  if (sortBy === 'count') {
-    units = [...units].sort((a, b) => b.imgs - a.imgs || advOrder(a.u) - advOrder(b.u));
-  } else if (sortBy === 'name') {
-    units = [...units].sort((a, b) => a.title.localeCompare(b.title, 'ja'));
-  }
-  // 其余排序（ID / 日期）在剧情范围下没意义，按游戏发布顺序
+  // 同一份 ESC.sortItems：id 用"游戏发布顺序"（剧情范围没有角色 ID 可排）
+  units = ESC.sortItems(units, sortBy, u => ({
+    id: advOrder(u.u), name: u.title, count: u.imgs, date: '',
+  }));
 
   for (const u of units) {
     const d = el('div', 'char-btn' + (curUnit === u.u ? ' on' : ''));
@@ -390,7 +425,7 @@ function renderCatList(box, id) {
       `<span class="ava-ph">${u.title.trim().slice(0, 1)}</span>` +
       `<span class="info"><span class="nm">${u.title}</span>` +
       `<span class="sub">${u.groups.length} 组 / ${u.imgs} 张</span></span>`;
-    d.onclick = () => { curUnit = u.u; renderChars(); renderGrid(); };
+    d.onclick = () => pickUnit(u.u);
     box.appendChild(d);
   }
 }
@@ -769,19 +804,11 @@ function closeLB() {
 }
 
 /* ---------- 范围切换（角色 CG / 主线·活动·其他剧情 CG） ---------- */
-/* 两个范围能选的排序不一样：剧情范围按"角色 ID / 实装日期"排没意义，给的是剧情顺序 */
-const SORT_OPTS = {
-  char: [['id', '按角色 ID'], ['name', '按名字（あいうえお）'], ['count', '按 CG 数'],
-    ['date-desc', '实装日期 新→旧'], ['date-asc', '实装日期 旧→新']],
-  cat: [['id', '按剧情顺序'], ['name', '按剧情名'], ['count', '按 CG 数']],
-};
+/* 排序选项不再各页各写一份：统一来自 common.js 的 ESC.SORT_OPTS。
+   以前这里内置一套、立绘页 HTML 里又写一套，同样的"按名字"两边措辞都不一样
+   （2026-11-15 反馈「搞那么多套」）。剧情范围只有 剧情顺序 / 名字 / 张数 三项。 */
 function rebuildSort() {
-  const so = $('#sortBy');
-  if (!so) return;
-  const list = scope === 'char' ? SORT_OPTS.char : SORT_OPTS.cat;
-  so.innerHTML = list.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
-  so.value = list.some(([v]) => v === sortBy) ? sortBy : 'id';
-  sortBy = so.value;
+  sortBy = ESC.fillSort($('#sortBy'), scope === 'char' ? 'role' : 'story', sortBy);
   const dl = $('#dlFilter');
   if (dl) dl.querySelector('option[value=""]').textContent =
     scope === 'char' ? '全部角色' : '全部剧情';
@@ -791,6 +818,7 @@ function setScope(v) {
   scope = v;
   curChar = null;
   curUnit = null;
+  saveCur();               // 换了范围，旧的选中不该在下次打开时被恢复
   if (UD && UD.syncPref) UD.syncPref('ui', 'cgScope', String(v));
   try { localStorage.setItem(SCOPE_KEY, String(v)); } catch (e) { /* file:// 可能被禁 */ }
   document.querySelectorAll('#cgScope button').forEach(b =>
@@ -928,7 +956,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === 'Escape' && (curChar !== null || curUnit !== null)) {
-    curChar = null; curUnit = null; renderChars(); renderGrid();
+    curChar = null; curUnit = null; saveCur(); renderChars(); renderGrid();
   }
 });
 
@@ -986,7 +1014,7 @@ renderGrid();
 if (UD && UD.hydrate) {
   UD.hydrate().then(r => {
     if (r && r.prefs) applyRemotePrefsToUI();
-    if (r && r.marks) { renderChars(); renderGrid(); if (lb.on) paintLB(); }
+    if (r && r.marks) { renderChars(); renderGrid(); if (lb.g >= 0) paintLB(); }
   });
 }
 
@@ -1014,7 +1042,7 @@ function applyRemotePrefsToUI() {
   rebuildSort();        // 范围变了以后排序可选项会变，它会校验并纠正 sortBy
   renderChars();
   renderGrid();
-  if (lb.on) paintLB();
+  if (lb.g >= 0) paintLB();
 }
 /* ?g=N 表示打开当前筛选结果中的第 N 组（从 0 开始） */
 if (usp.has('g')) {

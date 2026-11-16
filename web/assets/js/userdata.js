@@ -57,16 +57,21 @@ window.UD = (() => {
 
   /* ---------- 收藏 ---------- */
   /* 值 = 毫秒时间戳；负数 = 取消收藏的时间（墓碑，同步删除要用） */
-  const fav = { story: {}, cg: {} };
+  /* kind 不写死 story / cg：立绘页用的是 stand（按「编号+服装」收藏）。
+     以前这里只恢复那两个桶，`stand` 只在 toggleFav 里被动态建出来、能当场
+     生效，但**刷新后就没了** —— 页面里点过星标、重进却「没有收藏」，
+     「只看已收藏」自然是空的（2026-11-16 用户反馈）。 */
+  const fav = {};
   (function loadFav() {
     const d = readJSON(K_FAV, null);
     if (!d || typeof d !== 'object') return;
-    ['story', 'cg'].forEach(kind => {
+    Object.keys(d).forEach(kind => {
       const src = d[kind];
       if (!src || typeof src !== 'object' || Array.isArray(src)) return;
+      const dst = fav[kind] || (fav[kind] = {});
       for (const id in src) {
         const v = Math.trunc(+src[id] || 0);
-        if (id && v) fav[kind][id] = v;
+        if (id && v) dst[id] = v;
       }
     });
   })();
@@ -169,7 +174,10 @@ window.UD = (() => {
 
   function prefValue(ns, key, def) {
     const e = (prefs[ns] || {})[key];
-    return e ? e.v : def;
+    // 值可能是 undefined（写进去时就是空的，JSON 落盘后只剩 ts）——
+    // 这种半截条目要当"没存过"处理，否则调用方拿到 undefined 会把
+    // 默认值盖掉（音乐页曾因此筛出 0 个单位，2026-11-15 排查）。
+    return e && e.v !== undefined ? e.v : def;
   }
 
   /** 写一个键；值没变返回 false。传了 ts 就当"远端来的"，更旧的不覆盖。 */
@@ -186,7 +194,7 @@ window.UD = (() => {
 
   /** 用户改了一个偏好（下拉 / 滑块 / 按钮） */
   function syncPref(ns, key, v) {
-    if (!key) return;
+    if (!key || v === undefined) return;
     if (!prefWrite(ns, key, v)) return;
     savePref();
     markPrefSync();
@@ -243,7 +251,8 @@ window.UD = (() => {
     let changed = false;
     const rf = remote.fav;
     if (rf && typeof rf === 'object') {
-      ['story', 'cg'].forEach(kind => {
+      // 同样不写死 kind：服务端备份里也可能有 stand 等其它桶
+      Object.keys(rf).forEach(kind => {
         const src = rf[kind];
         if (!src || typeof src !== 'object' || Array.isArray(src)) return;
         const dst = fav[kind] || (fav[kind] = {});

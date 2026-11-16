@@ -64,6 +64,24 @@ PUBLIC_PARTS = {
     "advfx": ("剧情演出特效", "bundle_image_adv", 7),
 }
 
+#: **可选**的额外类别：体积大、或者不是人人都要，默认不勾。
+#:
+#: 为什么不放进 ``PUBLIC_PARTS``：那个字典的合计就是界面上「公共素材 约 835 MB」
+#: 的说法，把 412 MB 的 NPC/敌 SD 加进去会让每个新用户以为基础数据要 1.2 GB。
+#: 它们出现在「基础数据」里当勾选项，勾了才算进任务与体积。
+PUBLIC_OPTIONAL = {
+    # 原声集：165 张封面（12 MB）+ 画廊独占的少数曲目（各约 2.5 MB）。
+    # 158/165 首与已有 BGM 是同一份母带，直接复用本地文件，不重复下载。
+    "gallery": ("原声集（封面 + 独占曲）", "bundle_gallerymusicjacket", 30),
+    # 2026-11-16：NPC / 敌人的 SD 小人 + 音声整体停用。
+    # 之前这一项 "sd_npc" 是 download/install 的白名单入口，删掉后
+    # /api/install/base 传 parts:["sd_npc"] 会被过滤掉，后端不再下载。
+    # "sd_npc": ("NPC / 敌人 SD 与音声", "bundle_unit_", 675),
+}
+
+#: 安装接口的白名单 = 上面两个字典的并集（``/api/install/base`` 用它过滤）
+PUBLIC_ALL = {**PUBLIC_PARTS, **PUBLIC_OPTIONAL}
+
 # ---------------------------------------------------------------- 耗时（秒）
 SEC_CATALOG = (10, 20)             # 更新剧情目录
 SEC_UNIT_INSTALL = (30, 90)        # 装一部剧情（下载 + 解包）
@@ -179,8 +197,9 @@ def payload() -> dict:
         },
         "parts": [
             {"key": k, "label": label, "bytes": int(mb) * MB,
-             "text": size_text(int(mb) * MB)}
-            for k, (label, _prefix, mb) in PUBLIC_PARTS.items()
+             "text": size_text(int(mb) * MB),
+             "opt": k in PUBLIC_OPTIONAL}
+            for k, (label, _prefix, mb) in PUBLIC_ALL.items()
         ],
         "text": text_map(),
     }

@@ -30,7 +30,8 @@
    * 卡片墙。这里补一个浮动按钮；选完角色 / 点空白处自动收起。
    */
   function setupCgDrawer() {
-    if (page !== 'cg.html') return;
+    // 立绘/SD 页复用同一套侧栏骨架，抽屉逻辑也跟着复用
+    if (page !== 'cg.html' && page !== 'stand.html') return;
     document.body.classList.add('mb-cg');
     const side = document.getElementById('sidebar');
     if (!side || document.getElementById('mbSideBtn')) return;
@@ -63,7 +64,7 @@
 
   /* 手机上没有 Esc 键，CG 灯箱的「关闭 Esc」会让人以为是两段操作；
      换成「✕ 关闭」，顺便省 20px 宽度（顶栏要单行才不亏画面高度）。 */
-  if (page === 'cg.html') {
+  if (page === 'cg.html' || page === 'stand.html') {
     const lbc = document.getElementById('lbClose');
     if (lbc) lbc.textContent = '✕ 关闭';
   }
@@ -163,8 +164,8 @@
         '成品文件也只会落在电脑的导出目录里，手机拿不到。',
     },
     {
-      sel: '#btnCgExport, #btnExportCg',
-      name: '导出 / 打包 CG',
+      sel: '#btnCgExport, #btnExportCg, #btnExport',
+      name: '导出 / 打包（CG、原声集）',
       why: '打包好的压缩包会存在电脑的导出目录里，手机上下载不到。',
     },
     {

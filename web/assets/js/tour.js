@@ -164,7 +164,7 @@ window.TOUR = (() => {
     const close = () => { w.remove(); try { localStorage.setItem(KEY, '1'); } catch (e) { } };
     w.querySelector('#wTour').onclick = () => { close(); start(opt.steps, opt); };
     w.querySelector('#wGo').onclick = close;
-    w.querySelector('#wSetup').onclick = () => { close(); location.href = 'setup.html'; };
+    w.querySelector('#wSetup').onclick = () => { close(); (window.__go ? window.__go('setup.html') : (location.href = 'setup.html')); };
   }
 
   function auto(opt) {

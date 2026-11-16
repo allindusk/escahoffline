@@ -50,10 +50,17 @@ escalation_heroines/escahoffline/
 ├─ web/                        站点根（浏览器看到的一切）
 │   ├─ index.html              播放器
 │   ├─ cg.html                 CG 画廊
+│   ├─ stand.html              角色立绘浏览（卡片墙 + 灯箱，读 data/standmap.js）
+│   ├─ music.html              原声集 / 角色音声（唱片机 UI，读 data/gallery.js + voicemap.js）
+│   ├─ shell.html              常驻外壳：只换中间内容 iframe，跨页播放不中断 + 底部播放条
 │   ├─ setup.html              ★ 资源管理控制台（下载/超分/导出/译文/更新/设置）
 │   ├─ assets/js/
 │   │   ├─ player.js           演出引擎（按 Methods 指令序列复现游戏演出）
 │   │   ├─ packstate.js        资源状态层：某部剧情能不能播
+│   │   ├─ shellboot.js        各页开在最外层，把自身装进 shell.html 的 iframe
+│   │   ├─ miniplayer.js       不在外壳里时的续播兜底（localStorage + 自动播放被拒提示）
+│   │   ├─ stand.js / music.js 立绘页 / 原声集页逻辑
+│   │   ├─ mediaui.js          立绘页与音乐页共用的卡片/灯箱控件
 │   │   ├─ transui.js          译文导入导出面板
 │   │   ├─ tour.js             新手引导引擎（高亮 + 气泡）
 │   │   ├─ setup.js            控制台逻辑
@@ -65,6 +72,7 @@ escalation_heroines/escahoffline/
 │   │   ├─ imgmap.x2.js      超分覆盖层（可缺）
 │   │   ├─ imgmap.base.js    WebP 转码覆盖层（可缺）
 │   │   ├─ sfxmap.js / cgmap.js / app.json
+│   │   ├─ standmap.js gallery.js voicemap.js          本机扫盘产物（不进 Git，启动自愈重建）
 │   │   └─ char_<id>.js / adv_<kind>_<no>.js           剧情正文（资源包分发）
 │   └─ media/                 素材（永久 gitignore）
 ├─ tools/                      维护者脚本（构建清单、打包、加密链接）

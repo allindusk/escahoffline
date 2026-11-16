@@ -102,12 +102,16 @@ window.SL = (() => {
    * 清单说没有 → 返回空串，行里不挂图，只显示文字（列表照样对齐）。
    * 清单不可用（null，纯静态托管/旧包）→ 照旧拼，退回老行为。 */
   function bnrHas(stem) {
+    // 路径口径统一走 mediaui.js（原声集 / CG / 剧情页共用一套）
+    if (window.MediaUI) return MediaUI.has('story', stem);
     return !(window.ESC && ESC.media && ESC.media.has('story', stem) === false);
   }
   function bnrPath(stem) {
-    return stem && bnrHas(stem) ? 'media/img/story/' + stem + '.webp' : '';
+    return window.MediaUI ? MediaUI.banner(stem)
+      : (stem && bnrHas(stem) ? 'media/img/story/' + stem + '.webp' : '');
   }
   function bnrKeep(path) {
+    if (window.MediaUI) return MediaUI.bannerKeep(path);
     const m = /^media\/img\/story\/([^./]+)\./.exec(path || '');
     if (!m) return path || '';
     return bnrHas(m[1]) ? path : '';

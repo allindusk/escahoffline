@@ -1,0 +1,68 @@
+/* 角色立绘页：在 cg.css 的骨架上加几条差异规则。
+   能复用的一律不重写 —— 侧栏、卡片、灯箱都跟 CG 页同一套观感。
+   2026-11-16 起 SD 专用样式已注释（本页不再显示 SD）。 */
+
+/* ---------- 范围切换：两个按钮排一行 ---------- */
+/* cg.css 的 #cgScope 是「一行塞四个」（角色 / 主线 / 活动 / 其他，都是两字），
+   这里「角色立绘」「其他立绘」是四字，一行塞不下会把侧栏撑破。 */
+#sdScope{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:6px 8px 0;flex-shrink:0}
+#sdScope button{border:1px solid var(--line);background:var(--bg3);
+  color:var(--fg3);border-radius:5px;padding:3px 0;font-size:14px;cursor:pointer;
+  font-family:inherit}
+#sdScope button:hover{color:var(--fg)}
+#sdScope button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
+
+/* ---------- 卡片比例：CG 页那套 16:9 不适合立绘 ---------- */
+/* 立绘是**裁掉透明边的小人**（实测 460×688，约 1:1.5 竖构图）。
+   CG 页的 .thumb 是 padding-top:56.25% 的横框 +
+   object-fit:cover，直接拿来用会把人物拦腰截断 —— 所以这里按素材自己的比例开框，
+   并且一律 contain（宁可留黑边，也不能切掉头和脚）。 */
+#grid.stand-layout .card .thumb{padding-top:150%;background:#0b0d14}
+#grid.stand-layout .card .thumb img{object-fit:contain}
+/* 少量立绘是**带背景的整幅插图**（1116×708 横构图，早期的一批资源）。
+   它们在竖框里用 contain 会缩成中间一条细缝，所以改成 cover：
+   人物本来就画在画面正中，裁掉两侧留白反而更像正常立绘。
+   横/竖由 JS 在图片 onload 时按 naturalWidth>naturalHeight 判定；
+   卡片框的比例**一律 150%** —— 混着两种比例会让同一行里高矮不齐、留下大块空档。 */
+#grid.stand-layout .card.land .thumb img{object-fit:cover;object-position:50% 22%}
+
+/* 2026-11-16：SD 卡片样式已注释（本页不再显示 SD）
+#grid.sd-layout{--cardMin:200px}
+#grid.sd-layout .card .thumb{padding-top:170%;background:#2f333a}
+#grid.sd-layout .card .thumb img{
+  width:auto;height:auto;max-width:96%;max-height:96%;
+  inset:0;margin:auto;object-fit:contain}
+.card .thumb .anim-tag{position:absolute;left:6px;bottom:6px;
+  font-size:14px;color:#0d1016;background:rgba(224,181,102,.92);
+  border-radius:8px;padding:1px 7px;font-weight:600}
+*/
+
+/* 未下载占位上的「未下载」角标（由 JS 插入文字节点） */
+.card .thumb .miss-tag{position:absolute;right:6px;bottom:6px;
+  font-size:14px;color:#ffc9c9;background:rgba(60,14,14,.86);
+  border:1px solid rgba(255,120,120,.45);border-radius:8px;padding:1px 8px}
+
+/* 灯箱里立绘是透明底 webp，纯黑底会看不清发丝边界，加一点点渐变 */
+#lbBody{background:radial-gradient(circle at 50% 45%,#151a26 0,#05060a 70%)}
+#lbImg{filter:drop-shadow(0 8px 30px rgba(0,0,0,.6))}
+
+/* 2026-11-16：SD 灯箱「一行铺开全部动作」相关样式已注释（本页无 SD）
+#lbRow{display:none;width:100%;height:auto;align-items:flex-end;justify-content:center;
+  gap:8px;padding:10px 10px 4px;overflow:hidden;box-sizing:border-box}
+#lbBody.sd #lbRow{display:flex;flex-direction:column;align-items:center;row-gap:10px}
+.lb-prow{display:flex;flex-direction:row;justify-content:center;align-items:flex-end;gap:8px;max-width:100%}
+#lbBody.sd #lbImg,#lbBody.sd #lbPrev,#lbBody.sd #lbNext{display:none}
+#lbRow figure{margin:0;flex:0 0 auto;display:flex;flex-direction:column;
+  align-items:center;justify-content:flex-end}
+#lbRow figure img{display:block;width:auto;height:auto;max-width:100%;max-height:62vh;
+  margin:0 auto;image-rendering:auto;
+  filter:drop-shadow(0 8px 26px rgba(0,0,0,.6))}
+#lbRow figure figcaption{font-size:14px;color:var(--fg3);line-height:1.25;
+  white-space:normal;overflow-wrap:anywhere;text-align:center;
+  max-width:100%;margin:5px auto 0}
+@media (max-width:1100px),(max-height:620px){
+  #lbRow{gap:10px;padding:8px 6px 4px}
+  #lbRow figure img{max-height:42vh}
+  #lbRow figure figcaption{font-size:14px}
+}
+*/

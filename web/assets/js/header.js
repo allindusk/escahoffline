@@ -9,6 +9,8 @@
   const NAV = [
     { href: 'index.html', text: '角色剧情' },
     { href: 'cg.html', text: '角色 CG' },
+    { href: 'stand.html', text: '角色立绘' },
+    { href: 'music.html', text: '原声集' },
     { href: 'setup.html', text: '资源管理' },
   ];
 
@@ -16,6 +18,9 @@
   const EXTRA = {
     'index.html': ['share', 'lan', 'lang', 'help'],
     'cg.html': [],
+    // 角色立绘与原声集是纯浏览页：没有舞台、没有要改的设置
+    'stand.html': [],
+    'music.html': [],
     // 资源管理页不再把「已装 x/x · 缓存 xx GB」塞进顶栏：正文首屏的
     // 「当前状态」已经把同样的数字讲清楚了，顶栏再挂一遍显得挤、还容易误读
     'setup.html': ['help'],
@@ -147,6 +152,17 @@ header[data-shared] #btnLan:hover{color:#e6e9f0;background:#243040;
     document.head.appendChild(st);
 
     document.body.insertBefore(h, document.body.firstChild);
+
+    /* 把顶栏真实高度写进 CSS 变量。
+       窄屏下顶栏会变成两行（标题一行 + 导航一行），高度不再固定 50px；
+       而原声集页的歌单抽屉、一些 position:fixed 的浮层是按 50px 写死的，
+       不跟着变就会被顶栏盖住一截。 */
+    function syncH() {
+      document.documentElement.style.setProperty('--hdrH', h.offsetHeight + 'px');
+    }
+    syncH();
+    window.addEventListener('resize', syncH);
+    window.addEventListener('orientationchange', syncH);
 
     // 原来各页的 <small id="cnt|hdCnt|ver"> 现在统一成 #hdrSub，做个别名
     ['cnt', 'hdCnt', 'ver'].forEach(function (id) {

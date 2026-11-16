@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<script src="assets/js/shellboot.js?v=1130a"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>超昂大战 · 原声集</title>
+<link rel="stylesheet" href="assets/css/music.css?v=1116c">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
+</head>
+<body>
+<div class="mw">
+  <!-- ============================ 左侧：来源 + 播放列表 ============================ -->
+  <aside id="pl">
+    <div class="pl-head">
+      <div class="pl-tabs">
+        <button data-src="ost" class="on">原声集</button>
+        <button data-src="voice">角色音声</button>
+      </div>
+      <div id="plCount"></div>
+    </div>
+
+    <!-- 自建播放列表：可以建多个，标题就是列表名。
+         选择框、增删改按钮、「查看当前列表」挤在同一行，省出的纵向空间留给曲目。 -->
+    <div class="pl-lists">
+      <select id="lstSel" title="当前播放列表"></select>
+      <button id="lstNew" title="新建播放列表">＋</button>
+      <button id="lstRen" title="重命名当前列表">✎</button>
+      <button id="lstDel" title="删除当前列表">🗑</button>
+      <label class="pl-only"><input type="checkbox" id="lstOnly">查看当前列表</label>
+    </div>
+
+    <div class="pl-search">
+      <input id="mq" placeholder="搜索曲名 / 编号 / 角色" autocomplete="off">
+    </div>
+    <!-- 2026-11-16：音声只剩「角色」一类，分类按钮栏已删除 -->
+    <div id="plChips"></div>
+    <div class="pl-tools">
+      <select id="plSort">
+        <option value="no">按收录顺序</option>
+        <option value="name">按曲名</option>
+        <option value="dur">按时长</option>
+      </select>
+      <button id="btnExport" title="把勾选的曲目打包到 userdata/export/；一首都没勾时会问要不要导出当前列表的全部">⬇ 导出勾选</button>
+    </div>
+    <div id="bulkBar">
+      <button id="bulkAll" title="选中当前列表里能播的全部曲目；再点一次清空勾选">全选</button>
+      <button id="bulkAdd" title="把勾选的曲目一次加进当前播放列表">＋ 加入列表</button>
+      <button id="bulkDel" title="把勾选的曲目一次移出当前播放列表">－ 移出列表</button>
+      <span id="bulkCount">已选 0 项</span>
+    </div>
+    <div id="plList"></div>
+  </aside>
+
+  <!-- ============================ 右侧：唱片机 ============================ -->
+  <main id="stage">
+    <div class="stage-bar">
+      <span id="stageInfo"></span>
+      <button id="btnList" title="打开列表">☰ 列表</button>
+      <button id="btnFocus" title="隐藏左侧列表，只看唱片">唱片模式</button>
+    </div>
+    <div id="vinylWrap">
+      <div id="vinylBox">
+        <div class="vinyl">
+          <div class="vinyl-groove"></div>
+          <img id="jacket" alt="">
+          <div class="spindle"></div>
+        </div>
+        <div class="tonearm"><i></i></div>
+      </div>
+    </div>
+    <div class="now">
+      <div id="tTitle">还没有选曲</div>
+      <div id="tSub">在左侧点一首开始播放</div>
+    </div>
+    <div class="seek-row">
+      <span id="curTime">0:00</span>
+      <div class="seek-wrap">
+        <input id="seek" type="range" min="0" max="1000" value="0" step="1"
+               aria-label="播放进度">
+      </div>
+      <span id="totTime">0:00</span>
+    </div>
+    <div class="ctrl-row">
+      <button id="prev" title="上一首（←）">⏮</button>
+      <button id="play" class="main" title="播放 / 暂停（空格）">▶</button>
+      <button id="next" title="下一首（→）">⏭</button>
+      <span class="sep"></span>
+      <button id="mode" title="播放模式">🔁 列表循环</button>
+      <button id="rate" title="播放速度">1.0×</button>
+      <button id="fav" title="把这首歌加进当前播放列表">＋</button>
+      <button id="plSet" title="跨页播放设置">⚙</button>
+      <span class="vol">
+        <button id="mute" title="静音">🔊</button>
+        <input id="vol" type="range" min="0" max="100" value="80" aria-label="音量">
+      </span>
+    </div>
+    <div id="tip">
+      拖进度条定点播放 · 空格 播放/暂停 · ←/→ 上一首/下一首 ·
+      Shift+←/→ 快退/快进 5 秒 · ↑/↓ 音量
+    </div>
+  </main>
+</div>
+
+<!-- 悬停预览：鼠标停在一行上就浮出封面 + 详情（跟角色剧情侧栏一个用意） -->
+<div id="hov"><img id="hovImg" alt=""><div id="hovTxt"></div></div>
+
+<audio id="au" preload="metadata"></audio>
+
+<script src="data/names.js?v=1115e"></script>
+<!-- gallery.js / voicemap.js 是本机反复重新生成的数据（补全原声集/音声就会变），
+     不写死 ?v=：由本地 http.server 的协商缓存按 mtime 失效，官方上新曲刷新即可见。 -->
+<script src="data/gallery.js" onerror="window.__GALLERY=window.__GALLERY||null"></script>
+<script src="data/voicemap.js?v=1115e" onerror="window.__VOICEMAP=window.__VOICEMAP||null"></script>
+<!-- 2026-11-16：NPC / 其他分类的音声已整体删除（头像无法可靠关联），
+     不再需要 sdmap.js / standmap.js -->
+<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/dialog.js?v=1130d"></script>
+<script src="assets/js/mediaui.js?v=1123b"></script>
+<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/packstate.js?v=1103a"></script>
+<script src="assets/js/userdata.js?v=1115g"></script>
+<script src="assets/js/music.js?v=1116g"></script>
+<script src="assets/js/disclaimer.js?v=1102a"></script>
+<script src="assets/js/health.js?v=1130a"></script>
+<script src="assets/js/mobile.js?v=1115b"></script>
+<script>DISCLAIMER.auto(); HEALTH.start();</script>
+</body>
+</html>

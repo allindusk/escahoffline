@@ -100,6 +100,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 原声集的运行期缓存（日期从音频 mvhd 现读、包大小从清单现算，纯可再生）
+# 旧版本写在 server/cdn/data/，现在改到 userdata/；留这条防老副本被误提交
+/server/cdn/data/gallery_dates.json
+
 # 手工备份（改代码时留下的 .orig/.bak）
 *.orig
 *.bak
@@ -113,7 +117,7 @@ __pycache__/
 # 视频导出的渲染中间产物
 /tools/video/out/
 
-# 临时探针脚本（调试用，不进仓库也不进更新包；需要时现场写）
-# 已有 tools/_gh_route_bench.py 是历史文件、且已跟踪，规则不回溯，不影响它
-/tools/_probe_*
+# tools 下所有下划线开头脚本 = 一次性诊断/探针/临时工具，不进仓库也不进更新包；
+# 需要时现场写。已有 tools/_gh_route_bench.py 是历史文件、且已跟踪，规则不回溯，不影响它
+/tools/_*
 

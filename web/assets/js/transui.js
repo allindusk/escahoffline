@@ -147,7 +147,7 @@
         const d = await r.json().catch(() => ({}));
         toast('导出目录：' + (d.path || ''));
       } catch (e) {
-        alert('打不开导出目录（本地服务未运行？）');
+        await Dlg.alert('打不开导出目录（本地服务未运行？）');
       }
     };
     const openExpBtn = p.querySelector('#tpOpenExp');
@@ -176,7 +176,7 @@
         toast('已导出到导出目录，可交给 AI 翻译');
         if (readAuto()) openExpDir();
       } catch (e) {
-        alert('导出失败：' + e.message);
+        await Dlg.alert('导出失败：' + e.message);
       } finally {
         btn.disabled = false;
         btn.textContent = '⬇ 导出原文（.txt）';
@@ -194,7 +194,7 @@
     $('#tpImport').onclick = async () => {
       if (!unit) { toast('先选一部剧情'); return; }
       const text = $('#tpText').value;
-      if (!text.trim()) { alert('没有内容可导入'); return; }
+      if (!text.trim()) { await Dlg.alert('没有内容可导入'); return; }
       const mode = (document.querySelector('input[name=tpmode]:checked') || {}).value || 'merge';
       $('#tpImport').disabled = true;
       $('#tpResult').textContent = '正在合并…';

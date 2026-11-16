@@ -158,6 +158,49 @@ def _cell_track(ap, total):
     return out
 
 
+def _priority_track(ap, total):
+    """Priority 轨道 → 每帧一个绘制序号，**逐帧跳变**（不插值）。
+
+    以前只取 ``TableValue[0]`` 当静态绘制序：所有帧都用第 0 帧的序号。
+    实测 408（超昂大戦 SD）的「胜利」动作在第 22/29 帧把前臂
+    ``F_arm_FU00``/``F_arm_FD00``/``F_hand_F00a`` 的 Priority 从 87/84/81
+    抬到 187/184/181（画到头发、头、身体**前面**），同时把后臂
+    ``F_arm_BU00``/``BD00``/``hand_B00a`` 压到 33/30/24（藏到身体后面）。
+    只读第 0 帧 → 举起来的那条手臂始终被画在头发后面，
+    看上去就是"手臂没举起来 / 绑定错"。攻击2 的 ``hand_B00a`` 在第 6 帧
+    从 224 掉到 24，同样只有逐帧读才看得出"后手甩到背后"。
+    """
+    box = ap.get("Priority") or {}
+    vals = box.get("TableValue") or []
+    if not vals:
+        return None
+
+    def num(v):
+        if isinstance(v, dict):
+            v = v.get("Priority")
+        return int(v or 0)
+
+    if len(vals) == 1:
+        return [num(vals[0])] * total
+    codes = []
+    for cv in box.get("TableCodeValue") or []:
+        codes.extend(cv.get("TableCode") or [])
+    if not codes:
+        return [num(vals[0])] * total
+    pts = []
+    for i, c in enumerate(codes):
+        if i >= len(vals):
+            break
+        pts.append((min(int(c) & 0x7FFF, total - 1), num(vals[i])))
+    pts.sort(key=lambda t: t[0])
+    out, j = [], 0
+    for f in range(total):
+        while j + 1 < len(pts) and pts[j + 1][0] <= f:
+            j += 1
+        out.append(pts[j][1])
+    return out
+
+
 def _argb(v):
     """LabelColor 的 rgba 是 ARGB 打包；0 = 不染色（保持原图颜色）。"""
     v = int(v or 0)
@@ -1786,10 +1829,12 @@ def main():
                # 画面特效：da_/dc_ 摊平后的逐帧数据（按 prefab 名索引）
                "screff": screff}
     out_js = os.path.join(root, "web", "data", "advfx.js")
-    with open(out_js, "w", encoding="utf-8") as f:
+    tmp_js = out_js + ".tmp"
+    with open(tmp_js, "w", encoding="utf-8") as f:
         f.write("window.__ADVFX=")
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
         f.write(";\n")
+    os.replace(tmp_js, out_js)
     print(f"  {len(marks)} 个表情符号 → {out_js}（{os.path.getsize(out_js) / 1024:.0f} KB）")
     return 0
 

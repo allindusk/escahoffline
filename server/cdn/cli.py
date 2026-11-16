@@ -24,6 +24,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import time
 
@@ -99,7 +100,7 @@ def cmd_diff(a) -> int:
             if not items:
                 continue
             print(f"\n  [{k}] {name}  {len(items)} 条")
-            for it in items[:a.limit]:
+            for it in items[:getattr(a, "limit", 30)]:
                 print(f"    {it if isinstance(it, str) else it[0]}")
     return 0
 
@@ -214,6 +215,19 @@ def cmd_download_all(a) -> int:
     ensure_dirs()
     mf = _index()
     items = list(mf.index.values())
+    # 2026-11-16：SD 小人与 NPC/敌音声整体停用，全量下载时硬排除，
+    # 防止 --kind 未指定或误传时又把 ~675 MB 的包拉下来。
+    # 注意：角色音声（bundle_audioclipsprefab_unit_00001..00416）必须保留，
+    # 所以只用 5 位编号的第 1 位判断（1xxxx / 2xxxx），不能只匹配前缀 "100"。
+    def _banned(nm: str) -> bool:
+        if nm.startswith("bundle_unit_"):
+            return True
+        m = re.match(r"^bundle_audioclipsprefab_unit_(\d{5})$", nm)
+        return bool(m and m.group(1)[0] in ("1", "2"))
+    skipped = [e for e in items if _banned(e["bundle_name"])]
+    items = [e for e in items if not _banned(e["bundle_name"])]
+    if skipped:
+        print(f"已排除 SD/NPC音声包 {len(skipped)} 个（2026-11-16 起停用）")
     if a.kind:
         pre = tuple(x.strip() for x in a.kind.split(",") if x.strip())
         items = [e for e in items if e["bundle_name"].startswith(pre)]

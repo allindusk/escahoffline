@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>超昂大戦</title>
+<style>
+/* 全站外壳：两个 iframe 都不卸载，只切 z-index / opacity。
+   fMusic 从头到尾是同一个 document → 里面的 <audio> 不会被销毁，
+   换页面时播放**真的不中断**（不是"记下位置再重新解码"那种近似续播）。 */
+html,body{margin:0;height:100%;overflow:hidden;background:#0e1219}
+#fMusic,#fPage{position:absolute;inset:0;width:100%;height:100%;border:0;
+  background:#0e1219;opacity:0;pointer-events:none;transition:opacity .12s}
+#fMusic{z-index:1}
+#fPage{z-index:2}
+body.show-music #fMusic{z-index:3;opacity:1;pointer-events:auto}
+body.show-page #fPage{z-index:3;opacity:1;pointer-events:auto}
+
+/* 全站常驻播放条：平时只有一条 6px 细线，hover 才展开 */
+#gBar{position:fixed;z-index:9000;left:50%;bottom:52px;
+  transform:translateX(-50%);width:min(280px,62vw);height:26px;
+  color:#c7d0e0;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;
+  user-select:none;display:none}
+/* 没在放歌时不挂空条：要有播放会话才出现 */
+body.show-page.has-session #gBar{display:block}
+body.hide-bar #gBar{display:none !important}
+#gBar.pos-left{left:18px;transform:none}
+#gBar.pos-right{left:auto;right:18px;bottom:88px;transform:none}
+#gBar.pos-center{left:50%;transform:translateX(-50%)}
+#gBar.pos-left .card{left:0;transform:translateY(8px)}
+#gBar.pos-left:hover .card,#gBar.pos-left.open .card{transform:none}
+#gBar.pos-right .card{left:auto;right:0;transform:translateY(8px)}
+#gBar.pos-right:hover .card,#gBar.pos-right.open .card{transform:none}
+#gBar .rail{position:absolute;left:0;right:0;top:50%;margin-top:-3px;height:6px;
+  border-radius:4px;background:rgba(160,175,200,.22);cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,.5);transition:opacity .16s}
+#gBar .rail i{display:block;height:100%;width:0;border-radius:4px;background:#e0b566;
+  box-shadow:0 0 6px rgba(224,181,102,.55)}
+#gBar.paused .rail i{background:#8b93a6;box-shadow:none}
+#gBar .card{position:absolute;left:50%;bottom:-4px;transform:translate(-50%,8px);
+  width:min(362px,92vw);box-sizing:border-box;display:flex;flex-direction:column;
+  gap:7px;padding:9px 11px;border-radius:12px;background:rgba(18,22,31,.97);
+  border:1px solid #33445c;box-shadow:0 12px 34px rgba(0,0,0,.6);
+  opacity:0;pointer-events:none;transition:opacity .16s,transform .16s}
+#gBar:hover .card,#gBar.open .card{opacity:1;pointer-events:auto;transform:translate(-50%,0)}
+#gBar:hover .rail,#gBar.open .rail{opacity:0}
+#gBar .top{display:flex;align-items:center;gap:9px;min-width:0}
+#gBar .cover{width:38px;height:38px;flex:none;border-radius:7px;object-fit:cover;
+  background:#0a0c11;border:1px solid #2a3040;cursor:pointer}
+#gBar .info{flex:1;min-width:0;cursor:pointer}
+#gBar .ttl{display:block;color:#e0b566;font-weight:600;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+#gBar .sub{display:block;color:#6b7488;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+#gBar .seek{position:relative;height:8px;border-radius:5px;background:#2a3344;
+  cursor:pointer;touch-action:none}
+#gBar .seek i{display:block;height:100%;width:0;border-radius:5px;background:#e0b566}
+#gBar .ctrl{display:flex;align-items:center;gap:5px;min-width:0}
+#gBar button{flex:none;height:26px;min-width:26px;padding:0 5px;border-radius:7px;
+  cursor:pointer;border:1px solid #3a4a60;background:#1c2230;color:#c7d0e0;
+  font:inherit;font-size:14px;line-height:1}
+#gBar button:hover,#gBar button.on{color:#e0b566;border-color:#4a3f78}
+#gBar .play{width:30px;min-width:30px;background:#e0b566;color:#141822;
+  border-color:#e0b566;font-size:15px}
+#gBar .vol{flex:1;min-width:44px;width:60px;height:4px;margin:0 2px;
+  accent-color:#e0b566;cursor:pointer}
+#gBar .time{flex:none;color:#6b7488;font-variant-numeric:tabular-nums;white-space:nowrap}
+#gBar.touch:hover .card{opacity:0;pointer-events:none;transform:translate(-50%,8px)}
+#gBar.touch:hover .rail{opacity:1}
+#gBar.touch.open .card{opacity:1;pointer-events:auto;transform:translate(-50%,0)}
+#gBar.touch.open .rail{opacity:0}
+/* 常驻展开：不用悬停就能看到标题/进度/控制（ⓘ 设置里可关） */
+#gBar.always .rail{opacity:0}
+#gBar.always .card{opacity:1;pointer-events:auto}
+#gBar.always.pos-center .card{transform:translate(-50%,0)}
+#gBar.always.pos-left .card,#gBar.always.pos-right .card{transform:none}
+/* 内容开关：封面缩略图 / 时间 */
+#gBar.no-cover .cover{display:none}
+#gBar.no-time .time{display:none}
+@media (max-width:860px){
+  #gBar{bottom:88px;width:min(220px,60vw)}
+  body.story #gBar{bottom:150px}
+  #gBar .card{width:min(330px,94vw);padding:8px 9px}
+  #gBar .cover{width:32px;height:32px}
+}
+</style>
+</head>
+<body>
+<iframe id="fMusic" title="原声集播放器"></iframe>
+<iframe id="fPage" src="about:blank" title="页面内容"></iframe>
+
+<div id="gBar" aria-label="全站播放控制">
+  <div class="rail"><i></i></div>
+  <div class="card">
+    <div class="top">
+      <img class="cover" alt="">
+      <span class="info"><span class="ttl">未在播放</span>
+        <span class="sub">点一下打开原声集</span></span>
+      <button class="open" title="打开原声集">⤢</button>
+    </div>
+    <div class="seek"><i></i></div>
+    <div class="ctrl">
+      <button class="prev" title="上一首">⏮</button>
+      <button class="play" title="播放 / 暂停">▶</button>
+      <button class="next" title="下一首">⏭</button>
+      <button class="mode" title="循环模式">🔁</button>
+      <button class="rate" title="倍速">1.0×</button>
+      <button class="mute" title="静音">🔊</button>
+      <input class="vol" type="range" min="0" max="100" value="80" title="音量">
+      <span class="time">0:00 / 0:00</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var fM = $('#fMusic'), fP = $('#fPage'), g = $('#gBar');
+  var touch = window.matchMedia && window.matchMedia('(hover: none)').matches;
+  if (touch) g.classList.add('touch');
+  window.__SHELL__ = true;           // 供 iframe 内的脚本判断"我在外壳里"
+
+  /* ------------------------------------------------------------ 导航
+     只换内容 iframe 的 src（或把常驻的原声集切到前台），top document 永不重载。
+     这就是"播放组件是全站的、列表页只负责传曲目"的做法。 */
+  var current = '';
+  /** 内容 iframe 当前**真实地址**（相对形式）；跨域 / 还没加载时返回 ''。
+   *  去重不能只看壳里自己记的 current：iframe 可能绕过 nav 自己导航过
+   *  （hook 还没装上时点的链接、页面脚本里的 location.href），那之后
+   *  current 与实际显示的内容就脱节了。 */
+  function frameRel() {
+    try {
+      var cu = new URL(fP.contentWindow.location.href);
+      if (cu.origin !== location.origin) return '';
+      return cu.pathname.replace(/^\//, '') + cu.search + cu.hash;
+    } catch (e) { return ''; }
+  }
+  function nav(href, replace) {
+    href = String(href || 'index.html');
+    var u = new URL(href, location.href);
+    if (u.origin !== location.origin) { location.href = href; return; }
+    var rel = u.pathname.replace(/^\//, '') + u.search + u.hash;
+    var isMusic = /(^|\/)music\.html/.test(rel);
+    document.body.classList.toggle('show-music', isMusic);
+    document.body.classList.toggle('show-page', !isMusic);
+    document.body.classList.toggle('story', /(^|\/)index\.html/.test(rel));
+    if (isMusic) {
+      // 播放器 iframe 一直都在，只是切回前台：不 reload、不重新解码、不中断
+      // 若链接带了 ?play / ?voice 参数，转成命令交给常驻播放器
+      var q = new URLSearchParams(u.search);
+      if (q.get('play')) send('playno', +q.get('play'));
+      if (q.get('voice')) send('voice', +q.get('voice'));
+      // 常驻播放器不重载，链接里的 ?src=voice 要转成命令才能切页签
+      if (q.get('src')) send('src', q.get('src'));
+    } else {
+      /* 用 iframe 的**实际地址**去重，而不是只信 current。
+         current 只在"我们设了 fP.src"时更新；iframe 一旦自己导航过（hook 没
+         拦住的外链、页面脚本直接跳），两者就不一致了 —— 表现就是「点了没反应」
+         或者「点了却跳到上一个页面」（2026-11-15 反馈）。 */
+      if (rel !== frameRel() || replace === true) fP.src = rel;
+      current = rel;
+    }
+    try {
+      history[replace === true ? 'replaceState' : 'pushState'](
+        null, '', 'shell.html?p=' + encodeURIComponent(rel));
+    } catch (e) { /* 忽略 */ }
+  }
+  window.__go = nav;                 // 暴露给 iframe 内的 location.href 调用点
+  window.addEventListener('popstate', function () {
+    var p = new URLSearchParams(location.search).get('p');
+    if (p) nav(p, true);
+  });
+
+  /* ---------------------------------------------- 拦截 iframe 内的页面链接 */
+  function hook(fr) {
+    var d, w;
+    try { d = fr.contentDocument; w = fr.contentWindow; } catch (e) { return; }
+    if (!d || !w || d.__shellHooked) return;
+    d.__shellHooked = true;
+    w.__go = nav;
+    d.addEventListener('click', function (ev) {
+      var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+      if (!a) return;
+      if (a.target && a.target !== '_self') return;       // _blank / 外链放行
+      var href = a.getAttribute('href') || '';
+      if (!/\.html(\?|#|$)/.test(href)) return;
+      var u = new URL(href, w.location.href);
+      if (u.origin !== location.origin) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      nav(u.pathname.replace(/^\//, '') + u.search + u.hash);
+    }, true);
+    try { if (d.title) document.title = d.title; } catch (e) { /* 忽略 */ }
+  }
+
+  /** iframe 自己导航过（hook 没拦住、或页面脚本直接跳）时，把外壳的地址栏和
+      前景类同步过来。否则会出现「屏幕上显示 A、地址栏写着 B」：下一次点导航
+      按 B 去重，就会点了没反应、或者跳到上一个页面（2026-11-15 反馈）。 */
+  function syncFromFrame() {
+    var rel = frameRel();
+    if (!rel || rel === current) return;
+    current = rel;
+    var isMusic = /(^|\/)music\.html/.test(rel);
+    document.body.classList.toggle('show-music', isMusic);
+    document.body.classList.toggle('show-page', !isMusic);
+    document.body.classList.toggle('story', /(^|\/)index\.html/.test(rel));
+    try {
+      history.replaceState(null, '', 'shell.html?p=' + encodeURIComponent(rel));
+    } catch (e) { /* 忽略 */ }
+  }
+
+  fM.addEventListener('load', function () {
+    hook(fM);
+    mReady = true;
+    pending.splice(0).forEach(function (c) { post(c[0], c[1]); });
+    post('state');
+  });
+  fP.addEventListener('load', function () { hook(fP); syncFromFrame(); });
+
+  /* ------------------------------------------------- 与常驻播放器的消息通道 */
+  // 播放器 iframe 还没 load 完时（比如刚启动就带 ?play=）先把命令排队
+  var pending = [], mReady = false;
+  function post(a, v) {
+    try { fM.contentWindow.postMessage({ t: 'ost:cmd', a: a, v: v }, location.origin); }
+    catch (e) { /* 忽略 */ }
+  }
+  function send(a, v) {
+    if (!mReady) { pending.push([a, v]); return; }
+    post(a, v);
+  }
+  var S = null;
+  // 跨页播放设置：由原声集页的 ⚙ 按钮写入 localStorage，并即时 postMessage 过来
+  var CFG_KEY = 'esc_ost_shell_cfg';
+  var cfg = { showOther: true, pos: 'center', pauseOnStory: true,
+    pauseHide: 'instant', alwaysOpen: false, showCover: true, showTime: true };
+  function applyCfg(c) {
+    c = c || {};
+    var ph = String(c.pauseHide == null ? 'instant' : c.pauseHide);
+    /* 与 music.js 的 loadCfg() **等价**（跨 document 没法共用函数）：
+       加字段时两边必须一起改，否则会出现"设置面板存了、播放条不认"。 */
+    cfg = {
+      showOther: c.showOther !== false,
+      pos: ['center', 'left', 'right'].indexOf(c.pos) >= 0 ? c.pos : 'center',
+      pauseOnStory: c.pauseOnStory !== false,
+      pauseHide: ['instant', '3', '5', '10', 'keep'].indexOf(ph) >= 0 ? ph : 'instant',
+      alwaysOpen: !!c.alwaysOpen,
+      showCover: c.showCover !== false,
+      showTime: c.showTime !== false,
+    };
+    g.classList.remove('pos-center', 'pos-left', 'pos-right');
+    g.classList.add('pos-' + cfg.pos);
+    g.classList.toggle('always', cfg.alwaysOpen);
+    g.classList.toggle('no-cover', !cfg.showCover);
+    g.classList.toggle('no-time', !cfg.showTime);
+    document.body.classList.toggle('hide-bar', !cfg.showOther);
+    pausedAt = 0;                    // 改了设置就重新计时
+    paint();
+  }
+  try { applyCfg(JSON.parse(localStorage.getItem(CFG_KEY) || 'null')); }
+  catch (e) { applyCfg({}); }
+  /* 补全原声集/音声后，data/gallery.js、voicemap.js 是本机新生成的。
+     常驻的 fMusic 只在加载时读一次数据（music.js 顶层 const GAL/VMAP），
+     不重载就一直是空的 —— 用户得手动 F5 才看到。这里让资源管理页在 base
+     任务完成后通知外壳重载播放器数据；正在播放时不打断，等暂停再重载。 */
+  var pendingReload = false;
+  function reloadMusic() {
+    var busy = !!(S && S.playing && !S.paused);
+    if (busy) { pendingReload = true; return; }
+    var u = new URL(fM.src || 'music.html', location.href);
+    u.searchParams.set('_r', String(Date.now()));   // cache-bust：确保重读新生成的 data
+    fM.src = u.pathname.replace(/^\//, '') + u.search;
+    pendingReload = false;
+  }
+  window.__reloadMusic = reloadMusic;
+  window.addEventListener('message', function (ev) {
+    if (ev.origin !== location.origin) return;
+    var m = ev.data;
+    if (!m) return;
+    if (m.t === 'ost:reload-music') { reloadMusic(); return; }
+    if (m.t === 'ost:cfg') { applyCfg(m.d); return; }
+    if (m.t === 'ost:storyplay') { if (cfg.pauseOnStory) send('pause'); return; }
+    if (m.t !== 'ost:state') return;
+    S = m.d;
+    paint();
+    // 之前请求过重载但当时正在播放：现在停了，趁机重载（不打断）。
+    if (pendingReload && !(S.playing && !S.paused)) reloadMusic();
+  });
+  function fmt(s) {
+    s = Math.max(0, Math.floor(+s || 0));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  var elCover = $('.cover'), elTtl = $('.ttl'), elSub = $('.sub'),
+      elPlay = $('.play'), elRail = $('.rail i'), elSeek = $('.seek i'),
+      elTime = $('.time'), elMode = $('.mode'), elRate = $('.rate'),
+      elMute = $('.mute'), elVol = $('.vol');
+  var MODE = { list: '🔁', one: '🔂', single: '⏹', shuffle: '🔀', seq: '➡' };
+  var pausedAt = 0;        // 进入「有会话但暂停」的时刻（0 = 不在暂停）
+  function paint() {
+    if (!S) return;
+    /* 播放条什么时候出现：
+       · 正在播放 → 显示；
+       · 有会话但暂停 → 按 ⚙ 里的设置（立刻收起 / N 秒后收起 / 一直留着）；
+       · 没选曲 / 播完 → 隐藏。
+       每秒都会收到 ost:state 再调用 paint()，所以按 pausedAt 算剩余时间就够了；
+       不另外挂定时器 —— 那样会被每秒的推送反复重置，永远等不到触发。 */
+    var playing = !!(S.playing && !S.paused);
+    var show;
+    if (playing) {
+      pausedAt = 0;
+      show = true;
+    } else if (!S.playing) {
+      pausedAt = 0;
+      show = false;
+    } else {
+      if (!pausedAt) pausedAt = Date.now();
+      var ph = cfg.pauseHide;
+      if (ph === 'keep') show = true;
+      else if (ph === 'instant') show = false;
+      else show = (Date.now() - pausedAt) < (+ph || 0) * 1000;
+    }
+    document.body.classList.toggle('has-session', show);
+    elTtl.textContent = S.title || '未在播放';
+    elSub.textContent = S.sub || (S.playing ? '' : '点一下打开原声集');
+    if (S.img) { elCover.src = S.img; elCover.style.visibility = ''; }
+    else { elCover.removeAttribute('src'); elCover.style.visibility = 'hidden'; }
+    var p = (S.dur ? Math.min(1, S.pos / S.dur) * 100 : 0).toFixed(1) + '%';
+    elRail.style.width = p;
+    if (!dragging) elSeek.style.width = p;
+    elTime.textContent = fmt(S.pos) + ' / ' + fmt(S.dur);
+    elPlay.textContent = S.paused ? '▶' : '⏸';
+    g.classList.toggle('paused', !!S.paused);
+    elMode.textContent = MODE[S.mode] || '🔁';
+    elMode.classList.toggle('on', S.mode && S.mode !== 'list');
+    elRate.textContent = (String(S.rate).indexOf('.') < 0
+      ? (+S.rate).toFixed(1) : S.rate) + '×';
+    elVol.value = String(Math.round((S.muted ? 0 : S.vol) * 100));
+    elMute.textContent = S.muted || S.vol === 0 ? '🔇' : (S.vol < 0.5 ? '🔉' : '🔊');
+  }
+
+  /* ------------------------------------------------------------ 控制条交互 */
+  $('.info').onclick = $('.cover').onclick = $('.open').onclick =
+    function () { nav('music.html'); };
+  elPlay.onclick = function () { send('toggle'); };
+  $('.prev').onclick = function () { send('prev'); };
+  $('.next').onclick = function () { send('next'); };
+  elMode.onclick = function () { send('mode'); };
+  elRate.onclick = function () { send('rate'); };
+  elMute.onclick = function () { send('mute'); };
+  elVol.oninput = function () { send('vol', +elVol.value / 100); };
+  $('.rail').onclick = function (ev) {
+    if (touch && !g.classList.contains('open')) { g.classList.add('open'); return; }
+    var r = this.getBoundingClientRect();
+    send('seek', Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)));
+  };
+  var dragging = false;
+  var seek = $('.seek');
+  function frac(ev) {
+    var r = seek.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+  }
+  seek.addEventListener('pointerdown', function (ev) {
+    dragging = true; seek.setPointerCapture(ev.pointerId);
+    elSeek.style.width = (frac(ev) * 100) + '%';
+  });
+  seek.addEventListener('pointermove', function (ev) {
+    if (dragging) elSeek.style.width = (frac(ev) * 100) + '%';
+  });
+  seek.addEventListener('pointerup', function (ev) {
+    if (!dragging) return;
+    var p = frac(ev); dragging = false;
+    send('seek', p);
+  });
+  if (touch) {
+    document.addEventListener('click', function (ev) {
+      if (!g.contains(ev.target)) g.classList.remove('open');
+    });
+  }
+
+  /* 故意**不注册全站快捷键**：剧情播放页用空格翻台词 / 方向键快进，
+     外壳在捕获阶段抢按键会直接把剧情操作吃掉（2026-11-15 用户反馈）。
+     播放控制只由原声集页自己的播放器 + 底部那条常驻播放条提供。 */
+
+  /* ------------------------------------------------------------ 起始页面 */
+  var p = new URLSearchParams(location.search).get('p') || 'index.html';
+  try {
+    var pu = new URL(p, location.href);
+    if (pu.origin === location.origin)
+      p = pu.pathname.replace(/^\//, '') + pu.search + pu.hash;
+  } catch (e) { /* 忽略 */ }
+  // 免责声明只弹一次：两个 iframe 会同时加载 disclaimer.js，若都弹就叠成两层。
+  // 常规入口（剧情/资源管理等）由可见的内容 iframe 弹，后台播放器跳过；
+  // 只有"第一次就直接进原声集"时才让播放器自己弹。
+  var seen = '';
+  try { seen = localStorage.getItem('escah_disclaimer_v1') || ''; } catch (e) { /* 忽略 */ }
+  var fromMusic = /(^|\/)music\.html/.test(p);
+  var noD = false;
+  try { noD = new URL(p, location.href).searchParams.has('nodisclaimer'); } catch (e) { /* 忽略 */ }
+  fM.src = 'music.html' + ((noD || (!seen && !fromMusic)) ? '?nodisclaimer' : '');
+  nav(p, true);
+  setTimeout(function () { send('state'); }, 1200);   // load 没赶上时的兜底
+})();
+</script>
+</body>
+</html>
