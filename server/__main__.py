@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -36,6 +37,46 @@ _lan_ip = api._lan_ip
 def _portable() -> bool:
     """是不是便携版（目录里带 python\\python.exe）。"""
     return os.path.exists(os.path.join(paths.ROOT, "python", "python.exe"))
+
+
+def _heal_seed_files() -> int:
+    """把 ``web/assets/seed/`` 里的种子按**相同相对路径**补到本机缺失的位置。
+
+    为什么需要这一层（2026-11-16 实测事故）：更新包里的文件是新的，但**执行覆盖的
+    是升级前那个版本生成的更新器脚本**，它只认当时那份白名单 —— v1.1.6 新增的
+    ``shell.html`` / ``stand.html`` / ``music.html``、v1.1.3 才加的
+    ``data/stand_box.js`` 全被挡在门外，于是升级完自动打开的
+    ``http://127.0.0.1:8000/shell.html`` 直接 404，用户在页面里点「检查更新」也补不
+    回来（同一个旧清单）。
+
+    种子随更新包一起下发（CI 把它放在 ``web/assets/`` 下，这个前缀任何版本都放行），
+    新版本启动时按同名相对路径补缺；**只在目标不存在时写**，不覆盖用户文件。
+    白名单已经改成 ``web/*.html``，以后新页面不会再漏，这层只管老用户跨版本救场。
+    """
+    seed = os.path.join(paths.WEB, "assets", "seed")
+    if not os.path.isdir(seed):
+        return 0
+    n = 0
+    for dirpath, _dirs, files in os.walk(seed):
+        for fn in files:
+            src = os.path.join(dirpath, fn)
+            dst = os.path.join(paths.ROOT, os.path.relpath(src, seed))
+            if os.path.exists(dst):
+                continue
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                n += 1
+            except Exception:                                  # noqa: BLE001
+                pass
+    if n:
+        try:
+            from . import log as _log
+            _log.log(f"启动自愈：按种子补齐 {n} 个缺失文件（旧更新器白名单漏掉的）",
+                     "boot")
+        except Exception:                                      # noqa: BLE001
+            pass
+    return n
 
 
 class _SafeStream:
@@ -158,6 +199,13 @@ def main(argv=None) -> int:
                  "at": time.strftime("%Y-%m-%d %H:%M:%S")})
             applog.log(f"版本升级 {_up['from']} -> {_up['to']}：已登记立绘修复提示",
                        "boot")
+    except Exception:                                          # noqa: BLE001
+        pass
+
+    # 更新包的兜底种子：老用户升级时"新版文件到了、却被旧白名单挡掉"的救场，
+    # 说明见 _heal_seed_files()
+    try:
+        _heal_seed_files()
     except Exception:                                          # noqa: BLE001
         pass
 

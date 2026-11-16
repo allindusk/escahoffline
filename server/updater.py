@@ -42,7 +42,12 @@ from . import facts, mirrors, net, paths
 #: 允许被更新覆盖的路径前缀（相对项目根）
 WHITELIST = (
     "server/", "web/assets/", "tools/", "docs/",
-    "web/index.html", "web/cg.html", "web/setup.html", "web/notice.html",
+    # ``web/`` 根下的页面一律按规则放行，别再列文件名。
+    # 2026-11-16 的翻车就是这里只写了 index/cg/setup/notice：v1.1.6 新加的
+    # shell.html / stand.html / music.html 被挡在门外，升级完自动打开的
+    # http://127.0.0.1:8000/shell.html 直接 404，而且用户在页面里点「检查更新」
+    # 也补不回来（跑的更新器脚本是升级**前**那份旧清单）。
+    "web/*.html",
     "web/serve.py",
     "VERSION", "README.md", "requirements.txt",
     # NOTICE.md / LICENSE 是**随版本变化的法律文件**（素材、免责说明改一版就得送达），
@@ -526,8 +531,36 @@ def stage(url: str, job) -> str:
     return staging
 
 
+def _hit(rel: str, pat: str) -> bool:
+    """白名单匹配：``server/`` 是前缀，``web/*.html`` 是"同一层级"通配。
+
+    故意不用 :func:`fnmatch.fnmatch` —— 它的 ``*`` 会跨 ``/``，``web/*.html``
+    就会把 ``web/assets/xxx.html`` 一起放行。这里的 ``*`` 只吃一段不带斜杠的路径。
+    匹配可以从任意目录边界开始，因为更新包/zip 里可能多包一层根目录
+    （``ESCAH-Offline-v1.1.7/web/shell.html``）。
+    """
+    rel = rel.replace("\\", "/").lower()
+    pat = pat.replace("\\", "/").lower()
+    head, star, tail = pat.partition("*")
+    start = 0
+    while start <= len(rel):
+        i = rel.find(head, start)
+        if i < 0:
+            return False
+        if i == 0 or rel[i - 1] == "/":           # 只在目录边界上算命中
+            if not star:
+                return True                       # 前缀语义：server/ 等
+            rest = rel[i + len(head):]
+            if rest.endswith(tail):
+                body = rest[:len(rest) - len(tail)]
+                if "/" not in body:               # * 不跨目录
+                    return True
+        start = i + 1
+    return False
+
+
 def _is_program(name: str) -> bool:
-    low = name.lower()
+    low = name.replace("\\", "/").lower()
     if low.startswith(("__macosx", ".")):
         return False
     if any(low.endswith(p) for p in WEB_DATA_UPDATABLE):
@@ -535,8 +568,7 @@ def _is_program(name: str) -> bool:
     for b in BLACKLIST:
         if low.startswith(b) or f"/{b}" in low:
             return False
-    return any(low.startswith(w.lower()) or f"/{w.lower()}" in low
-               for w in WHITELIST)
+    return any(_hit(low, w) for w in WHITELIST)
 
 
 def allowed(relpath: str) -> bool:
@@ -545,7 +577,7 @@ def allowed(relpath: str) -> bool:
         return True                       # 同上：索引例外
     if any(low.startswith(b) for b in BLACKLIST):
         return False
-    return any(low.startswith(w.lower()) for w in WHITELIST)
+    return any(_hit(low, w) for w in WHITELIST)
 
 
 UPDATER_PY = r'''# -*- coding: utf-8 -*-
@@ -555,6 +587,30 @@ import os, shutil, subprocess, sys, time
 ROOT, STAGING, PID = sys.argv[1], sys.argv[2], sys.argv[3]
 WHITELIST = sys.argv[4].split("|")
 LOG = os.path.join(ROOT, "userdata", "logs", "update.log")
+
+def hit(rel, pat):
+    """与 server/updater.py::_hit 同源，改一处必须改两处。
+
+    ``server/`` 是前缀；``web/*.html`` 的 ``*`` 只吃一段不带斜杠的路径。
+    """
+    rel = rel.replace("\\", "/").lower()
+    pat = pat.replace("\\", "/").lower()
+    head, star, tail = pat.partition("*")
+    start = 0
+    while start <= len(rel):
+        i = rel.find(head, start)
+        if i < 0:
+            return False
+        if i == 0 or rel[i - 1] == "/":
+            if not star:
+                return True
+            rest = rel[i + len(head):]
+            if rest.endswith(tail):
+                body = rest[:len(rest) - len(tail)]
+                if "/" not in body:
+                    return True
+        start = i + 1
+    return False
 
 def log(msg):
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
@@ -581,7 +637,7 @@ for dire, _dirs, files in os.walk(STAGING):
     for fn in files:
         src = os.path.join(dire, fn)
         rel = os.path.relpath(src, STAGING).replace("\\", "/")
-        if not any(rel.lower().startswith(w.lower()) for w in WHITELIST):
+        if not any(hit(rel, w) for w in WHITELIST):
             continue
         dst = os.path.join(ROOT, rel.replace("/", os.sep))
         try:
