@@ -70,7 +70,10 @@ window.HEALTH = (() => {
           knownVer = d.version;
           updating = false;
           knownReady = '';
-          show('更新完成，程序已是 <b>v' + esc(d.version) + '</b>，刷新页面即可生效',
+          // 只提示「关掉别的窗口 + 刷新本页」：别的标签页里跑的仍是旧页面，
+          // 它们不会自己变成新版（要不要自动发现需要常驻长连接，已明确不做）。
+          show('更新完成，程序已是 <b>v' + esc(d.version) + '</b>。<br>'
+            + '其他开着的窗口 / 标签页还是旧版本，请一并关掉，然后刷新本页。',
             '刷新页面', reload);
           return;
         }

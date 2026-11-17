@@ -3269,7 +3269,9 @@
   };
   $('#btnApplyUpdate').onclick = async () => {
     if (!(await Dlg.confirm('会先下载新版本，然后程序自动重启一次。\n\n' +
-      '你的素材、译文、设置都不会丢。继续？',
+      '你的素材、译文、设置都不会丢。\n\n' +
+      '如果还开着别的窗口或标签页，请在更新完成后把它们关掉 —— '
+      + '那些页面不会自己变成新版。',
       { anchor: $('#btnApplyUpdate'), ok: '立即更新' }))) return;
     try {
       await api('update/apply', {
