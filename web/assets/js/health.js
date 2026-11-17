@@ -133,12 +133,26 @@ body.hc-on{padding-top:44px}
     bar.appendChild(x);
   }
 
+  /* 只负责「启动时那一次检查」的提示（设置里可关）：只提示，不自动下载/重启。
+     已经有"下好了等重启"的提示时不再插一条，避免两条横条打架。
+     `uc` 就是 /api/state 或 /api/update/wait 里的 updateCheck 对象。 */
+  function showUpdateBanner(uc) {
+    if (!uc || !uc.done || !uc.hasUpdate || !uc.latest) return;
+    if (uc.staged || updating || uc.latest === knownCheck) return;
+    knownCheck = uc.latest;
+    show('发现新版本 <b>v' + esc(uc.latest) + '</b>（当前 v'
+      + esc(uc.current) + '）。去控制台点一下就能更新', '去更新',
+      () => { (window.__go ? window.__go('setup.html#update') : (location.href = 'setup.html#update')); });
+  }
+
+  /* → 返回「启动检查是否还没出结果」（:func:`start` 据此决定要不要等它）。 */
   async function tick() {
-    if (busy) return;
+    if (busy) return false;
     busy = true;
+    let pending = false;
     try {
       const r = await fetch('api/state', { cache: 'no-store' });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const d = await r.json();
       if (knownVer === null) {
         knownVer = d.version || '';
@@ -155,16 +169,9 @@ body.hc-on{padding-top:44px}
           + '（<b>素材 / 译文 / 设置都不会动</b>）', '重启并完成更新',
           () => applyUpdate(ready));
       }
-      // 启动时那一次自动检查的结果（设置里可关）：只提示，不自动下载/重启。
-      // 已经有"下好了等重启"的提示时不再插一条，避免两条横条打架。
       const uc = d.updateCheck || {};
-      if (uc.done && uc.hasUpdate && uc.latest && !uc.staged && !updating
-        && uc.latest !== knownCheck) {
-        knownCheck = uc.latest;
-        show('启动检查：发现新版本 <b>v' + esc(uc.latest) + '</b>（当前 v'
-          + esc(uc.current) + '）。去控制台点一下就能更新', '去更新',
-          () => { (window.__go ? window.__go('setup.html#update') : (location.href = 'setup.html#update')); });
-      }
+      showUpdateBanner(uc);
+      pending = !!(uc.enabled && !uc.done);
       if (d.warn && !warnedPath) {
         warnedPath = true;
         show(('⚠ ' + String(d.warn).split('\n')[0] +
@@ -175,17 +182,24 @@ body.hc-on{padding-top:44px}
     } finally {
       busy = false;
     }
+    return pending;
   }
 
-  /* 只在**页面加载时**读一次 `/api/state`，此外任何时间都不再查（2026-11-17 用户要求：
-   * 版本只在启动时检查一次，别的时间全都不检查）。
-   *   · 没有 setInterval 轮询；
-   *   · 切回标签页不重查；
-   *   · 也不为「启动检查还没跑完」补看 —— 那次检查是服务端启动后自己跑的，
-   *     结果会进下一次页面加载 / 控制台更新页的「启动时检查过：…」那一行。
-   */
+  /* 页面加载时读一次 `/api/state`；此外**不轮询**（用户 2026-11-17 要求：版本只在
+   * 启动时查一次，别的时间全都不检查）。
+   *
+   * 唯一的一步是「等结果」：启动那次检查是服务端启动 3 秒后才发的联网请求，页面
+   * 往往先加载完，这时 updateCheck.done 还是 false。于是再发**一个**请求
+   * `/api/update/wait`，服务端把连接挂着、等那次检查出结果就立刻返回（最多 20 秒）。
+   * 这不是轮询：只发一次，也不触发任何新的版本查询。 */
   function start() {
-    tick();
+    tick().then(pending => {
+      if (!pending) return;
+      fetch('api/update/wait?budget=20', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(uc => { if (uc) showUpdateBanner(uc); })
+        .catch(() => { /* 服务不在就算了 */ });
+    });
   }
 
   return { start, show };

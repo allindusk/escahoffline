@@ -713,6 +713,27 @@ def _auto_fill_public(job) -> dict:
     return add
 
 
+def _wait_startup_check(q) -> dict:
+    """等「启动时那一次检查」出结果，最多 ``budget`` 秒，然后返回同一份快照。
+
+    只**等**，不查：这里不发起任何联网请求，也不会重复查一遍 —— 纯把已经发出的
+    那次检查的结果交出去。页面因此在加载后还能拿到「发现新版本」这条信息，
+    而不需要每隔几十秒再去问一次（用户明确不要轮询）。
+    """
+    try:
+        budget = float(q.get("budget") or 12)
+    except (TypeError, ValueError):
+        budget = 12.0
+    budget = max(0.0, min(budget, 25.0))
+    deadline = time.time() + budget
+    while time.time() < deadline:
+        st = updater.startup_state()
+        if st.get("done") or not st.get("enabled"):
+            return st
+        time.sleep(0.2)
+    return updater.startup_state()
+
+
 class _LegacyNote:
     """占位：旧的 zip 资源包流程已由官方 CDN 直连取代。"""
 
@@ -1252,6 +1273,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         if path == "/api/update/check":
             return self._json(updater.check())
+        if path == "/api/update/wait":
+            # 等「启动时那一次检查」出结果，然后一次性返回 —— 不是轮询、也不发起
+            # 任何新查询。为什么需要它：检查是服务端启动 3 秒后才发的请求，页面
+            # 往往先加载完，那时读到的还是 done=false，页面上就看不到提示条。
+            # 让页面在这里等一下（服务端把连接挂着，最多 budget 秒），结果一到就
+            # 直接返回，用户就能看到「发现新版本」。
+            return self._json(_wait_startup_check(q))
         if path == "/api/exports":
             # dir 一起给：导出完成后要在页面上写"保存在哪"，
             # 光给文件名用户还是不知道去哪找。
