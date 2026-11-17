@@ -11,6 +11,12 @@
  * -----------------------
  * 启动时的控制台警告很多人根本看不到（窗口在后台）。路径含中文时，
  * 视频导出/图片编码这类外部组件容易出奇怪的错，提前说清楚省得排查半天。
+ *
+ * 什么时候查
+ * ----------
+ * **只在页面加载时查一次 `/api/state`**（用户 2026-11-17 明确要求删掉「每 60 秒
+ * 轮询检测新版本」）。唯一的补看是：启动时那次自动检查还没跑完时，等它出结果
+ * 就停 —— 详见 :func:`start` 的注释。
  */
 window.HEALTH = (() => {
   let knownVer = null;
@@ -127,12 +133,14 @@ body.hc-on{padding-top:44px}
     bar.appendChild(x);
   }
 
+  /* → 返回「启动时那次自动检查是否还没跑完」（:func:`start` 据此决定要不要补看几次）。 */
   async function tick() {
-    if (busy) return;
+    if (busy) return false;
     busy = true;
+    let pending = false;
     try {
       const r = await fetch('api/state', { cache: 'no-store' });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const d = await r.json();
       if (knownVer === null) {
         knownVer = d.version || '';
@@ -152,6 +160,7 @@ body.hc-on{padding-top:44px}
       // 启动时那一次自动检查的结果（设置里可关）：只提示，不自动下载/重启。
       // 已经有"下好了等重启"的提示时不再插一条，避免两条横条打架。
       const uc = d.updateCheck || {};
+      pending = !!(uc.enabled && !uc.done);
       if (uc.done && uc.hasUpdate && uc.latest && !uc.staged && !updating
         && uc.latest !== knownCheck) {
         knownCheck = uc.latest;
@@ -169,12 +178,24 @@ body.hc-on{padding-top:44px}
     } finally {
       busy = false;
     }
+    return pending;
   }
 
-  function start() {
-    tick();
-    setInterval(tick, 60000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  /* 没有任何常驻轮询（2026-11-17 用户要求删掉「每 60 秒查一次新版本」）：
+   * 页面加载时查一次 `/api/state` 就够，切回标签页也不重查。
+   *
+   * 唯一的例外是「启动时那次自动检查还没跑完」：服务端是启动 3 秒后才发那个请求
+   * （最坏 20 秒），而页面通常一两秒就加载完了 —— 这时读到的 updateCheck.done
+   * 还是 false，不补看几次，用户永远看不到那条「发现新版本」的提示。
+   * 所以只在 pending 期间补看（3 秒一次、最多 24 秒），一有结果立即停，不是轮询。
+   */
+  async function start() {
+    const pending = await tick();
+    if (!pending) return;
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      if (!(await tick())) return;
+    }
   }
 
   return { start, show };
