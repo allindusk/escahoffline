@@ -133,14 +133,12 @@ body.hc-on{padding-top:44px}
     bar.appendChild(x);
   }
 
-  /* → 返回「启动时那次自动检查是否还没跑完」（:func:`start` 据此决定要不要补看几次）。 */
   async function tick() {
-    if (busy) return false;
+    if (busy) return;
     busy = true;
-    let pending = false;
     try {
       const r = await fetch('api/state', { cache: 'no-store' });
-      if (!r.ok) return false;
+      if (!r.ok) return;
       const d = await r.json();
       if (knownVer === null) {
         knownVer = d.version || '';
@@ -160,7 +158,6 @@ body.hc-on{padding-top:44px}
       // 启动时那一次自动检查的结果（设置里可关）：只提示，不自动下载/重启。
       // 已经有"下好了等重启"的提示时不再插一条，避免两条横条打架。
       const uc = d.updateCheck || {};
-      pending = !!(uc.enabled && !uc.done);
       if (uc.done && uc.hasUpdate && uc.latest && !uc.staged && !updating
         && uc.latest !== knownCheck) {
         knownCheck = uc.latest;
@@ -178,24 +175,17 @@ body.hc-on{padding-top:44px}
     } finally {
       busy = false;
     }
-    return pending;
   }
 
-  /* 没有任何常驻轮询（2026-11-17 用户要求删掉「每 60 秒查一次新版本」）：
-   * 页面加载时查一次 `/api/state` 就够，切回标签页也不重查。
-   *
-   * 唯一的例外是「启动时那次自动检查还没跑完」：服务端是启动 3 秒后才发那个请求
-   * （最坏 20 秒），而页面通常一两秒就加载完了 —— 这时读到的 updateCheck.done
-   * 还是 false，不补看几次，用户永远看不到那条「发现新版本」的提示。
-   * 所以只在 pending 期间补看（3 秒一次、最多 24 秒），一有结果立即停，不是轮询。
+  /* 只在**页面加载时**读一次 `/api/state`，此外任何时间都不再查（2026-11-17 用户要求：
+   * 版本只在启动时检查一次，别的时间全都不检查）。
+   *   · 没有 setInterval 轮询；
+   *   · 切回标签页不重查；
+   *   · 也不为「启动检查还没跑完」补看 —— 那次检查是服务端启动后自己跑的，
+   *     结果会进下一次页面加载 / 控制台更新页的「启动时检查过：…」那一行。
    */
-  async function start() {
-    const pending = await tick();
-    if (!pending) return;
-    for (let i = 0; i < 8; i++) {
-      await new Promise(r => setTimeout(r, 3000));
-      if (!(await tick())) return;
-    }
+  function start() {
+    tick();
   }
 
   return { start, show };
