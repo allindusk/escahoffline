@@ -121,7 +121,7 @@ def _heal_seed_files() -> int:
     if n:
         try:
             from . import log as _log
-            _log.log(f"启动自愈：按种子补齐 {n} 个缺失文件（旧更新器白名单漏掉的）",
+            _log.log(f"启动自愈：按种子同步 {n} 个文件（页面 / 程序索引 / 界面文案）",
                      "boot")
         except Exception:                                      # noqa: BLE001
             pass
@@ -225,16 +225,13 @@ def main(argv=None) -> int:
         print(f"需要 Python 3.8+，当前 {ver}")
         return 2
 
-    # 同理：新包 bat 里这行已被删掉，旧包 bat 也从来没有过，
-    # 统一由 Python 打印，两种启动方式输出一致。
-    _say("using")
-    print("  " + sys.executable)
-    print()
+    # 「正在使用的 Python」不打印到窗口：普通用户看到某个解释器路径只会困惑
+    # （2026-11-17 用户要求窗口里不要再出现这类信息）。路径记进下面那行 boot 日志。
 
     # 子进程统一管理：不弹黑窗；Ctrl+C / 关窗口时杀掉所有子进程，避免残留
     from . import log as applog, proc
     proc.install_signal_handlers()
-    applog.log(f"boot v{paths.app_version()} python={ver}", "boot")
+    applog.log(f"boot v{paths.app_version()} python={ver} exe={sys.executable}", "boot")
 
     # 这次是**从旧版本升级上来**吗？是就留一个标记，资源管理页打开时弹一次
     # 「旧版立绘可能有问题，要不要现在修」——立绘是本机合成的产物，更新器不碰它，
@@ -308,11 +305,9 @@ def main(argv=None) -> int:
     url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/{a.page}"
     if a.open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    print(f"打开：{url}")
-    if host == '0.0.0.0':
-        lan = _lan_ip()
-        if lan:
-            print(f"手机/同网段设备访问：http://{lan}:{port}/{a.page}")
+    # 访问地址由 api.serve() 的横幅统一打印（含手机/同网段那条），这里只记日志：
+    # 以前这里也 print 一遍，同一个地址在窗口里出现两次，用户以为起两个服务。
+    applog.log("将打开 %s" % url, "boot")
 
     # 立绘体检**不在启动时跑**：全库比对要读上千个资源包（老机器一两分钟），
     # 开机自启时风扇转起来用户会以为程序出问题。改由用户在

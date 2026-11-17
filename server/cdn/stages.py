@@ -110,13 +110,10 @@ def run_script(name: str, *args, cwd: str = WS, quiet: bool = False):
         # 走 proc.run：Windows 上不弹黑窗（否则装一部剧情会闪好几次命令行）
         p = proc.run(cmd, cwd=cwd, capture_output=True, text=True,
                      encoding="utf-8", errors="replace", env=env)
-        print(f"  [{name}] exit={p.returncode}")
+        # **一律不 print**（2026-11-17 用户要求：启动窗口里不要再出现运行日志）。
+        # 这些脚本打出来的正是"用了哪个包 / 缺哪一层 / 落点来源 / Wiki 对不上的名字"
+        # 之类的关键决策，全部落进 app.log；窗口里只留启动横幅。
         lines = (p.stdout or "").strip().splitlines()
-        for ln in lines[-8:]:
-            print("      " + ln)
-        # **必须落盘**：这些脚本打出来的正是"用了哪个包 / 缺哪一层 / 落点来源"
-        # 之类的关键决策，只 print 到控制台等于没记录（GUI 用户看不到控制台，
-        # 出事时只有 app.log 可查）。
         try:
             from .. import log as applog
             tag = "stand" if name.startswith("compose") else name.replace(".py", "")[:10]
@@ -125,17 +122,13 @@ def run_script(name: str, *args, cwd: str = WS, quiet: bool = False):
                 applog.log("    " + ln, tag=tag)
             if len(lines) > 200:
                 applog.log(f"    …（其余 {len(lines) - 200} 行略）", tag=tag)
+            if p.returncode != 0 and p.stderr:
+                applog.log("    stderr: " + p.stderr.strip()[-1500:], tag="script")
         except Exception:                                      # noqa: BLE001
             pass
-        if p.returncode != 0 and p.stderr:
-            print("      stderr: " + p.stderr.strip()[-400:])
-            try:
-                from .. import log as applog
-                applog.log("    stderr: " + p.stderr.strip()[-1500:], tag="script")
-            except Exception:                                  # noqa: BLE001
-                pass
         return p.returncode
-    return proc.run(cmd, cwd=cwd, env=env).returncode
+    p = proc.run(cmd, cwd=cwd, env=env)
+    return p.returncode
 
 
 # ================================================================ 剧本

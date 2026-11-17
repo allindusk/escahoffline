@@ -397,6 +397,18 @@ def _auto_check_worker(delay: float) -> None:
             "via": info.get("via") or "",
             "error": info.get("error") or "",
         })
+    # 结果只进日志（窗口里不打印）：出问题时"到底查没查、走了哪条线路、报了什么"
+    # 都能在 app-*.log 里查到。
+    try:
+        from . import log as _applog
+        _applog.info(
+            "启动检查结果：current=%s latest=%s hasUpdate=%s via=%s%s"
+            % (info.get("current"), info.get("latest") or "-",
+               bool(info.get("hasUpdate")), info.get("via") or "-",
+               (" error=" + str(info.get("error"))) if info.get("error") else ""),
+            tag="update")
+    except Exception:                                          # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------- 暂存区

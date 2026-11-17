@@ -141,7 +141,14 @@ def refresh(names=MANIFEST_NAMES, install: bool = True) -> dict:
         with open(cur, "w", encoding="utf-8", newline="\n") as f:
             json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
         out[name] = {"bundles": len(obj.get("data", [])), "last_modified": lm}
-        print(f"  {name}: {len(obj.get('data', []))} 个包  Last-Modified={lm or '-'}")
+        # 只进日志：这条以前直接 print 到启动窗口（还会因为并发刷新出现两次），
+        # 用户看到"Manifest1Ex 17240 个包"完全不知道是什么，只会怀疑程序出错。
+        try:
+            from .. import log as applog
+            applog.info("%s: %d 个包  Last-Modified=%s"
+                        % (name, len(obj.get("data", [])), lm or "-"), tag="manifest")
+        except Exception:                                      # noqa: BLE001
+            pass
     return out
 
 

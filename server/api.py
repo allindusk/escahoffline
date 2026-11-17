@@ -2031,19 +2031,23 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
         threading.Thread(target=_warm, daemon=True).start()
     except Exception:                                          # noqa: BLE001
         pass
-    print("=" * 56)
-    print(f"  ESCAH 离线阅读器  v{paths.app_version()}")
-    print("=" * 56)
-    print(f"  播放器   http://{host}:{port}/index.html")
-    print(f"  控制台   http://{host}:{port}/setup.html")
-    print(f"  资源根   {paths.MEDIA}")
-    print("  关闭此窗口即停止服务（Ctrl+C）")
-    print("=" * 56, flush=True)
+    # 窗口里**只留这一块**（2026-11-17 用户要求：启动后的运行日志一律不打印到这里）。
+    # 标题框由 tools/msg/banner.txt 打印，这里不再画第二条横线，避免看起来像起了两个服务。
+    # 宿主地址不写 0.0.0.0（那是"监听所有网卡"的内部说法，写出来只会让人以为地址打不开）。
+    print(f"  版本     v{paths.app_version()}")
+    print(f"  播放器   http://127.0.0.1:{port}/index.html")
+    print(f"  控制台   http://127.0.0.1:{port}/setup.html")
+    _lan = LAN_INFO.get("ip") or ""
+    if _lan and not _lan.startswith("127."):
+        print(f"  手机访问 http://{_lan}:{port}/setup.html")
+    print(f"  运行日志 userdata\\logs\\app-{time.strftime('%Y%m%d')}.log")
+    print("  关闭此窗口即停止服务（Ctrl+C）", flush=True)
     # 启动后按设置查一次更新（默认开；控制台「更新」页可关）。只查不装 ——
     # 结果只用于页面上挂提示条，装不装由用户点。关掉后这里零网络请求。
+    # 这件事不进窗口：用户看到"后台查一次"只会以为程序在偷偷联网。
     try:
         if updater.auto_check():
-            print("  启动检查：后台查一次是否有新版本（设置里可关闭）", flush=True)
+            applog.info("启动检查：后台查一次是否有新版本（设置里可关闭）", tag="update")
     except Exception as e:                                     # noqa: BLE001
         applog.warn(f"启动检查没能启动（不影响使用）：{e}", tag="update")
     try:
