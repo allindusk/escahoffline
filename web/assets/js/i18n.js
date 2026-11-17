@@ -73,20 +73,55 @@ window.I18N = (() => {
     return s;
   }
 
-  /* 把译文写进 DOM：只动「第一个文本节点」，保住 <input>/<span> 等子元素 */
-  function setNodeText(el, text) {
-    if (el.firstChild && el.firstChild.nodeType === 3) {
-      el.firstChild.nodeValue = text;
-    } else {
-      el.textContent = text;
+  /* 元素「自己的」文案 = **第一个非空直接文本节点**。
+   *
+   * 为什么不能用 textContent（2026-11-17 事故）：设置面板里有一堆
+   *   <label data-i18n="set.avPos">位置<select><option>名条左侧…</select></label>
+   * textContent 会把 <option> 里的字一起算进来，于是"默认文案"变成
+   *   "位置 名条左侧 名条右侧 …"；只要译文里缺这个 key（更新包不带 i18n/ui.json，
+   * 老用户手里那份还没有新 key），这串就被整个写回 label —— 面板里多出一大段
+   * 重复的选项文字、select 被挤到后面，整块显示错乱。
+   * 同理 `<label>头像水平位移 <span id="valAvX">0px</span>` 会变成两个 0px。
+   */
+  function ownTextNode(el) {
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3 && n.nodeValue.trim()) return n;
     }
+    return null;
+  }
+
+  function ownText(el) {
+    const n = ownTextNode(el);
+    return n ? n.nodeValue.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  /* 把译文写进 DOM：只改**自己那一个文本节点**，子元素（input / span / select）
+   * 一个都不动；并保留该节点原有的首尾空白 —— `文字 <span>值</span>` 里的空格、
+   * label 与 <select> 之间的换行缩进都要留着，否则会挤在一起。 */
+  function setNodeText(el, text) {
+    const n = ownTextNode(el);
+    if (n) {
+      const lead = /^\s*/.exec(n.nodeValue)[0];
+      const tail = /\s*$/.exec(n.nodeValue)[0];
+      n.nodeValue = lead + text + tail;
+      return;
+    }
+    if (el.firstChild && el.firstChild.nodeType === 3) {
+      el.firstChild.nodeValue = text;       // 只有空白文本节点：直接改写
+      return;
+    }
+    if (!el.firstElementChild) {
+      el.textContent = text;                // 纯空元素：怎么写都安全
+      return;
+    }
+    el.insertBefore(document.createTextNode(text), el.firstChild);
   }
 
   function applyDom() {
     document.querySelectorAll('[data-i18n]').forEach(el => {
       const def = el.getAttribute('data-i18n-default');
-      if (def == null) el.setAttribute('data-i18n-default', el.textContent.trim());
-      const fb = def != null ? def : el.textContent.trim();
+      if (def == null) el.setAttribute('data-i18n-default', ownText(el));
+      const fb = def != null ? def : ownText(el);
       setNodeText(el, t(el.getAttribute('data-i18n'), fb));
     });
     document.querySelectorAll('[data-i18n-title]').forEach(el => {

@@ -1320,8 +1320,14 @@
       if (document.body.classList.contains('focus')) setFocus(false, true);
       togglePl();
     };
-    $('#plClose').onclick = closePl;
-    $('#plMask').onclick = closePl;
+    // #plClose / #plMask 是 v1.1.7 才加进 music.html 的。为什么要判空：升级是由
+    // **升级前那版**的更新器执行的，1.1.6 的白名单不含 music.html —— 老用户可能
+    // 拿到新 JS + 旧页面，直接 `$('#plClose').onclick` 会抛错，把后面整段初始化
+    // （落盘、唱片模式恢复）都带停。判空后最多少一个「✕ 收起」，页面照常可用。
+    for (const [sel, fn] of [['#plClose', closePl], ['#plMask', closePl]]) {
+      const el = $(sel);
+      if (el) el.onclick = fn;
+    }
 
     // 关页面/切后台：把位置落盘（pagehide 在移动端也比 beforeunload 靠谱）
     // 进 bfcache 的文档**不会自己停**：旧文档还在响、新文档又续播，就是"两路同一首歌"。

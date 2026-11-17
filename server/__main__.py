@@ -39,6 +39,43 @@ def _portable() -> bool:
     return os.path.exists(os.path.join(paths.ROOT, "python", "python.exe"))
 
 
+#: 种子里的这几个文件要**跟着版本覆盖**（其余只在缺失时补，别动用户文件）。
+#: 它们的共同点：是程序自带的文案 / 表，key 或条目随版本增删，不是用户攒的数据。
+_SEED_OVERWRITE = ("web/assets/i18n/ui.json", "web/data/stand_box.js")
+
+
+def _seed_overwrites(rel: str) -> bool:
+    """这个种子文件要不要「内容不同就覆盖」。
+
+    为什么页面也要覆盖（2026-11-17 实测）：更新是由**升级前那版**的更新器执行的，
+    1.1.6 的白名单只认 index/cg/setup/notice —— 于是 1.1.6→1.1.7 时 ``music.html``
+    留在旧版，而 ``music.js`` 已经换成新版：新版里多出来的 ``#plClose`` / ``#plMask``
+    在旧页面上不存在，``$('#plClose').onclick`` 直接抛错，原声集页的初始化中断。
+    只「补缺失文件」救不了这种「文件在、但内容是旧的」，所以页面按内容覆盖。
+    页面 / 索引 / 界面文案都是程序文件，用户不会去改；真正属于用户的数据
+    （``web/data/char_*.js``、``web/assets/i18n/<lang>/*.json``、``userdata/``）
+    根本不会进种子。
+    """
+    return rel in _SEED_OVERWRITE or (rel.startswith("web/") and rel.endswith(".html"))
+
+#: 种子路径 → 真实落点。**为什么不能直接按相同相对路径放**：种子里若出现
+#: ``web/assets/i18n/ui.json``，老版本更新器的黑名单（``web/assets/i18n/``）会在
+#: 解压阶段就把它滤掉，等于没送到。改个不带 i18n 段的名字放进种子，老版本照常
+#: 拷贝，新版本启动时再搬到这里。
+_SEED_MAP = {"extras/i18n-ui.json": "web/assets/i18n/ui.json"}
+
+
+def _same_file(a: str, b: str) -> bool:
+    """两个文件内容是否逐字节相同（种子自愈时用来省掉无意义的复制）。"""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read()
+    except OSError:
+        return True          # 读不了就当"一样"，宁可不写也别把文件写坏
+
+
 def _heal_seed_files() -> int:
     """把 ``web/assets/seed/`` 里的种子按**相同相对路径**补到本机缺失的位置。
 
@@ -50,7 +87,8 @@ def _heal_seed_files() -> int:
     回来（同一个旧清单）。
 
     种子随更新包一起下发（CI 把它放在 ``web/assets/`` 下，这个前缀任何版本都放行），
-    新版本启动时按同名相对路径补缺；**只在目标不存在时写**，不覆盖用户文件。
+    新版本启动时按同名相对路径补缺；页面 / 程序索引 / 界面文案这三类**内容不同就覆盖**
+    （见 :func:`_seed_overwrites`），其余只在目标不存在时写。
     白名单已经改成 ``web/*.html``，以后新页面不会再漏，这层只管老用户跨版本救场。
     """
     seed = os.path.join(paths.WEB, "assets", "seed")
@@ -60,8 +98,19 @@ def _heal_seed_files() -> int:
     for dirpath, _dirs, files in os.walk(seed):
         for fn in files:
             src = os.path.join(dirpath, fn)
-            dst = os.path.join(paths.ROOT, os.path.relpath(src, seed))
-            if os.path.exists(dst):
+            rel = os.path.relpath(src, seed).replace("\\", "/")
+            rel = _SEED_MAP.get(rel, rel)
+            dst = os.path.join(paths.ROOT, rel)
+            # 例外：页面 / 程序索引 / 界面文案是**程序文件**，必须跟着版本走 ——
+            # 老更新器的白名单 / 黑名单把它们挡掉了（它只认升级前那份清单），
+            # 不在这里覆盖的话老用户会停在旧页面 / 缺新 key。只在内容不同时写。
+            if _seed_overwrites(rel):
+                try:
+                    if os.path.exists(dst) and _same_file(src, dst):
+                        continue
+                except OSError:
+                    pass
+            elif os.path.exists(dst):
                 continue
             try:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)

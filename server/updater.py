@@ -85,6 +85,18 @@ WEB_DATA_UPDATABLE = (
     # 不需要 merge（不是按条目增删的表），整份覆盖即可。
     "web/data/stand_box.js",
 )
+#: ``web/assets/i18n/`` 整体是用户自己攒的译文（``<lang>/*.json`` + ``index.json``），
+#: 更新时绝不覆盖；但里面有一个例外：``ui.json`` 是**程序自带的界面文案**
+#: （ja / zh-Hans 两套，key 随版本增删），属于程序而不是用户数据。
+#:
+#: 为什么必须送达（2026-11-17 事故）：v1.1.7 给播放页加了一整批设置项（``set.av*``），
+#: 老用户手里的 ui.json 还是旧版 → 缺 key → ``i18n.js`` 回退到 HTML 里的原文，
+#: 而当时的回退取值用 textContent（把 ``<select>`` 的选项也算进去），于是设置面板里
+#: 多出一大段重复文字、下拉框被挤到后面，整块错乱。取值的 bug 已在 i18n.js 修掉，
+#: 这里再把 ui.json 放进更新包，新 key 才会真的到达用户手里（日文界面不再露中文）。
+WEB_ASSETS_UPDATABLE = (
+    "web/assets/i18n/ui.json",
+)
 
 
 def app_meta() -> dict:
@@ -565,6 +577,8 @@ def _is_program(name: str) -> bool:
         return False
     if any(low.endswith(p) for p in WEB_DATA_UPDATABLE):
         return True                       # 例外：这几个索引要能随更新刷新
+    if any(low.endswith(p) for p in WEB_ASSETS_UPDATABLE):
+        return True                       # 例外：界面文案是程序文件（见上面的说明）
     for b in BLACKLIST:
         if low.startswith(b) or f"/{b}" in low:
             return False
@@ -575,6 +589,8 @@ def allowed(relpath: str) -> bool:
     low = relpath.replace("\\", "/").lower()
     if low in WEB_DATA_UPDATABLE:
         return True                       # 同上：索引例外
+    if low in WEB_ASSETS_UPDATABLE:
+        return True                       # 同上：界面文案例外
     if any(low.startswith(b) for b in BLACKLIST):
         return False
     return any(_hit(low, w) for w in WHITELIST)
@@ -685,8 +701,9 @@ def apply_update(staging: str, job=None) -> dict:
     script = os.path.join(d, "apply_update.py")
     with open(script, "w", encoding="utf-8", newline="\n") as f:
         f.write(UPDATER_PY)
-    # 独立更新器只认这份清单，所以把索引例外也并进去（否则它会跳过 charmeta.js）
-    allow = tuple(WHITELIST) + tuple(WEB_DATA_UPDATABLE)
+    # 独立更新器只认这份清单，所以把索引 / 界面文案例外也并进去
+    # （否则它会跳过 charmeta.js、i18n/ui.json）
+    allow = tuple(WHITELIST) + tuple(WEB_DATA_UPDATABLE) + tuple(WEB_ASSETS_UPDATABLE)
     args = [sys.executable, script, paths.ROOT, staging,
             str(os.getpid()), "|".join(allow)]
     flags = 0x00000008 if os.name == "nt" else 0

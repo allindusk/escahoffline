@@ -209,9 +209,12 @@ jobs:
             Copy-Item -Destination "$dst/web"
           # 调试脚本（serve.py / stop_server.ps1 / dev-*.bat）不进更新包
           Copy-Item "$src/web/assets" -Destination "$dst/web" -Recurse
-          # i18n 是用户自己攒的译文（属于用户数据），更新包里不带，
-          # 否则会把用户后来的翻译覆盖回发布时的旧版
-          Remove-Item "$dst/web/assets/i18n" -Recurse -Force -ErrorAction SilentlyContinue
+          # i18n 里**只带 ui.json**：它是程序自带的界面文案（ja / zh 两套，key 随版本
+          # 增删），不带的话老用户永远缺新 key；其余（<lang>/*.json、index.json）是
+          # 用户自己攒的译文，带上去会把用户后来的翻译覆盖回发布时的旧版。
+          Get-ChildItem "$dst/web/assets/i18n" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'ui.json' } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item "$src/web/data" -Destination "$dst/web" -Recurse   # 只有索引，没有剧情正文
 
           # 兜底种子：**执行覆盖的是升级前那版程序生成的更新器脚本**，它只认当时
@@ -220,11 +223,17 @@ jobs:
           # （2026-11-16 实测）。这里把页面与关键程序索引以**相同相对路径**再放
           # 一份进 web/assets/seed/，由新版本启动时补到缺失的位置
           # （server/__main__.py::_heal_seed_files，只在目标不存在时写）。
+          # ui.json 是唯一「存在也要覆盖」的种子（程序文案，key 随版本增删）：
+          # 老更新器把它也挡在门外，只能靠新版启动自愈。**注意文件名**：种子路径里
+          # 不能出现 i18n 段，否则老版本的黑名单会在解压阶段就把它滤掉；
+          # 放成 extras/i18n-ui.json，由新版本按 _SEED_MAP 搬到 web/assets/i18n/ui.json。
           $seed = "$dst/web/assets/seed/web"
-          New-Item -ItemType Directory -Force -Path "$seed/data" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$seed/data", "$dst/web/assets/seed/extras" | Out-Null
           Get-ChildItem "$src/web" -Filter *.html -File | Copy-Item -Destination $seed
           Copy-Item "$src/web/data/stand_box.js" -Destination "$seed/data" -ErrorAction SilentlyContinue
+          Copy-Item "$src/web/assets/i18n/ui.json" -Destination "$dst/web/assets/seed/extras/i18n-ui.json" -ErrorAction SilentlyContinue
           if (-not (Test-Path "$seed/shell.html")) { throw "种子目录没生成（缺 shell.html）" }
+          if (-not (Test-Path "$dst/web/assets/seed/extras/i18n-ui.json")) { throw "种子目录没生成（缺 i18n-ui.json）" }
 
           $n = (Get-ChildItem $dst -Recurse -File | Measure-Object).Count
           "更新包内容：$n 个文件"
