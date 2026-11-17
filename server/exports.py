@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import zipfile
 
@@ -998,21 +999,63 @@ def export_trans_batch(job=None, scope: str = "translated",
             "bytes": size, "scope": scope}
 
 
-def trans_stats() -> dict:
-    # ``list`` 给译文页的「全选已翻译」用（前端要用它和标准剧情选择组件联动）
-    out = {"units": 0, "messages": 0, "list": [],
-           "speakers": len(load_speakers())}
-    if not os.path.isdir(TRANS_DIR):
-        return out
-    for name in os.listdir(TRANS_DIR):
-        # _ 开头是发言人表这类全局文件，不是"一部剧情"
-        if not name.endswith(".json") or name.startswith("_"):
+#: 译文统计缓存。``/api/state`` 挂在播放器/CG/原声/立绘每一页的首屏上，
+#: 而本函数要逐个打开 TRANS_DIR 里的译文 JSON 解析（实测 ~400 ms，冷/热都一样，
+#: 每次都真读盘）。多 iframe 同时刷新时会并发调用，把 400 ms 放大成几秒。
+#: 指纹用「文件名 + 大小 + mtime_ns」，只 stat 不读内容：译文一导入/删除就变，
+#: 所以不需要在每条写路径上挂失效钩子——这是自动的、幂等的。
+_TRANS_STATS_CACHE: dict = {"sig": None, "data": None}
+_TRANS_STATS_LOCK = threading.Lock()
+
+
+def _trans_dir_sig():
+    try:
+        entries = list(os.scandir(TRANS_DIR))
+    except OSError:
+        return ()
+    items = []
+    for e in entries:
+        if not e.name.endswith(".json"):
             continue
-        d = paths.load_json(os.path.join(TRANS_DIR, name), {}) or {}
-        n = len(d.get("messages") or {})
-        if n:
-            out["units"] += 1
-            out["messages"] += n
-            out["list"].append(name[:-5])
-    out["list"].sort()
-    return out
+        try:
+            st = e.stat()
+        except OSError:
+            continue
+        items.append((e.name, st.st_size, st.st_mtime_ns))
+    return tuple(items)
+
+
+def invalidate_trans_stats() -> None:
+    """显式失效（导入译文后调用；指纹变化其实也会自动触发重算）。"""
+    with _TRANS_STATS_LOCK:
+        _TRANS_STATS_CACHE["sig"] = None
+        _TRANS_STATS_CACHE["data"] = None
+
+
+def trans_stats() -> dict:
+    sig = _trans_dir_sig()
+    cached = _TRANS_STATS_CACHE
+    if cached["data"] is not None and cached["sig"] == sig:
+        return cached["data"]
+    with _TRANS_STATS_LOCK:
+        # 双检：等锁期间可能别的请求已经算好了
+        if cached["data"] is not None and cached["sig"] == sig:
+            return cached["data"]
+        # ``list`` 给译文页的「全选已翻译」用（前端要用它和标准剧情选择组件联动）
+        out = {"units": 0, "messages": 0, "list": [],
+               "speakers": len(load_speakers())}
+        if os.path.isdir(TRANS_DIR):
+            for name in os.listdir(TRANS_DIR):
+                # _ 开头是发言人表这类全局文件，不是"一部剧情"
+                if not name.endswith(".json") or name.startswith("_"):
+                    continue
+                d = paths.load_json(os.path.join(TRANS_DIR, name), {}) or {}
+                n = len(d.get("messages") or {})
+                if n:
+                    out["units"] += 1
+                    out["messages"] += n
+                    out["list"].append(name[:-5])
+        out["list"].sort()
+        cached["sig"] = sig
+        cached["data"] = out
+        return out

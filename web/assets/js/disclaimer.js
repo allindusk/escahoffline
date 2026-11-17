@@ -19,9 +19,23 @@ window.DISCLAIMER = (() => {
   const CSS = `
 #dlMask{position:fixed;inset:0;z-index:10000;background:rgba(4,7,12,.93);
   display:flex;align-items:center;justify-content:center;padding:20px}
-#dlMask .box{width:min(680px,96vw);max-height:88vh;overflow:auto;background:#0d1622;
-  border:1px solid #2b4a6b;border-radius:16px;padding:26px 30px;color:#dbe8f6;
-  box-shadow:0 24px 80px #000;font-size:15.1px;line-height:1.85}
+/* box-sizing 必须写：min() 只算内容宽度，26+30 的内边距会再加到总宽上，
+   390px 的手机上直接撑出屏幕、右侧文字被切掉（2026-11-17 截图可见）。 */
+#dlMask .box{box-sizing:border-box;width:min(680px,96vw);max-height:88vh;overflow:auto;
+  background:#0d1622;border:1px solid #2b4a6b;border-radius:16px;padding:26px 30px;
+  color:#dbe8f6;box-shadow:0 24px 80px #000;font-size:15.1px;line-height:1.85}
+/* 手机上内边距收一点、字号降半档：一屏里能多看到两三条，少滚几次 */
+@media (max-width:860px){
+  #dlMask{padding:12px}
+  #dlMask .box{padding:18px 16px;border-radius:14px;font-size:14.6px;line-height:1.75}
+  #dlMask h3{font-size:19.6px}
+  /* 5 条正文比一屏高，按钮原本在盒子最底下、要滚到底才看见（看着像"没有按钮"）。
+     手机上把操作条钉在盒子底边：滚动时一直露着，读完也随时能点。
+     背景跟盒子同色，盖住底下滚过去的正文。 */
+  #dlMask .ft{position:sticky;bottom:-18px;margin:0 -16px -18px;
+    padding:10px 16px 16px;background:#0d1622;
+    box-shadow:0 -10px 18px rgba(13,22,34,.9)}
+}
 #dlMask h3{margin:0 0 4px;font-size:21.3px;color:#ffd77a}
 #dlMask .sub{color:#7d92ab;font-size:14px;margin-bottom:16px}
 #dlMask ol{margin:0 0 16px;padding-left:22px}
@@ -142,8 +156,19 @@ window.DISCLAIMER = (() => {
       window.open('notice.html', '_blank', 'noopener');
     };
     if (!force) {
-      // 非强制时点遮罩也能关（方便用户回看后继续）
+      // 非强制（回看）时点遮罩 / 按 Esc 也能关，方便继续。首次强制必须点「我已了解」。
       m.querySelector('#dlOk').textContent = '关闭';
+      const close = () => {
+        m.remove();
+        document.removeEventListener('keydown', onKey, true);
+      };
+      const onKey = e => {
+        // 用「我已了解 / 关闭」按钮关掉时这里也要自净：元素没了就把监听摘掉
+        if (!m.isConnected) { document.removeEventListener('keydown', onKey, true); return; }
+        if (e.key === 'Escape') close();
+      };
+      m.onclick = e => { if (e.target === m) close(); };
+      document.addEventListener('keydown', onKey, true);
     }
   }
 

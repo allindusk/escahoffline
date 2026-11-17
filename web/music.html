@@ -5,8 +5,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 原声集</title>
-<link rel="stylesheet" href="assets/css/music.css?v=1116c">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
+<link rel="stylesheet" href="assets/css/music.css?v=1117o">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1117g">
+<!-- 悬停说明气泡（14px）：原生 title 只有 12px，低于全站字号下限 -->
+<link rel="stylesheet" href="assets/css/tip.css?v=1116c">
 </head>
 <body>
 <div class="mw">
@@ -17,6 +19,9 @@
         <button data-src="ost" class="on">原声集</button>
         <button data-src="voice">角色音声</button>
       </div>
+      <!-- 手机上歌单是盖住整页的抽屉：桌面的「☰ 列表」按钮会被抽屉自己盖住，
+           没有这个 ✕ 就关不掉（2026-11-17 反馈）。桌面上隐藏。 -->
+      <button id="plClose" type="button" title="收起列表">✕</button>
       <div id="plCount"></div>
     </div>
 
@@ -49,7 +54,9 @@
       <button id="bulkDel" title="把勾选的曲目一次移出当前播放列表">－ 移出列表</button>
       <span id="bulkCount">已选 0 项</span>
     </div>
-    <div id="plList"></div>
+    <!-- data-tip-off：曲目/语音行本来就有详情浮窗（music.js 的 #hov），
+         别让 assets/js/tip.js 再叠一个气泡（同一份信息显示两遍） -->
+    <div id="plList" data-tip-off></div>
   </aside>
 
   <!-- ============================ 右侧：唱片机 ============================ -->
@@ -88,7 +95,7 @@
       <span class="sep"></span>
       <button id="mode" title="播放模式">🔁 列表循环</button>
       <button id="rate" title="播放速度">1.0×</button>
-      <button id="fav" title="把这首歌加进当前播放列表">＋</button>
+      <button id="fav" title="把这首歌加进当前播放列表"><svg class="heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></button>
       <button id="plSet" title="跨页播放设置">⚙</button>
       <span class="vol">
         <button id="mute" title="静音">🔊</button>
@@ -105,6 +112,9 @@
 <!-- 悬停预览：鼠标停在一行上就浮出封面 + 详情（跟角色剧情侧栏一个用意） -->
 <div id="hov"><img id="hovImg" alt=""><div id="hovTxt"></div></div>
 
+<!-- 手机端歌单抽屉的遮罩：点空白处收起。窄屏才显示（桌面没有 plOpen 这个类） -->
+<div id="plMask"></div>
+
 <audio id="au" preload="metadata"></audio>
 
 <script src="data/names.js?v=1115e"></script>
@@ -112,18 +122,24 @@
      不写死 ?v=：由本地 http.server 的协商缓存按 mtime 失效，官方上新曲刷新即可见。 -->
 <script src="data/gallery.js" onerror="window.__GALLERY=window.__GALLERY||null"></script>
 <script src="data/voicemap.js?v=1115e" onerror="window.__VOICEMAP=window.__VOICEMAP||null"></script>
+<!-- 本机媒体清单 + 素材指纹：另外 4 个页面都加载它，只有原声集页以前漏了 ——
+     结果这里的横幅/头像拼不出 ?v=，享受不到长期缓存，也判不出"这张图到底在不在"。
+     缺文件只是退回"按约定拼路径"，不影响使用。 -->
+<script src="data/mediaindex.js"
+        onerror="window.__MEDIA=window.__MEDIA||null"></script>
 <!-- 2026-11-16：NPC / 其他分类的音声已整体删除（头像无法可靠关联），
      不再需要 sdmap.js / standmap.js -->
+<script src="assets/js/tip.js?v=1116c"></script>
 <script src="assets/js/common.js?v=1116a"></script>
-<script src="assets/js/dialog.js?v=1130d"></script>
-<script src="assets/js/mediaui.js?v=1123b"></script>
-<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/dialog.js?v=1117a"></script>
+<script src="assets/js/mediaui.js?v=1117b1"></script>
+<script src="assets/js/header.js?v=1130f"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <script src="assets/js/userdata.js?v=1115g"></script>
-<script src="assets/js/music.js?v=1116g"></script>
-<script src="assets/js/disclaimer.js?v=1102a"></script>
+<script src="assets/js/music.js?v=1117i"></script>
+<script src="assets/js/disclaimer.js?v=1117b"></script>
 <script src="assets/js/health.js?v=1130a"></script>
-<script src="assets/js/mobile.js?v=1115b"></script>
+<script src="assets/js/mobile.js?v=1117b"></script>
 <script>DISCLAIMER.auto(); HEALTH.start();</script>
 </body>
 </html>

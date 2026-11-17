@@ -222,7 +222,8 @@
         ? (e.name ? e.name.slice(0, 1) : '#')
         : String(e.idNum).slice(-3);
       const media = ava.length
-        ? '<img alt="" src="' + ava[0] + '">'
+        // data-lsrc：侧栏几百行，抽屉没展开时离屏，一张都不该请求
+        ? '<img alt="" data-lsrc="' + ava[0] + '">'
         : '<span class="ava-ph">' + esc(ph) + '</span>';
       const meta = META[e.cid] || {};
       const sub = [meta.t || '', e.n + ' 组 / ' + e.imgs + ' 张'].filter(Boolean).join(' · ');
@@ -340,7 +341,8 @@
       const showImg = !!(c.any && first);
       const body = !showImg
         ? '<span class="noimg-tip">未下载</span>'
-        : '<img alt="" loading="lazy" src="' + first.src + '">';
+        // data-lsrc：等这张卡片快滚进视野再取图（一次 388 张会把整页拖住）
+        : '<img alt="" data-lsrc="' + first.src + '">';
       d.innerHTML =
         '<div class="thumb' + (showImg ? '' : ' noimg') + '">' + body +
         '<span class="badge">' + (c.files.length ? c.files.length + ' 张' : '—') + '</span>' +
@@ -529,11 +531,35 @@
     renderGrid();
   }
 
+  /* 手机上的「卡片大小」要重新解释一次：
+     --cardMin 是"每格的最小宽度"，在 390px 屏上写死 300px 就只剩一列、
+     一张立绘占满整屏（2026-11-17 反馈"移动端不可用"）。
+     窄屏按屏宽折算成"一行几张"：小 3 张 / 中 2 张 / 大 1 张（特大并入大，按钮已隐藏）。
+     阈值特意把桌面的老默认 300 也算成「中」——不然升级上来的人只会看到一列巨图。
+     桌面（>860px）继续用像素值，行为与以前完全一致。 */
+  function cardMinCss(px) {
+    if (window.innerWidth > 860) return px + 'px';
+    if (px <= 200) return '28vw';
+    if (px <= 300) return '44vw';
+    return '62vw';
+  }
+
   function applySize(px) {
     ST.cardMin = px;
-    $('#grid').style.setProperty('--cardMin', px + 'px');
-    $$('#bar .sz').forEach(b => {
-      b.classList.toggle('on', +b.dataset.sz === px);
+    // 手机上没有「特大」这一档（62vw 以上都只有一列），高亮归到「大」
+    const eff = (window.innerWidth <= 860 && px > 300) ? 320 : px;
+    $('#grid').style.setProperty('--cardMin', cardMinCss(px));
+    /* 高亮按"最近的一档"算：老数据里存过 300（当年的桌面默认），
+       四个按钮是 180/240/320/440，严格相等的话一个按钮都不会亮，
+       看着像"尺寸按钮坏了"。 */
+    const btns = $$('#bar .sz');
+    let best = null, bestD = Infinity;
+    btns.forEach(b => {
+      const d = Math.abs(+b.dataset.sz - eff);
+      if (d < bestD) { bestD = d; best = b; }
+    });
+    btns.forEach(b => {
+      b.classList.toggle('on', b === best);
       b.disabled = false;
       b.title = '';
     });
@@ -544,7 +570,10 @@
     // 老版本存的是 stand/sd/npc/enemy，由 normScope 迁移（SD 值已回落角色立绘）
     ST.scope = normScope(pref('stand', 'scope', 'char-stand'));
     ST.sort = pref('stand', 'sort', 'id');
-    ST.cardMin = +pref('stand', 'size', 300) || 300;
+    /* 没存过尺寸时：电脑 300px（原来的默认），手机 240px（相当于两列）——
+       手机上沿用桌面的 300px 会退化成"一张图一屏" */
+    const savedSize = +pref('stand', 'size', 0) || 0;
+    ST.cardMin = savedSize || (window.innerWidth <= 860 ? 240 : 300);
     /* 筛选 / 搜索 / 选中的角色以前只存在内存里，刷新 shell.html?p=stand.html
        就全退回默认（2026-11-15 反馈）。一并存进偏好并回填控件。 */
     ST.filter = pref('stand', 'filter', '');
@@ -587,6 +616,11 @@
     $('#lbClose').onclick = closeLB;
     $('#lbPrev').onclick = () => moveImg(-1);
     $('#lbNext').onclick = () => moveImg(1);
+    /* 点灯箱空白处也关（与 CG 页 cg.js 同一套交互）：手机上没有 Esc 键，
+       只靠右上角按钮关太远。图片和工具按钮都不算空白，只有 #lb / #lbBody 本身算。 */
+    $('#lb').onclick = e => {
+      if (e.target.id === 'lb' || e.target.id === 'lbBody') closeLB();
+    };
     $('#lbFav').onclick = () => {
       const c = ST.list[lb.i];
       if (!UD || !c) return;
@@ -602,7 +636,25 @@
     };
     $('#lbFs').onclick = toggleLBFull;
 
+    /* 手机上没有 Esc 键：灯箱右上角那颗按钮的文案改成指纹图标 +「关闭」，
+       键盘快捷键那行本来在窄屏就藏了（见 mobile.css #lbHint）。 */
+    if (window.innerWidth <= 860) {
+      if ($('#lbClose')) $('#lbClose').textContent = '✕ 关闭';
+      if ($('#lbHint')) $('#lbHint').style.display = 'none';
+    }
+
     // 窗口尺寸变化 / 进出全屏：SD 统一缩放已注释（本页无 SD）
+    // 但 --cardMin 的单位会随窗口跨过 860px 在 vw / px 之间切换，要重算一次
+    let rzT = 0;
+    window.addEventListener('resize', () => {
+      clearTimeout(rzT);
+      rzT = setTimeout(() => {
+        $('#grid').style.setProperty('--cardMin', cardMinCss(ST.cardMin));
+        if ($('#lbClose')) {
+          $('#lbClose').textContent = window.innerWidth <= 860 ? '✕ 关闭' : '关闭 Esc';
+        }
+      }, 150);
+    });
 
     document.addEventListener('keydown', ev => {
       if (!$('#lb').classList.contains('on')) {

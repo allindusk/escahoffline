@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -108,6 +109,86 @@ def _stems(sub: str, base: str | None = None) -> set[str]:
     return out
 
 
+#: 参与素材指纹的目录（**必须等于**前端会拼 ``?v=<指纹>`` 的那一批）。
+#:
+#: 漏一个目录的后果很具体：那个目录里的图更新后 URL 不变，而
+#: ``/media/?v=...`` 的响应是 ``immutable`` —— 浏览器会拿旧图**整整一年**
+#: （2026-11-17 审计：cg / back / jacket / advfx / img_x2 全都不在原清单里，
+#: 「提高CG画质」重做高清图后用户反而看不到新图）。
+#: 所以：**新增任何会带 ?v 的图片目录，都要加到这里**。
+MEDIA_STAMP_DIRS = (
+    ("advfx", paths.IMG), ("avatar", paths.IMG), ("back", paths.IMG),
+    ("cg", paths.IMG), ("jacket", paths.IMG), ("sd", paths.IMG),
+    ("stand", paths.IMG), ("standfull", paths.IMG), ("story", paths.IMG),
+    ("avatar", paths.IMG_X2), ("back", paths.IMG_X2), ("cg", paths.IMG_X2),
+    ("stand", paths.IMG_X2), ("standfull", paths.IMG_X2),
+)
+
+
+def media_stamp() -> str:
+    """素材指纹：文件名 + 大小 + 修改时间 → 8 位十六进制。
+
+    用途只有一个：给图片 URL 带上 ``?v=<指纹>``，这样浏览器可以**长期缓存**这些
+    图（不再每次刷新都重新校验），而只要素材有任何增删改，指纹变化 → URL 变化 →
+    自动取新图。以前是手工写死 ``IMG_VER='9'``，换素材必须有人记得改常量，
+    否则用户看到的永远是旧图（2026-11-17 反馈"每次刷新重复加载横幅"）。
+
+    代价：整棵树 stat 一遍实测 0.06 秒（4.3 万个文件），只在开机 / 导出后算。
+    """
+    h = hashlib.md5()
+    for sub, base in MEDIA_STAMP_DIRS:
+        d = os.path.join(base, sub)
+        if not os.path.isdir(d):
+            continue
+        try:
+            with os.scandir(d) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    # 目录名一起进哈希：img/stand 与 img_x2/stand 不能互相抵消
+                    h.update(("%s|%s|%s|%d|%d;" % (
+                        os.path.basename(base), sub, entry.name,
+                        st.st_size, st.st_mtime_ns)).encode("utf-8"))
+        except OSError:
+            continue
+    return h.hexdigest()[:8]
+
+
+#: ``published_ver()`` 的缓存：mediaindex.js 的 (size, mtime_ns) → 版本串。
+_PUBLISHED_VER: dict = {"sig": None, "ver": ""}
+
+
+def published_ver() -> str:
+    """**当前已发布**的素材指纹（``data/mediaindex.js`` 里的 ``__MEDIA_VER``）。
+
+    ``/media/`` 的 ``immutable`` 只发给"版本号与它一致"的请求（见 api 的
+    ``_serve_media``）：这样旧地址（旧页面缓存下来的、手写的、别人拼的）一律
+    走 ``no-cache`` 校验，不可能出现"内容变了还拿旧图一年"。
+    只 stat 一个文件，文件没变就直接用缓存值。
+    """
+    try:
+        st = os.stat(MEDIA_INDEX)
+    except OSError:
+        return ""
+    sig = (st.st_size, st.st_mtime_ns)
+    if _PUBLISHED_VER["sig"] == sig:
+        return _PUBLISHED_VER["ver"]
+    ver = ""
+    try:
+        with open(MEDIA_INDEX, encoding="utf-8") as f:
+            head = f.readline()
+        m = re.search(r'__MEDIA_VER\s*=\s*"([0-9a-fA-F]*)"', head or "")
+        if m:
+            ver = m.group(1)
+    except OSError:
+        ver = ""
+    _PUBLISHED_VER["sig"] = sig
+    _PUBLISHED_VER["ver"] = ver
+    return ver
+
+
 def write_mediaindex() -> dict:
     """把"本机磁盘上到底有哪些头像 / 剧情横幅"写成 ``data/mediaindex.js``。
 
@@ -148,17 +229,25 @@ def write_mediaindex() -> dict:
                           (re.match(r"^(\d+)[a-z][a-z0-9]*$", s) for s in _stems("sd"))
                           if m})}
     body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    # 指纹一起写出去：播放器给图片 URL 加 ?v=<它>，素材一变地址就变，
+    # 浏览器可以长期缓存又不至于看到旧图（见 media_stamp）。
+    try:
+        ver = media_stamp()
+    except Exception:                                          # noqa: BLE001
+        ver = "9"
     try:
         os.makedirs(paths.DATA, exist_ok=True)
         tmp = MEDIA_INDEX + ".tmp"
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write('window.__MEDIA_VER="%s";\n' % ver)
             f.write("window.__MEDIA=" + body + ";\n")
         os.replace(tmp, MEDIA_INDEX)
     except OSError:
         # 写不进去只是"前端退回老的猜测逻辑"（多几个 404），不该影响启动
         return {"error": "无法写入 mediaindex.js"}
     return {"avatar": len(data["avatar"]), "story": len(data["story"]),
-            "stand": len(data["stand"]), "sd": len(data["sd"])}
+            "stand": len(data["stand"]), "sd": len(data["sd"]),
+            "ver": ver}
 
 
 # ---------------------------------------------------------------- 解包

@@ -21,13 +21,20 @@
 
   // 页面标识：给 body 打类，窄屏样式里 .mb-setup / .mb-cg 才能只命中对应页面。
   // 否则 main { padding } 这类规则会把播放器的舞台也一起缩掉（实测少了 90px）。
+  // 2026-11-17 加了原声集页的 mb-music：它的窄屏布局要独占一套（抽屉 + 网格控制条）。
+  // 立绘页再单独多一个 mb-stand：它和 CG 页共用 mb-cg 的侧栏骨架，
+  // 但卡片尺寸档位要自己算（立绘是竖图，CG 是 16:9）。
   document.body.classList.add(
     page === 'setup.html' ? 'mb-setup'
-      : page === 'cg.html' ? 'mb-cg' : 'mb-player');
+      : page === 'cg.html' || page === 'stand.html' ? 'mb-cg'
+        : page === 'music.html' ? 'mb-music' : 'mb-player');
+  if (page === 'stand.html') document.body.classList.add('mb-stand');
 
   /* ---------------------------------------------------------------- CG 抽屉
-   * 播放器页有 #sTab 把手，CG 页当初没做收起，窄屏下 252px 的侧栏会一直压着
-   * 卡片墙。这里补一个浮动按钮；选完角色 / 点空白处自动收起。
+   * 播放器页有 #sTab 把手，CG / 立绘页当初没做收起，窄屏下 252px 的侧栏会一直压着
+   * 卡片墙。这里补一个浮动按钮 + 一层遮罩；选完角色 / 点空白处自动收起。
+   * 2026-11-17：原来只有按钮没有遮罩，抽屉一开就盖掉大半屏幕、只能再点同一个按钮关，
+   * 点在卡片墙上的那次点击还会被抽屉"吃掉"；补上遮罩和「✕ 收起」文案。
    */
   function setupCgDrawer() {
     // 立绘/SD 页复用同一套侧栏骨架，抽屉逻辑也跟着复用
@@ -36,25 +43,37 @@
     const side = document.getElementById('sidebar');
     if (!side || document.getElementById('mbSideBtn')) return;
 
+    const mask = document.createElement('div');
+    mask.id = 'mbMask';
+    document.body.appendChild(mask);
+
     const btn = document.createElement('button');
     btn.id = 'mbSideBtn';
     btn.type = 'button';
-    btn.textContent = '☰ 角色列表';
+    document.body.appendChild(btn);
+
+    function setOpen(on) {
+      side.classList.toggle('mbOpen', on);
+      document.body.classList.toggle('mb-open', on);
+      btn.textContent = on ? '✕ 收起' : '☰ 角色列表';
+    }
+    setOpen(false);
+
     btn.onclick = function (e) {
       e.stopPropagation();                    // 别触发下面的"点外部收起"
-      side.classList.toggle('mbOpen');
+      setOpen(!side.classList.contains('mbOpen'));
     };
-    document.body.appendChild(btn);
+    mask.onclick = function () { setOpen(false); };
 
     // 选完角色就收起，别一直盖着卡片墙
     side.addEventListener('click', function (e) {
-      if (e.target.closest('.char-btn')) side.classList.remove('mbOpen');
+      if (e.target.closest('.char-btn')) setOpen(false);
     });
-    // 点抽屉外也收起
+    // 点抽屉外也收起（遮罩之外的边角）
     document.addEventListener('click', function (e) {
       if (!side.classList.contains('mbOpen')) return;
       if (side.contains(e.target) || e.target === btn) return;
-      side.classList.remove('mbOpen');
+      setOpen(false);
     });
   }
 
@@ -229,4 +248,78 @@
       }
     }
   }, true);
+
+  /* ------------------------------------------------ 点浮层之外就收起（移动端交互）
+   * 抽屉/面板展开后，手机上除了点「收起」按钮，点面板之外的任何地方也该收起来。
+   * 桌面侧栏是**常驻**的，点画面把侧栏收掉会破坏桌面体验 —— 所以整段必须在
+   * `if (!IS_MOBILE) return` 之后（本文件上面那行），只对手机/平板生效。
+   *
+   * 收起一律走各模块**现成的开合函数**（点它的按钮 / 改它的 class），
+   * 这样按钮文案、localStorage、fitStage 等副作用都不会漏。这里只判断"这一下
+   * 点击是不是发生在浮层之外"。CG / 立绘的角色抽屉在 setupCgDrawer() 里已有
+   * 遮罩点外部收起，不在此重复处理。
+   */
+  (function bindOutsideDismiss() {
+    // 这些是"打开浮层的开关"。点它们时即使某个浮层已展开，也不该顺手收掉——
+    // 典型场景：点 ⚙ 打开设置时，正好把前面的剧情列表收没了，很突兀。
+    const TRIGGERS =
+      '#sTab, #hTab, #sToggle, #hToggle, #btnSet, #setClose, ' +
+      '#btnTrans, #btnKeys, #btnLan, #btnShare, #mbSideBtn, ' +
+      '#apToggle, #apHead, #btnList, #plClose';
+    // 更高一层的模态弹窗开着时，点它的遮罩只该关它自己，不能穿透把底层浮层也收了。
+    // 注意 CG / 立绘页的 #mbMask 不在这里：那两页的抽屉在自己那段逻辑里已经
+    // 「点遮罩收起」，而这段规则表只覆盖剧情页 / 资源管理页（#mbMask 根本不存在）。
+    const MODAL =
+      '#tutMask, #dlMask, #dlgMask, #dlgPop, #shareMask, ' +
+      '#tourTip, #tourWelcome, #apDetailMask:not([hidden])';
+
+    // 每项：isOpen 判断展开 / panel 浮层自身选择器 / close 收起动作
+    const rules = [
+      {
+        page: 'index.html',
+        isOpen: () => document.body.classList.contains('sideOpen'),
+        panel: '#sidebar',
+        close: () => { const b = document.getElementById('sToggle'); if (b) b.click(); },
+      },
+      {
+        page: 'index.html',
+        isOpen: () => document.body.classList.contains('histOpen'),
+        panel: '#history',
+        close: () => { const b = document.getElementById('hToggle'); if (b) b.click(); },
+      },
+      {
+        page: 'index.html',
+        isOpen: () => { const s = document.getElementById('settings'); return !!s && !s.hidden; },
+        panel: '#settings',
+        close: () => { const s = document.getElementById('settings'); if (s) s.hidden = true; },
+      },
+      {
+        page: 'index.html',
+        isOpen: () => { const p = document.getElementById('transPanel'); return !!p && p.classList.contains('on'); },
+        panel: '#transPanel',
+        close: () => { const p = document.getElementById('transPanel'); if (p) p.classList.remove('on'); },
+      },
+      {
+        page: 'setup.html',
+        isOpen: () => { const a = document.getElementById('actPanel'); return !!a && !a.classList.contains('collapsed'); },
+        panel: '#actPanel',
+        close: () => { const b = document.getElementById('apToggle'); if (b) b.click(); },
+      },
+    ].filter(r => !r.page || r.page === page);
+    if (!rules.length) return;
+
+    // 冒泡阶段（BLOCKED 是捕获阶段 stopImmediatePropagation：被它拦下的按钮
+    // 事件根本到不了这里，不会误收起浮层，两者不冲突）
+    document.addEventListener('click', function (e) {
+      const t = e.target;
+      if (!t || typeof t.closest !== 'function') return;
+      if (t.closest(TRIGGERS)) return;
+      try { if (document.querySelector(MODAL)) return; } catch (err) { /* 忽略 */ }
+      for (const r of rules) {
+        if (!r.isOpen()) continue;
+        if (t.closest(r.panel)) continue;         // 点在浮层内部，不算外部
+        r.close();
+      }
+    });
+  })();
 })();

@@ -16,6 +16,17 @@
   // 于是 `$$('button', bar)` 拿到的是全页按钮 —— 在音声分类那行绑点击时，
   // 连「原声集 / 角色音声」标签页都被换上了分类的 onclick（2026-11-15 报障）。
   const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
+  // 触摸设备没有"悬停"：tap 也会触发 mouseenter，浮窗会赖在屏幕上不走
+  const TOUCH = !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+
+  // 收藏爱心：一枚**固定尺寸的 SVG 心形**，空心 / 实心只是"填充色"不同。
+  // 原来靠 ♥ / ♡ 两个字形，可这两个字的字宽本来就不一样（实心更窄），
+  // 点一下就"变小变窄"（2026-11-17 反馈）。控制条那颗大按钮和歌单每一行
+  // 右边的小心共用这一份，尺寸/描边由 CSS 按场景给（都只切色，不动盒）。
+  const HEART_SVG = '<svg class="heart" viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3'
+    + 'c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5'
+    + 'c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
 
   const GAL = window.__GALLERY || { tracks: [] };
   const VMAP = window.__VOICEMAP || { units: [] };
@@ -52,17 +63,18 @@
   const GROUPS = ['全部', '战斗', '严肃', '日常', '角色曲', '系统', '主题歌', '其他'];
   // 2026-11-16：音声只剩「角色」一类，分类按钮栏（KINDS / renderKind）已删除。
   const MODES = [
-    ['list', '🔁 列表循环'],
-    ['one', '🔂 单曲循环'],
-    ['single', '⏹ 单曲播放'],   // 播完就停，不自动接下一首（手动点 ⏭ 仍可切）
-    ['shuffle', '🔀 随机播放'],
-    ['seq', '➡ 顺序播放'],
+    ['list', '🔁 列表循环', '🔁 循环'],
+    ['one', '🔂 单曲循环', '🔂 单曲'],
+    ['single', '⏹ 单曲播放', '⏹ 单次'],   // 播完就停，不自动接下一首（手动点 ⏭ 仍可切）
+    ['shuffle', '🔀 随机播放', '🔀 随机'],
+    ['seq', '➡ 顺序播放', '➡ 顺序'],
   ];
   const RATES = [1, 1.25, 1.5, 2, 0.75, 0.5];
 
   const ST = {
     src: 'ost',        // ost | voice
     group: '全部',
+    chipsOpen: false,  // 分类按钮栏是否展开（默认收起，8 个按钮占两行太占地方）
     sort: 'no',
     q: '',
     curKey: '',
@@ -122,6 +134,16 @@
   }
   function tname(t) {
     return t.t || ('曲目 ' + String(t.no).padStart(3, '0'));
+  }
+  /* 播放模式的按钮文案：宽屏写全名（"🔁 列表循环"），
+     手机那格只有 86px 宽，全名会被省略成「单曲…」——窄屏改用两字简称，
+     具体含义切模式时的 toast 里还会说一遍（2026-11-17 反馈按钮文字被截断）。 */
+  function modeText(m) {
+    const it = MODES.find(x => x[0] === m) || MODES[0];
+    return (window.innerWidth <= 860 && it[2]) ? it[2] : it[1];
+  }
+  function modeFull(m) {
+    return (MODES.find(x => x[0] === m) || MODES[0])[1];
   }
   let toastEl = null;
   function toast(msg, bad) {
@@ -272,6 +294,32 @@
   }
 
   /* ---------------------------------------------------------------- 渲染 */
+  /* 收起态：把分类按钮尽量铺满第一行，放不下的才收进「展开」。
+   * 只留一个开关、后面一大片空着不好看（2026-11-17 反馈）——所以按容器实际
+   * 宽度动态算能塞几个，桌面侧栏宽 / 手机抽屉窄都能刚好填满一行。
+   * 当前分类不必强制留在这一行：开关按钮的文案就是当前分类名（如「战斗 ▾」），
+   * 状态一眼可见。用 ResizeObserver 在缩放 / 抽屉开合 / 唱片模式切换后重算。 */
+  function fitChips() {
+    const box = $('#plChips');
+    if (!box || ST.src === 'voice' || ST.chipsOpen) return;
+    const btns = [...box.querySelectorAll('button')];
+    if (!btns.length) return;
+    btns.forEach(b => { b.hidden = false; });          // 先全部显示才能量到真实宽度
+    const cs = getComputedStyle(box);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const gap = parseFloat(cs.columnGap || cs.gap) || 0;
+    const avail = box.clientWidth - pad;
+    if (avail <= 0) return;                            // 容器还没布局好，跳过
+    let used = 0;
+    btns.forEach((b, i) => {
+      const w = b.getBoundingClientRect().width;
+      // 第一个是开关，必须显示；后面的：加上它仍不超宽就留下，否则收起
+      const fits = i === 0 || (used + gap + w) <= avail + 0.5;
+      b.hidden = !fits;
+      if (fits) used += w + (i === 0 ? 0 : gap);
+    });
+  }
+
   function renderChips() {
     if (ST.src === 'voice') {
       // 2026-11-16：音声只剩角色一类，没有可切换的分类，整行隐藏
@@ -282,16 +330,31 @@
     $('#plChips').style.display = '';
     const have = {};
     for (const t of TRACKS) have[t.g] = (have[t.g] || 0) + 1;
-    const html = GROUPS.filter(g => g === '全部' || have[g]).map(g =>
+    const groups = GROUPS.filter(g => g === '全部' || have[g]);
+    const open = ST.chipsOpen;
+    const label = ST.group === '全部' ? '全部分类' : ST.group;
+    const toggle = '<button id="plChipToggle" class="chip-toggle' + (open ? ' on' : '') +
+      '" title="' + (open ? '收起分类' : '展开分类') + '">' +
+      label + (open ? ' ▴' : ' ▾') + '</button>';
+    const chips = groups.map(g =>
       '<button data-g="' + g + '"' + (ST.group === g ? ' class="on"' : '') + '>' +
       g + (g === '全部' ? '' : ' ' + have[g]) + '</button>');
-    $('#plChips').innerHTML = html.join('');
-    $$('#plChips button').forEach(b => {
+    $('#plChips').innerHTML = toggle + chips.join('');
+    const tg = $('#plChipToggle');
+    if (tg) tg.onclick = () => {
+      ST.chipsOpen = !ST.chipsOpen;
+      prefSet('chipsOpen', ST.chipsOpen);
+      renderChips();                       // 只重画按钮栏，不动曲目列表
+    };
+    $$('#plChips button[data-g]').forEach(b => {
       b.onclick = () => {
         ST.group = b.dataset.g; prefSet('group', ST.group);
+        ST.chipsOpen = false; prefSet('chipsOpen', false);  // 选完就收起
         renderChips(); renderList();
       };
     });
+    // 收起态下一帧量宽度决定显示几个（innerHTML 刚写入，需等布局完成）
+    if (!open) requestAnimationFrame(fitChips);
   }
 
   function renderList() {
@@ -321,7 +384,7 @@
       const on = ST.curKey === it.key ? ' on' : '';
       const dis = it.src ? '' : ' dis';
       const pick = ST.pick.has(it.key) ? ' checked' : '';
-      const fav = inList(it.key) ? '♥' : '♡';
+      const fav = inList(it.key);
       return '<div class="row' + on + dis + '" data-i="' + i + '">' +
         '<input class="ck" type="checkbox" data-key="' + esc(it.key) + '"' + pick +
         ' title="勾选后可批量导出 / 加入播放列表">' +
@@ -329,8 +392,8 @@
         '<span class="nm">' + esc(it.title) +
         (it.group && it.group !== '其他' ? '<i>' + esc(it.group) + '</i>' : '') + '</span>' +
         '<span class="du">' + fmt(it.dur) + '</span>' +
-        '<span class="hf' + (fav === '♥' ? ' on' : '') + '" data-fav="1" title="' +
-        (fav === '♥' ? '从当前播放列表移除' : '加进当前播放列表') + '">' + fav + '</span>' +
+        '<span class="hf' + (fav ? ' on' : '') + '" data-fav="1" title="' +
+        (fav ? '从当前播放列表移除' : '加进当前播放列表') + '">' + HEART_SVG + '</span>' +
         '</div>';
     }).join('');
     bindRows(box);
@@ -357,7 +420,8 @@
       if (!thumb) {
         ava = '<span class="ava ava-ph">角色</span>';
       } else {
-        ava = '<img class="ava" alt="" loading="lazy" src="' + esc(thumb) + '">';
+        // data-lsrc：语音分组有几百条，等滚到视野再取头像
+        ava = '<img class="ava" alt="" data-lsrc="' + esc(thumb) + '">';
       }
       html.push('<div class="vgrp' + (open ? ' open' : '') +
         (voiceGroupPlaying(u) ? ' on' : '') + '" data-uid="' + u.id + '">' + ava +
@@ -370,7 +434,7 @@
         const push = c => {
           const it = voiceItem(u, c);
           const on = ST.curKey === it.key ? ' on' : '';
-          const fav = inList(it.key) ? '♥' : '♡';
+          const fav = inList(it.key);
           // 有 ASR 转写就显示台词，比流水号有用得多（label_voice.py 写进 c[4]）
           const raw = (c[4] ? c[4].slice(0, 40) : '')
             || c[0].replace(/^(voice|sys)_\d*_?/, '').replace(/^80000_\d{4}/, '');
@@ -382,7 +446,8 @@
             '<span class="nm">' + esc(c[3] || raw) +
             '<i>' + esc(raw) + '</i></span>' +
             '<span class="du">' + fmt(c[2]) + '</span>' +
-            '<span class="hf' + (fav === '♥' ? ' on' : '') + '" data-fav="1">' + fav +
+            '<span class="hf' + (fav ? ' on' : '') + '" data-fav="1" title="' +
+            (fav ? '从当前播放列表移除' : '加进当前播放列表') + '">' + HEART_SVG +
             '</span></div>');
         };
         for (const c of visClips) push(c);
@@ -404,8 +469,12 @@
         prefSet('open', Array.from(ST.open));
         renderList();
       };
-      g.onmouseenter = ev => showHover(ev, voiceHover(+g.dataset.uid));
-      g.onmouseleave = hideHover;
+      // 触屏没有 mouseleave：tap 会先合成一个 mouseenter，卡片就永久赖在列表上
+      // （2026-11-17 排查：曲目行早就挡掉了，分组横幅这里漏了）
+      if (!TOUCH) {
+        g.onmouseenter = ev => showHover(ev, voiceHover(+g.dataset.uid));
+        g.onmouseleave = hideHover;
+      }
     });
     bindRows(box, true);
     // applySdThumbs(box);  // 2026-11-16：头像改立绘静态图，不再抓 SD 首帧
@@ -430,16 +499,21 @@
           return;
         }
         playItem(it);
+        // 手机：歌单是盖住整页的抽屉，选完这首就该让出画面（桌面没有 plOpen）
+        if (document.body.classList.contains('plOpen')) closePl();
       };
-      r.onmouseenter = ev => showHover(ev, itemHover(it));
-      r.onmouseleave = hideHover;
+      // 悬停浮窗只在有鼠标的设备上绑：手机上 tap 会先发 mouseenter，
+      // 浮窗会盖在列表行上不放（2026-11-17 反馈）
+      if (!TOUCH) {
+        r.onmouseenter = ev => showHover(ev, itemHover(it));
+        r.onmouseleave = hideHover;
+      }
       const fav = r.querySelector('[data-fav]');
       if (fav) {
         fav.onclick = ev => {
           ev.stopPropagation();
           const on = toggleInList(it.key);
           fav.classList.toggle('on', on);
-          fav.textContent = on ? '♥' : '♡';
           paintFav();
           if ($('#lstOnly').checked) renderList();
           toast(on ? '已加进「' + (curList() || {}).n + '」'
@@ -514,6 +588,8 @@
   function hideHover() {
     $('#hov').classList.remove('on');
   }
+  // 兜底：触摸任何位置都收起详情浮窗（触屏笔记本这类混合设备上仍可能残留）
+  document.addEventListener('touchstart', hideHover, { passive: true });
   function kv(k, v) {
     return '<div class="kv"><span>' + k + '</span><b>' + esc(v) + '</b></div>';
   }
@@ -566,6 +642,42 @@
      这份状态也是"回到原声集页继续听"的依据。 */
   const NOW_KEY = 'esc_ost_now';
   const QUEUE_KEY = 'esc_ost_queue';
+
+  /* ==================== 全站同一时刻只允许一路音频在响 ====================
+     报障（2026-11-17）：手机上放一首歌 → 切到别的页面 → 再回原声集，偶尔会有
+     **同一首歌两路音频叠在一起**。
+
+     根因不是一个"显眼的 bug"，而是同一个 origin 下可能同时存在两份 music.html：
+     外壳常驻的 #fMusic 是一份；内容 iframe 偶尔也会把 music.html 装进去
+     （绕过外壳 hook 的导航），或者旧文档还在 bfcache 里没被真正释放。
+     每份都带自己的 <audio>，浏览器不会替我们互斥 —— 谁在放谁就响。
+
+     所以这里不赌"只会有一份"，直接加一张**播放所有权票**：
+       · 谁开始播放，就往 localStorage 写一张票（带实例 id + 时间戳）；
+       · 别的 music 实例收到 storage 事件，票比自己新就停下自己的音频。
+     结果：不管开几份、切多少次页，同一时刻只有一路在响；切歌只是换自己那支
+     audio 的 src（playItem 里已经按 key 去重），不会多出声。 */
+  const OWN_KEY = 'esc_ost_owner';
+  const MY_ID = Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+  let ownAt = 0;          // 我最后一次拿票的时间
+  let resumeOnShow = false;   // 进 bfcache 前是"在播"，回来时要接着播
+
+  function claimAudio() {
+    ownAt = Date.now();
+    try {
+      localStorage.setItem(OWN_KEY, JSON.stringify({ id: MY_ID, at: ownAt }));
+    } catch (e) { /* 隐私模式写不了，那只能靠各实例自觉 */ }
+  }
+
+  window.addEventListener('storage', e => {
+    if (e.key !== OWN_KEY || !e.newValue) return;
+    let v = null;
+    try { v = JSON.parse(e.newValue); } catch (err) { return; }
+    if (!v || v.id === MY_ID) return;
+    // 别人的票更新（严格大于，平手不互相掐）→ 让路，只暂停音频，
+    // 界面/进度/播放条由下面 AU 的 pause 事件统一收尾
+    if ((+v.at || 0) > ownAt && !AU.paused) AU.pause();
+  });
 
   /** 把当前播放队列落盘：跨页迷你条的上一首/下一首靠它。
    *  只在 build() 里写（队列变化时），不塞进每秒的 saveNow，省得反复序列化。 */
@@ -635,7 +747,7 @@
     AU.volume = ST.muted ? 0 : ST.vol;
     AU.playbackRate = ST.rate;
     paintVolume();
-    $('#mode').textContent = (MODES.find(m => m[0] === ST.mode) || MODES[0])[1];
+    $('#mode').textContent = modeText(ST.mode);
     $('#mode').classList.toggle('on', ST.mode !== 'list');
     $('#rate').textContent = (String(ST.rate).indexOf('.') < 0 ? ST.rate.toFixed(1) : ST.rate) + '×';
 
@@ -681,7 +793,9 @@
     const jk = $('#jacket');
     if (!it) {
       $('#tTitle').textContent = '还没有选曲';
-      $('#tSub').textContent = '在左侧点一首开始播放';
+      // 手机上没有"左侧歌单"，写"左侧"会让人找不存在的区域
+      $('#tSub').textContent = window.innerWidth <= 860
+        ? '点「☰ 列表」挑一首开始' : '在左侧点一首开始播放';
       jk.classList.add('none');
       jk.classList.remove('native');
       jk.removeAttribute('src');
@@ -718,17 +832,24 @@
     } catch (e) { /* 老浏览器没有 Media Session */ }
   }
 
+  // 收藏按钮那颗心：用上面那份固定尺寸的 SVG，只有填充色随状态变
+  // （HEART_SVG 已在文件头定义，行内小心跟这里用的是同一枚）。
   function paintFav() {
     const it = currentItem();
     const b = $('#fav');
     const on = it ? inList(it.key) : false;
     b.classList.toggle('on', on);
-    b.textContent = on ? '♥' : '＋';
+    if (!b.querySelector('.heart')) b.innerHTML = HEART_SVG;
     b.title = on ? '从当前播放列表移除' : '加进当前播放列表';
   }
 
   function setPlayingUI(on) {
-    $('#play').textContent = on ? '⏸' : '▶';
+    // 2026-11-17：不再用 ▶ / ⏸ 字形当图标 —— 字形自带左右留白不对称，
+    // 22px 的字塞进 54px 的圆里怎么调都"看着不居中"（用户两次反馈）。
+    // 改成空壳 + CSS 画形状：三角形的包围盒就落在圆心，不依赖字体。
+    const b = $('#play');
+    if (!b.querySelector('.ic')) b.innerHTML = '<span class="ic"></span>';
+    b.classList.toggle('is-playing', !!on);
     $('#vinylBox').classList.toggle('playing', on);
     $('.vinyl').classList.toggle('playing', on);
   }
@@ -931,6 +1052,28 @@
     }
   }
 
+  /* ------------------------------------------------- 歌单抽屉 / 唱片模式
+   * 桌面：歌单常驻，plOpen / focus 这两个类不会造成任何视觉变化之外的东西。
+   * 手机：歌单是盖住整页的抽屉，所以必须"能关"——遮罩、✕、Esc、选完曲都收起；
+   * 唱片模式会把歌单藏起来，因此点「列表」要先退出唱片模式再开抽屉，
+   * 否则按钮看起来像坏的（2026-11-17 反馈）。
+   */
+  function closePl() { document.body.classList.remove('plOpen'); }
+  function togglePl() { document.body.classList.toggle('plOpen'); }
+
+  function setFocus(on, remember) {
+    const was = document.body.classList.contains('focus');
+    document.body.classList.toggle('focus', !!on);
+    const b = $('#btnFocus');
+    if (b) {
+      b.classList.toggle('on', !!on);
+      b.textContent = on ? '退出唱片模式' : '唱片模式';
+    }
+    if (on) closePl();          // 抽屉和唱片模式互斥，别让抽屉浮在唱片上
+    // 只有用户真的点了才落盘；深链 ?focus 属于"这次就看看"，不写偏好
+    if (remember && was !== !!on) prefSet('focus', !!on);
+  }
+
   /* ---------------------------------------------------------------- 初始化 */
   function init() {
     ST.mode = prefGet('mode', 'list');
@@ -941,6 +1084,7 @@
        刷新 shell.html?p=music.html 时全退回默认很烦（2026-11-15 反馈）。 */
     const g0 = prefGet('group', '全部');
     ST.group = GROUPS.indexOf(g0) >= 0 ? g0 : '全部';
+    ST.chipsOpen = !!prefGet('chipsOpen', false);
     const s0 = prefGet('sort', 'no');
     ST.sort = ['no', 'name', 'dur'].indexOf(s0) >= 0 ? s0 : 'no';
     ST.q = String(prefGet('q', '') || '');
@@ -982,13 +1126,27 @@
     });
     $('#btnExport').style.display = ST.src === 'voice' ? 'none' : '';
 
-    $('#mode').textContent = (MODES.find(m => m[0] === ST.mode) || MODES[0])[1];
+    $('#mode').textContent = modeText(ST.mode);
     $('#rate').textContent = (String(ST.rate).indexOf('.') < 0 ? ST.rate.toFixed(1) : ST.rate) + '×';
 
     renderChips();
     renderList();
     paintTrack();
     setPlayingUI(false);
+    /* 容器宽度变了（窗口缩放 / 手机抽屉开合 / 唱片模式隐藏再显示）就重算
+     * 收起态能塞几个分类。观察 plChips 自身即可：display:none→block 会触发。 */
+    try {
+      const box = $('#plChips');
+      let lastW = box.clientWidth;
+      const onSize = () => {
+        const w = box.clientWidth;
+        if (w === lastW) return;            // 只看宽度，避免高度变化引起的抖动/递归
+        lastW = w;
+        if (!ST.chipsOpen) fitChips();
+      };
+      if (window.ResizeObserver) new ResizeObserver(onSize).observe(box);
+      else window.addEventListener('resize', onSize);
+    } catch (e) { /* 老浏览器忽略，仍有 renderChips 时的首次 fit */ }
 
     /* ---- 播放列表操作 ---- */
     $('#lstSel').onchange = e => {
@@ -1046,10 +1204,11 @@
     $('#mode').onclick = () => {
       const i = MODES.findIndex(m => m[0] === ST.mode);
       ST.mode = MODES[(i + 1) % MODES.length][0];
-      $('#mode').textContent = MODES.find(m => m[0] === ST.mode)[1];
+      $('#mode').textContent = modeText(ST.mode);
       $('#mode').classList.toggle('on', ST.mode !== 'list');
       prefSet('mode', ST.mode);
-      toast($('#mode').textContent);
+      // 按钮上可能是两字简称，toast 里给全名，别让人猜
+      toast(modeFull(ST.mode));
     };
     $('#rate').onclick = () => {
       const i = RATES.indexOf(ST.rate);
@@ -1119,7 +1278,9 @@
     });
     AU.addEventListener('durationchange', paintProgress);
     AU.addEventListener('loadedmetadata', paintProgress);
-    AU.addEventListener('play', () => { setPlayingUI(true); saveNow(true); });
+    // 任何一路开始播放（用户点、外壳命令、续播、上一首下一首）都在这里拿票，
+    // 让别的 music 实例立刻闭嘴 —— 这是"同一时刻只有一路音频"的唯一入口
+    AU.addEventListener('play', () => { claimAudio(); setPlayingUI(true); saveNow(true); });
     AU.addEventListener('pause', () => { setPlayingUI(false); saveNow(false); });
     AU.addEventListener('error', () => {
       if (!AU.src) return;
@@ -1152,14 +1313,33 @@
     $('#bulkAdd').onclick = () => bulkList(true);
     $('#bulkDel').onclick = () => bulkList(false);
     paintBulk();
-    $('#btnFocus').onclick = () => {
-      document.body.classList.toggle('focus');
-      $('#btnFocus').classList.toggle('on', document.body.classList.contains('focus'));
+    $('#btnFocus').onclick = () => setFocus(!document.body.classList.contains('focus'), true);
+    // 手机上的「☰ 列表」：唱片模式下列表是 display:none 的，
+    // 先退出唱片模式再开抽屉，不然点了完全没反应
+    $('#btnList').onclick = () => {
+      if (document.body.classList.contains('focus')) setFocus(false, true);
+      togglePl();
     };
-    $('#btnList').onclick = () => document.body.classList.toggle('plOpen');
+    $('#plClose').onclick = closePl;
+    $('#plMask').onclick = closePl;
 
     // 关页面/切后台：把位置落盘（pagehide 在移动端也比 beforeunload 靠谱）
-    window.addEventListener('pagehide', () => saveNow());
+    // 进 bfcache 的文档**不会自己停**：旧文档还在响、新文档又续播，就是"两路同一首歌"。
+    // 所以入 bfcache 前先暂停，位置照旧记"在播放"，回来（pageshow persisted）再抢票续播。
+    window.addEventListener('pagehide', ev => {
+      saveNow();
+      if (ev.persisted && !AU.paused) {
+        resumeOnShow = true;
+        AU.pause();
+        saveNow(true);      // 状态仍记"在播"，别的页面 / 回来时据此续播
+      }
+    });
+    window.addEventListener('pageshow', ev => {
+      if (!ev.persisted || !resumeOnShow) return;
+      resumeOnShow = false;
+      claimAudio();
+      AU.play().catch(() => {});
+    });
 
     /* ---- 跨页播放设置：这条设置由 shell.html 读，控制"别的页面"那条播放条 ---- */
     const CFG_KEY = 'esc_ost_shell_cfg';
@@ -1258,10 +1438,10 @@
       const it = TRACKS.find(t => String(t.no) === want);
       if (it) playItem(trackItem(it));
     }
-    if (qs.get('focus')) {
-      document.body.classList.add('focus');
-      $('#btnFocus').classList.add('on');
-    }
+    // 唱片模式：先把按钮文案对齐，再按「上次的选择 / 深链 ?focus」恢复。
+    // 深链只用这一次，不写偏好（截图和调试经常带这个参数）
+    setFocus(false, false);
+    if (qs.get('focus') || prefGet('focus', false)) setFocus(true, false);
   }
 
   //: 这些控件里敲字是正常的，键盘事件不能抢
@@ -1277,7 +1457,10 @@
   }
 
   function onKeyEscBlur(ev) {
-    if (ev.key === 'Escape') { hideHover(); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
+    if (ev.key === 'Escape') {
+      hideHover(); closePl();
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    }
   }
 
   function onKey(ev) {
@@ -1416,9 +1599,7 @@
         case 'mode': {
           var j = MODES.findIndex(function (x) { return x[0] === ST.mode; });
           ST.mode = MODES[(j + 1) % MODES.length][0];
-          $('#mode').textContent = MODES.find(function (x) {
-            return x[0] === ST.mode;
-          })[1];
+          $('#mode').textContent = modeText(ST.mode);
           $('#mode').classList.toggle('on', ST.mode !== 'list');
           prefSet('mode', ST.mode); saveNow();
           break;

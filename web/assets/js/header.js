@@ -83,6 +83,17 @@ header[data-shared] nav a:hover{color:#e6e9f0;background:#243040}
 header[data-shared] nav a.on{color:#0d1016;background:#e0b566;font-weight:600}
 /* 右侧第一个控件负责把后续内容推到右边（由 JS 打标） */
 header[data-shared] .hdr-first{margin-left:auto}
+/* 右侧控件组：窄屏要能"滑着看"，所以包了一层 .hdr-right（外）+ .hdr-scroll（内）。
+   桌面上箭头不显示、间距和原来一模一样，视觉零变化。 */
+header[data-shared] .hdr-right{display:flex;align-items:center;gap:14px;min-width:0;
+  margin-left:auto}
+header[data-shared] .hdr-scroll{display:flex;align-items:center;gap:14px;min-width:0}
+header[data-shared] .hdrArrow{display:none;flex:none;width:26px;height:26px;padding:0;
+  align-items:center;justify-content:center;font-size:16px;line-height:1;border-radius:8px;
+  color:#9aa4b8;background:#1c2230;border:1px solid #2a3040;cursor:pointer;
+  font-family:inherit}
+header[data-shared] .hdrArrow:hover{color:#e6e9f0;border-color:#3a4a60}
+header[data-shared] .hdrArrow:disabled{opacity:.3;cursor:default}
 /* GitHub 图标：和「？」按钮同尺寸的方形按钮 */
 header[data-shared] #ghLink{flex:none;width:28px;height:26px;display:flex;
   align-items:center;justify-content:center;border-radius:8px;
@@ -115,6 +126,26 @@ header[data-shared] #btnLan{padding:4px 12px;border-radius:13px;font-size:14px;
   transition:color .15s,border-color .15s,background .15s}
 header[data-shared] #btnLan:hover{color:#e6e9f0;background:#243040;
   border-color:#3a4a60}
+
+/* 窄屏：右侧那一排控件**不换行**，改成一条能横向滑的带子，
+   两端出现「‹ ›」箭头提示还能滑（2026-11-17 用户反馈：手机上控件太多，
+   GitHub 图标被挤到第二行，看着像坏了）。
+   左箭头只在已经滑出去之后才出现，右箭头只在右边还有内容时出现 —— 
+   不滑的时候只占一个箭头的位置，尽量不抢控件的宽度。 */
+@media (max-width:860px){
+  /* flex-basis 必须写 0（不是 auto）：换行是按"假设宽度"判断的，
+     写 auto 时这组控件的内容宽度一超就整组掉到下一行 —— 正是要修的现象。
+     写 0 之后它永远留在标题右边，多出来的部分交给内部横向滚动。 */
+  header[data-shared] .hdr-right{flex:1 1 0;gap:4px;margin-left:auto;min-width:0}
+  header[data-shared] .hdr-scroll{flex:1 1 auto;gap:4px;
+    overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch}
+  header[data-shared] .hdr-scroll::-webkit-scrollbar{display:none}
+  /* 带子里的控件不许被压扁（否则「局域网二维码」会被挤成一个字） */
+  header[data-shared] .hdr-scroll > *{flex:none}
+  header[data-shared] .hdr-right.can-scroll #hdrNext{display:flex}
+  header[data-shared] .hdr-right.can-scroll.scrolled #hdrPrev{display:flex}
+}
 `;
 
   function currentPage() {
@@ -139,11 +170,16 @@ header[data-shared] #btnLan:hover{color:#e6e9f0;background:#243040;
       '<nav>' + NAV.map(n =>
         '<a href="' + n.href + '"' + (n.href === page ? ' class="on"' : '') +
         '>' + n.text + '</a>').join('') + '</nav>' +
-      right.join('');
+      // 右侧控件统一装进 .hdr-right：窄屏靠它横向滑动，桌面靠它贴到最右
+      '<div class="hdr-right">' +
+        '<button class="hdrArrow" id="hdrPrev" type="button" title="向左查看更多功能">‹</button>' +
+        '<div class="hdr-scroll">' + right.join('') + '</div>' +
+        '<button class="hdrArrow" id="hdrNext" type="button" title="向右查看更多功能">›</button>' +
+      '</div>';
 
     // 右侧第一个控件负责"把剩下所有东西推到右边"（各页控件数量不同，
     // 写在 CSS 里没法统一指定，所以交给 JS 标一下）
-    const firstRight = h.querySelector('nav').nextElementSibling;
+    const firstRight = h.querySelector('.hdr-scroll') && h.querySelector('.hdr-scroll').firstElementChild;
     if (firstRight) firstRight.classList.add('hdr-first');
 
     // 样式放到 head 末尾：与各页 css 同权重但顺序在后，能覆盖旧规则
@@ -154,12 +190,37 @@ header[data-shared] #btnLan:hover{color:#e6e9f0;background:#243040;
     document.body.insertBefore(h, document.body.firstChild);
 
     /* 把顶栏真实高度写进 CSS 变量。
-       窄屏下顶栏会变成两行（标题一行 + 导航一行），高度不再固定 50px；
+       窄屏下顶栏会变成两行（标题+控件一行、导航一行），高度不再固定 50px；
        而原声集页的歌单抽屉、一些 position:fixed 的浮层是按 50px 写死的，
        不跟着变就会被顶栏盖住一截。 */
     function syncH() {
       document.documentElement.style.setProperty('--hdrH', h.offsetHeight + 'px');
+      syncArrows();
     }
+
+    /* 「‹ ›」只在真的能滑的时候出现：
+       右箭头 = 右边还有内容；左箭头 = 已经滑出去一段了。
+       不滑的时候只占一个箭头的位置，尽量不抢控件宽度。 */
+    const rightBox = h.querySelector('.hdr-right');
+    const scrollBox = h.querySelector('.hdr-scroll');
+    const prevB = h.querySelector('#hdrPrev');
+    const nextB = h.querySelector('#hdrNext');
+    function syncArrows() {
+      if (!scrollBox || !rightBox) return;
+      const max = scrollBox.scrollWidth - scrollBox.clientWidth;
+      const can = max > 2;
+      rightBox.classList.toggle('can-scroll', can);
+      rightBox.classList.toggle('scrolled', can && scrollBox.scrollLeft > 2);
+      if (prevB) prevB.disabled = !can || scrollBox.scrollLeft <= 2;
+      if (nextB) nextB.disabled = !can || scrollBox.scrollLeft >= max - 2;
+    }
+    if (scrollBox && prevB && nextB) {
+      const step = 120;
+      prevB.addEventListener('click', () => scrollBox.scrollBy({ left: -step, behavior: 'smooth' }));
+      nextB.addEventListener('click', () => scrollBox.scrollBy({ left: step, behavior: 'smooth' }));
+      scrollBox.addEventListener('scroll', syncArrows, { passive: true });
+    }
+
     syncH();
     window.addEventListener('resize', syncH);
     window.addEventListener('orientationchange', syncH);

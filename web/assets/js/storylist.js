@@ -382,7 +382,7 @@ window.SL = (() => {
         + '<input type="checkbox" class="sl-chk" data-key="' + esc(key) + '"'
         + (on ? ' checked' : '') + (dis ? ' disabled' : '') + '>'
         + (showBnr
-          ? '<span class="sl-bnr"><img alt="" loading="lazy" src="' + esc(i.cover) + '"'
+          ? '<span class="sl-bnr"><img alt="" data-lsrc="' + esc(i.cover) + '"'
             + (i.adv ? ' class="adv"' : '')
             + ' onerror="var r=this.parentNode.parentNode;'
             + 'this.parentNode.style.display=\'none\';if(r)r.classList.remove(\'bnr\')">'
@@ -451,7 +451,7 @@ window.SL = (() => {
         // 没下过公共素材时返回 ''，分组头就退回纯文字一行。
         const bnr = cfg.groupBanner ? cfg.groupBanner(id) : '';
         html += '<div class="og-head' + (open ? ' open' : '') + (bnr ? ' has-bnr' : '') + '" data-gid="' + esc(id) + '">'
-          + (bnr ? '<span class="bnr"><img alt="" loading="lazy" src="' + esc(bnr) + '"'
+          + (bnr ? '<span class="bnr"><img alt="" data-lsrc="' + esc(bnr) + '"'
             + ' onerror="this.closest(\'.bnr\').style.display=\'none\'"></span>' : '')
           + '<span class="row"><span class="nm">' + esc(cfg.groupLabel ? cfg.groupLabel(id) : id) + '</span>'
           + '<span class="cnt">' + gk.length + '</span>'

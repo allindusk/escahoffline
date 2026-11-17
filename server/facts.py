@@ -54,7 +54,12 @@ PUBLIC_PARTS = {
     "bg": ("背景", "bundle_bgimage_", 205),
     "bgm": ("BGM 音乐", "bundle_music_", 539),
     "sfx": ("音效", "bundle_sound_", 31),
-    "avatar": ("角色头像", "bundle_chara_c-panel_", 20),
+    # 前缀串必须**如实**列出全部来源：真正下哪些包由 stages.avatar_bundle_applicable()
+    # 决定（cpanel 半身像也在里面 —— 播放器多形态角色还要用它的 170 头像），
+    # 这里只写官方 d/b/n/e 会让下一个人以为 cpanel 已经不装了（2026-11-17 审计）。
+    "avatar": ("角色/NPC/敌人头像",
+               "bundle_chara_c-panel_|bundle_usericon_user_icon_"
+               "|bundle_battle_character_icon_character_", 38),
     # 剧情横幅：角色剧情入口图 + 主线/活动/其他的章节横幅（播放器当标题用）
     "banner": ("剧情横幅", "bundle_episodeicons_episode_character_|bundle_image_story_", 40),
     # 演出特效：表情符号（汗/怒り/落ち込み…）与画面特效的原图集与逐帧参数表。
@@ -73,6 +78,11 @@ PUBLIC_OPTIONAL = {
     # 原声集：165 张封面（12 MB）+ 画廊独占的少数曲目（各约 2.5 MB）。
     # 158/165 首与已有 BGM 是同一份母带，直接复用本地文件，不重复下载。
     "gallery": ("原声集（封面 + 独占曲）", "bundle_gallerymusicjacket", 30),
+    # 全部立绘：官方 standimage 源包一共 2623 个 / 589 MB，一包 = 一个角色的
+    # 一套服装（内含该套的全部表情图层）。剧本每套只用其中几张，剩下的
+    # 「剧情里永远不会出现」的立绘只有装了这一项才有成品（约 9.7 千张 / 0.94 GB）。
+    # 已随剧情下过的包不会重下，实际增量通常只有一百多 MB。
+    "stand_extra": ("全部立绘（含剧情没用到的）", "bundle_standimage_", 589),
     # 2026-11-16：NPC / 敌人的 SD 小人 + 音声整体停用。
     # 之前这一项 "sd_npc" 是 download/install 的白名单入口，删掉后
     # /api/install/base 传 parts:["sd_npc"] 会被过滤掉，后端不再下载。

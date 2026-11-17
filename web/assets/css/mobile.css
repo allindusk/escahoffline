@@ -26,6 +26,8 @@
 
 /* CG 页的「角色列表」抽屉开关（只在窄屏出现，桌面不显示） */
 #mbSideBtn { display: none; }
+/* 抽屉遮罩：由 mobile.js 创建，窄屏且抽屉打开时才有内容（见下面的媒体查询） */
+#mbMask { display: none; }
 
 @media (max-width: 860px) {
 
@@ -68,7 +70,7 @@
     body > header[data-shared] > nav a:nth-child(4) { grid-column: 2 / span 2; }
     body > header[data-shared] > nav a:nth-child(5) { grid-column: 4 / span 2; }
   }
-  body > header[data-shared] #btnLan { min-width: 0; padding: 4px 9px; }
+  body > header[data-shared] #btnLan { min-width: 0; padding: 3px 6px; }
 
   /* ---------- 三页共用：占据剩余高度的主容器 ---------- */
   /* 竖屏用 dvh，地址栏收起/展开时不会把底部控制条顶出屏幕外 */
@@ -88,24 +90,44 @@
 
   /* ---------- 播放器：左右侧栏改成盖在页面上的抽屉 ---------- */
   /* 手机上 300px 的固定侧栏会把舞台挤没。改成抽屉，开合逻辑直接复用
-     player.js 现成的 .hide + #sTab/#hTab 把手，不改它的 JS。 */
+     player.js 现成的 .hide + #sTab/#hTab 把手，不改它的 JS。
+     默认状态必须是**收起**：页面脚本要等数据加载完才把抽屉摆到该在的位置，
+     在那之前要是按"展开"画出来，用户就会先看到列表、随后再被滑走 ——
+     切页时那种"列表弹一下"就是这么来的（2026-11-17 反馈）。
+     展开只看类名：剧情页 body.sideOpen / body.histOpen，CG/立绘 #sidebar.mbOpen。 */
   #sidebar {
     position: fixed; top: 0; bottom: 0; left: 0;
     width: min(86vw, 340px); z-index: 220;
     box-shadow: 12px 0 32px rgba(0, 0, 0, .55);
+    transform: translateX(-101%); transition: transform .18s ease;
   }
   #history {
     position: fixed; top: 0; bottom: 0; right: 0;
     width: min(86vw, 340px); z-index: 220;
     box-shadow: -12px 0 32px rgba(0, 0, 0, .55);
+    transform: translateX(101%); transition: transform .18s ease;
   }
+  body.sideOpen #sidebar,
+  body.mb-cg #sidebar.mbOpen { transform: none; }
+  body.histOpen #history { transform: none; }
   #sTab, #hTab { z-index: 230; }
 
-  /* CG 页没有现成的开合逻辑：默认滑出屏幕，点「角色列表」再拉回来 */
+  /* CG / 立绘页没有现成的开合逻辑：默认滑出屏幕，点「角色列表」再拉回来。
+     抽屉从屏幕最顶上开始占满整屏 —— 顶栏那一截空出来没有用：
+     遮罩盖住之后本来就点不到下面的按钮，留白只是白丢一行空间（2026-11-17 用户要求）。
+     背后垫一层遮罩（#mbMask，由 mobile.js 建），点一下也能收起。 */
   body.mb-cg #sidebar {
-    transform: translateX(-100%); transition: transform .18s ease;
+    top: 0; bottom: 0; left: 0;
+    width: min(86vw, 340px); max-width: none; z-index: 220;
+    border-radius: 0 12px 12px 0;
+    padding-top: 8px;
+    transform: translateX(-101%); transition: transform .18s ease;
   }
   body.mb-cg #sidebar.mbOpen { transform: none; }
+  body.mb-cg.mb-open #mbMask {
+    display: block; position: fixed; inset: 0;
+    z-index: 210; background: rgba(3, 5, 9, .62);
+  }
   #mbSideBtn {
     display: block; position: fixed; left: 10px; bottom: 12px; z-index: 240;
     padding: 8px 14px; border-radius: 20px; font-size: 14px; cursor: pointer;
@@ -114,12 +136,18 @@
     font-family: inherit;
   }
   #mbSideBtn:hover { border-color: #5a6f8a; }
+  /* 「✕ 收起」是浮在左下角的，抽屉展开时正好压住列表最后一行（人点不到那个角色）。
+     给列表尾部留出跟按钮一样高的空档，滚到底也能点全。 */
+  body.mb-cg.mb-open #charList { padding-bottom: 56px; }
 
   /* CG / 立绘页顶部那条「共 N 组 · 卡片大小 小中大」：窄屏一行放不下，
      右侧的「大/特大」会被切掉。允许换行（高度自适应），按钮不缩。 */
   #bar { flex-wrap: wrap; row-gap: 4px; height: auto; padding: 5px 10px; }
   #bar .sizes { margin-left: 0; }
   #bar .sz { flex: none; }
+  /* 立绘页在手机上最多只有「三列 / 两列 / 一列」三种结果：
+     「特大」跟「大」都是一列，留着只会让人以为点了没反应，直接藏掉。 */
+  body.mb-stand #bar .sz[data-sz="440"] { display: none; }
 
   /* 控制条：第一行播放三连，第二行工具按钮横向滚动，进度条独占一行 */
   #controls { gap: 8px; row-gap: 8px; padding: 8px 10px; }
@@ -135,11 +163,14 @@
   #pinfo { max-width: 44vw; }
 
   /* 设置面板：窄屏直接铺满，否则右侧一列会被裁掉。
-     max-height 也要放开，否则被桌面的 calc(100vh - 62px) 卡住、底部留一条缝。 */
+     max-height 也要放开，否则被桌面的 calc(100vh - 62px) 卡住、底部留一条缝。
+     宽度**不要写 100vw**：100vw 含纵向滚动条那 15px，面板会比可用区宽一截，
+     右侧那列的取值（「20px」这类）正好被裁在屏幕外（2026-11-17 审计）。
+     有 left:0 + right:0 就够了，宽度自动等于可视宽度。 */
   #settings {
-    width: 100vw; left: 0; right: 0; top: 0; bottom: 0;
-    height: auto; max-height: none;
-    grid-template-columns: 1fr; border-radius: 0; padding: 16px 14px 96px;
+    left: 0; right: 0; top: 0; bottom: 0;
+    width: auto; height: auto; max-height: none;
+    border-radius: 0; padding: 16px 14px 96px;
     /* 全屏铺满时用不透明底色，否则背后的按钮/导航会透出来很乱 */
     background: #121620;
     /* 必须压过左右把手（#sTab/#hTab z-index 230）和竖屏提示条（215），
@@ -157,6 +188,15 @@
     font-size: 17px !important; z-index: 310 !important;
   }
 
+  /* 分类页签：窄屏 5 个页签放得下就一行；放不下自动换行（不再夹带恢复默认按钮）。 */
+  #setTabs { flex-wrap: wrap; gap: 7px; padding-bottom: 10px; }
+  #setTabs button { padding: 8px 12px; }
+  /* 恢复本页默认独立在页脚，手机上给足点击面积，仍与页签明显分开。 */
+  .set-foot { text-align: left; }
+  .set-foot button { padding: 10px 16px; }
+  /* 画面缩放这类长选项在窄屏会撑出面板：给 select 限宽 + 允许收缩。
+     选择器带 #settings 是为了压过 player.css 的同款高特异性规则。 */
+  #settings .set-page label.ctlrow select { max-width: 55%; min-width: 0; flex-shrink: 1; }
   /* 设置项的「?」角标在手机上要按得中：桌面 17px 对指尖太小，
      放大到 22px 并加点内边距（气泡请点它或在带说明的那一项上点一下）。 */
   #settings .qh { width:22px; height:22px; font-size:15px; margin-left:7px; }
@@ -238,8 +278,16 @@
   .cards { grid-template-columns: 1fr; }
   .card button { width: 100%; }
   /* 「名称 / 说明 / 状态」三列在手机上放不下，改成上下堆叠 */
-  .basepack .bp-row { grid-template-columns: 1fr; gap: 4px; justify-items: start; }
+  .basepack .bp-row { grid-template-columns: minmax(0, 1fr); gap: 4px; justify-items: start; }
   .basepack .bp-row > :last-child { justify-self: start; }
+  /* 名称必须能折行：setup.css 里 .nm 的 nowrap 规则（第 616 行，在它的媒体查询
+     覆盖规则之后）优先级更高、会盖掉媒体查询里的 normal —— 于是「公共素材（背景图 /
+     背景音乐 / 音效 / 角色·NPC·敌人头像 / 剧情横幅）」这行在手机上仍不折行，
+     把单列网格撑破、整页出横向滚动条（2026-11-17 反馈）。mobile.css 后加载，
+     这里显式改回可折行 + anywhere，并把 grid item 的最小宽度放开。 */
+  .basepack .bp-row .nm { white-space: normal; min-width: 0; max-width: 100%;
+    overflow-wrap: anywhere; }
+  .basepack .bp-row .dim { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   .statGrid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .cleanRow { flex-wrap: wrap; row-gap: 8px; }
   .optrow { flex-wrap: wrap; row-gap: 6px; }
@@ -341,11 +389,25 @@
     height: 50px; min-height: 50px; max-height: 50px;
     flex-wrap: nowrap; padding: 0 10px; gap: 10px; align-items: center;
   }
+  /* 导航不能再 absolute 居中：横屏时标题、导航、右侧按钮都在同一行，
+     绝对定位的导航会直接压在标题上，右边几个入口还会被切掉（2026-11-17 截图）。
+     改成普通 flex 子项吃掉中间剩余宽度；真放不下就横向滑，不会叠字。 */
   body > header[data-shared] > nav {
-    position: absolute; left: 50%; transform: translateX(-50%);
-    order: 0; width: auto; overflow: visible;
+    position: static; left: auto; transform: none;
+    order: 0; width: auto; flex: 1 1 auto; min-width: 0;
+    flex-wrap: nowrap; justify-content: center;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
   }
-  body > header[data-shared] > nav a { padding: 3px 9px; }
+  body > header[data-shared] > nav::-webkit-scrollbar { display: none; }
+  body > header[data-shared] > nav a { padding: 3px 9px; flex: none; }
+  /* 右侧控件组在横屏不参与"分剩余宽度"：位置让 nav 去滑，
+     否则它会把宽度吃光、把 GitHub 图标挤出屏幕（2026-11-17 横屏截图发现）。 */
+  body > header[data-shared] .hdr-right {
+    flex: 0 0 auto; width: auto; margin-left: 0;
+  }
+  /* 标题在横屏只用来"我这是哪一页"，缩小给导航让位 */
+  body > header[data-shared] h1 { font-size: 14px; letter-spacing: 0; }
 
   /* 控制条单行：左侧播放三连固定，进度条弹性，右侧工具横向滑动 */
   #controls { flex-wrap: nowrap; padding: 5px 8px; gap: 8px; overflow: hidden; }
@@ -365,7 +427,9 @@
   #sidebar, #history { width: min(64vw, 320px); }
 
   /* 播放器设置面板：横屏两列，高度不够就滚动 */
-  #settings { grid-template-columns: 1fr 1fr; padding: 12px 14px 60px; }
+  #settings { padding: 12px 14px 60px; }
+  .set-page { grid-template-columns: 1fr 1fr; gap: 0 22px; }
+  .set-page > .av-settings { grid-template-columns: 1fr 1fr; gap: 0 22px; }
 
   /* CG 页：横屏可以回到多列 */
   #grid { --cardMin: 30vw; }

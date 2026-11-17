@@ -395,6 +395,12 @@ def process_group(task):
     if allowed:
         faces = {k: v for k, v in faces.items() if k in allowed}
 
+    # ``faces_wanted is None`` = 「整包全套表情」模式（``--all-packs``）：
+    # 剧本每套服装一般只用其中 3~6 张，剩下的（立绘页才看得到的「照」「苦」）
+    # 没人引用也照样合成。必须放在 allowed 过滤**之后** —— 包内残留精灵不算。
+    if faces_wanted is None:
+        faces_wanted = sorted(faces)
+
     # —— alpha 主体修复（整组同一 gain）：部分包的 DXT5 alpha 只有 204/179/163，
     # 不拉回 255 的话合成图是半透明的，网页上脸和身体会透出页面底色（色块）。
     gain, amode = alpha_gain(base, faces)
@@ -555,6 +561,30 @@ def collect_tasks():
     return groups
 
 
+def collect_packs():
+    """扫**已下载的立绘源包** → ``{(编号, 服装): None}``，None = 包内全部表情。
+
+    为什么不复用 :func:`collect_tasks`：那个只收剧本引用过的键。官方每套装扮
+    的包里通常有 7~12 张表情，剧本只用其中几张，于是磁盘上永远缺剩下那批
+    「剧情里从来不会出现的立绘」（立绘页看着就是少几张、半边灰）。
+    「全部立绘」安装项要的是整包全套，所以按包扫、不看剧本。
+    """
+    groups = {}
+    pat = re.compile(r"^bundle_standimage_stand_(\d+)_([0-9a-z]+)$", re.I)
+    try:
+        names = os.listdir(IMG)
+    except OSError:
+        return groups
+    for fn in names:
+        m = pat.match(fn.split(".")[0])
+        if m:
+            # 编号保留前导零：stand_36_ 与 stand_036_ 是两套不同素材。
+            # 服装段必须转**大写**：包名是小写 hex，成品文件名是大写
+            # （stand_5008_89D489C5..._8FC6.webp），小写会在磁盘上多出一套重复组。
+            groups[(m.group(1), m.group(2).upper())] = None
+    return groups
+
+
 # ---------------------------------------------------------------- 全库体检修复
 #: 体检逻辑版本（只用于日志留痕；用户是点按钮触发的，不靠版本号跳过）。
 #:
@@ -571,6 +601,22 @@ STAND_FIX_VER = 3
 #: 「源素材层问题」名单：重写也改不好的组（官方矩形/贴图本身对不上底图）。
 #: 记下来下次体检跳过，避免每次点按钮都白重做一遍、还连带重做高清图。
 SUSPECT_FILE = "stand_src_suspect.json"
+
+#: 进度上报行前缀：``@PROG <百分比> <在做什么>``。
+#:
+#: 为什么要有这一行：体检要解包上千个资源包、跑好几分钟，而服务端是拿 Popen
+#: 起这个脚本的 —— 不往 stdout 报进度，页面上的进度条就只能从 0% 干等到结束
+#: 时突然跳到 100%（2026-11-16 用户反馈「一直是 0% 然后突然 100%」）。
+#: 前缀用 ``@PROG`` 是为了让人看的日志行和服务端解析的行一眼分得开。
+PROG_TAG = "@PROG"
+
+
+def _prog(pct, label=""):
+    """报一条进度（只影响界面显示，失败一律吞掉 —— 进度报不出来也不能中断体检）。"""
+    try:
+        print(f"{PROG_TAG} {float(pct):.1f} {label}".rstrip(), flush=True)
+    except Exception:                                        # noqa: BLE001
+        pass
 
 
 def _disk_groups():
@@ -599,7 +645,7 @@ def _scan_one(path):
         return os.path.basename(path), None, None
 
 
-def scan_disk(workers=None):
+def scan_disk(workers=None, on_progress=None):
     """一遍扫完所有成品图，按组汇总：
 
     ``{组key: {"alpha": 最差主体alpha, "sizes": {尺寸...}, "codes": [表情code...]}}``
@@ -622,7 +668,13 @@ def scan_disk(workers=None):
     out = {}
     w = workers or min(12, os.cpu_count() or 4)
     with ProcessPoolExecutor(max_workers=w) as ex:
-        for name, size, mode in ex.map(_scan_one, files, chunksize=64):
+        for i, (name, size, mode) in enumerate(
+                ex.map(_scan_one, files, chunksize=64), 1):
+            if on_progress is not None and i % 1000 == 0:
+                try:
+                    on_progress(i, len(files))
+                except Exception:                            # noqa: BLE001
+                    pass
             parts = name[:-5].split("_")
             if len(parts) < 4 or parts[0] != "stand":
                 continue           # stand_xxx_base.png 之类的调试残留不算成品
@@ -821,7 +873,7 @@ def _deep_one(task):
             base.size, orphan)
 
 
-def scan_bad_deep(tasks, workers=None):
+def scan_bad_deep(tasks, workers=None, on_progress=None):
     """深度体检（慢，要解包）。返回 ``(det, orphans)``：
 
     det[key] = ``{"m": 亮暗比, "q": 对齐色差, "a": 成品alpha差异, "rgb": 成品RGB差异,
@@ -843,6 +895,13 @@ def scan_bad_deep(tasks, workers=None):
             det[key] = {"m": m, "q": q, "a": a, "rgb": rgb, "size": size}
             if orp:
                 orphans[key] = sorted(orp)
+            # 回调比日志行密：日志每 200 组写一条就够，但界面的进度条要更细
+            # （25 组 ≈ 几秒一次，服务端 1.2 秒轮询一次刚好接得住）。
+            if on_progress is not None and (i + 1) % 25 == 0:
+                try:
+                    on_progress(i + 1, len(tasks))
+                except Exception:                            # noqa: BLE001
+                    pass
             if (i + 1) % 200 == 0:
                 print(f"  深度体检 {i + 1}/{len(tasks)}…", flush=True)
     return det, orphans
@@ -909,9 +968,17 @@ def repair(force=True, dry=False):
     ``dry=True`` 只出报告不写文件（``--check``）。
     """
     t0 = time.time()
-    disk = scan_disk()
+    # 进度口径（页面上的进度条）：读成品 0–25%、解包体检 25–80%、重做 80–96%、
+    # 写回 96–100%。分这么细是因为最慢的是中间那步 —— 以前它一句进度都不报，
+    # 用户盯着 0% 等好几分钟，最后一下跳到 100%（2026-11-16 反馈）。
+    # 比例是按实测校准的：1.9 万张成品读 alpha 约 60 秒，解包 2600 组约 90 秒，
+    # 给读盘留 25% 才不会前半程爬得比后半程慢一半。
+    _prog(0, "读取已经装好的立绘…")
+    disk = scan_disk(on_progress=lambda i, n: _prog(
+        25.0 * i / max(1, n), f"读取立绘 {i}/{n} 张"))
     if not disk:
         print("没有已合成的立绘，跳过", flush=True)
+        _prog(100, "没有已经装好的立绘，不用检查")
         return 0
     groups = {k: sorted(v["codes"]) for k, v in disk.items()}
     print(f"立绘体检：已合成 {len(groups)} 组", flush=True)
@@ -945,7 +1012,13 @@ def repair(force=True, dry=False):
         if tok and tok != num:
             pkg_warn.append(f"{k} 用的是 stand_{tok} 的包")
     print("③④ 检查成品与源包（要解包，慢一些）…", flush=True)
-    det, orphans = scan_bad_deep([(k, groups[k]) for k in with_pkg])
+    # 这一步是全流程最慢的（每组都要解一遍源包），进度必须报出来
+    _prog(25, f"逐个解包检查 {len(with_pkg)} 组（最慢的一步）…")
+    det, orphans = scan_bad_deep(
+        [(k, groups[k]) for k in with_pkg],
+        on_progress=lambda i, n: _prog(
+            25.0 + 55.0 * i / max(1, n), f"逐个解包检查 {i}/{n} 组"))
+    _prog(80, "统计要重做的立绘…")
 
     x2keys = set()
     x2dir = os.path.join(os.path.dirname(WEBD), "media", "img_x2", "stand")
@@ -1037,6 +1110,8 @@ def repair(force=True, dry=False):
             codes = groups.get(key) or []
             if not codes:
                 continue
+            _prog(80.0 + 16.0 * (i - 1) / max(1, len(todo)),
+                  f"重新生成第 {i}/{len(todo)} 组…")
             try:
                 # force=True：体检已经确认成品是旧图/坏图，不能再让「文件都在就跳过」
                 # 的幂等守卫把它们挡回去（类型 B/C 分支以前就这么跳过，修了等于没修）
@@ -1062,6 +1137,7 @@ def repair(force=True, dry=False):
             print(f"  (dry) {key}  {kind.get(key, '')}", flush=True)
 
     x2_stale = sorted(set(pending) | set(x2_stale))
+    _prog(96, "写回结果…")
     try:
         arch = os.path.join(BASE, "_archive")
         os.makedirs(arch, exist_ok=True)
@@ -1109,6 +1185,7 @@ def repair(force=True, dry=False):
         pass
     print(f"立绘体检完成：修好 {len(fixed_keys)} 组，失败 {failed} 组，"
           f"源素材层跳过 {len(skipped)} 组，用时 {time.time() - t0:.0f}s", flush=True)
+    _prog(100, "体检完成")
     return len(fixed_keys)
 
 
@@ -1120,9 +1197,13 @@ if __name__ == "__main__":
         repair()
         sys.exit(0)
     os.makedirs(WEBS, exist_ok=True)
-    groups = collect_tasks()
-    if len(sys.argv) > 1:
-        want = set(sys.argv[1:])
+    # ``--all-packs``：按**已下载的源包**做，不看剧本引用 —— 这是「全部立绘」安装项
+    # 唯一能补齐「剧情从未用到的表情」的入口（剧本没引用 → collect_tasks 永远收不到）。
+    all_packs = "--all-packs" in sys.argv
+    groups = collect_packs() if all_packs else collect_tasks()
+    _nums = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if _nums:
+        want = set(_nums)
         groups = {k: v for k, v in groups.items() if k[0] in want}
     slots = {}
     trims = {}
@@ -1147,11 +1228,14 @@ if __name__ == "__main__":
             force = True
     if force:
         print(f"合成逻辑版本 -> {GEN_VER}：本次强制重写全部合成图", flush=True)
-    tasks = [(num, cloth, sorted(faces),
+    # faces 为 None（--all-packs）时，由 process_group 从包里取全套表情 code。
+    tasks = [(num, cloth, (sorted(faces) if faces else None),
               None if force else old_slots.get(f"{num}_{cloth}"))
              for (num, cloth), faces in groups.items()]
-    total_faces = sum(len(t[2]) for t in tasks)
-    print(f"分组 {len(tasks)} 个，需合成表情 {total_faces} 张", flush=True)
+    total_faces = sum(len(t[2]) if t[2] else 0 for t in tasks)
+    print(f"分组 {len(tasks)} 个，"
+          + (f"按包内全套表情合成（至少 {total_faces} 张，含剧本没引用的）"
+             if all_packs else f"需合成表情 {total_faces} 张"), flush=True)
 
     # 每组「用哪个分层包」必须留痕：立绘串成另一套（stand_36 被 036 的包覆盖）
     # 这类问题，光看「合成 N 套成功」永远发现不了。
@@ -1160,7 +1244,7 @@ if __name__ == "__main__":
         p = _find_pkg(num, cloth)
         if not p:
             print(f"  ✗ {num}/{cloth} → 找不到分层包"
-                  f"（{len(groups[(num, cloth)])} 个表情没有图）", flush=True)
+                  f"（{len(groups[(num, cloth)] or [])} 个表情没有图）", flush=True)
             continue
         b = os.path.basename(p)
         tok = b.split("_")[3] if b.count("_") >= 3 else ""

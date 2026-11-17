@@ -33,6 +33,12 @@ body{background:radial-gradient(circle at 70% 20%,#1a2030 0,#0b0d12 60%);
   border-radius:20px;padding:2px 11px;font-size:14px;cursor:pointer;font-family:inherit}
 #plChips button:hover,#plKind button:hover{color:var(--fg)}
 #plChips button.on,#plKind button.on{background:#2d2a4a;color:var(--gold);border-color:#4a3f78}
+/* 分类开关：默认收起时点它才铺开 8 个分类（窄屏两行太占地方）。
+   收起态显示当前分类名，展开态加 ▴；用金色描边和分类 chip 区分开。 */
+#plChips button.chip-toggle{background:#20263c;color:var(--fg);border-color:#4a3f78;font-weight:600}
+#plChips button.chip-toggle.on{background:#2d2a4a;color:var(--gold)}
+/* hidden 属性在 flex 容器里要显式声明，避免个别浏览器用 display 覆盖它 */
+#plChips button[hidden]{display:none}
 .pl-tools{display:flex;gap:6px;padding:8px 12px;flex-shrink:0;border-bottom:1px solid var(--line)}
 .pl-tools select{flex:1;min-width:0;padding:4px 6px;border-radius:6px;font-size:14px;
   font-family:inherit;border:1px solid var(--line);background:var(--bg3);color:var(--fg)}
@@ -65,10 +71,11 @@ body{background:radial-gradient(circle at 70% 20%,#1a2030 0,#0b0d12 60%);
 .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm i{font-style:normal;color:var(--fg3);font-size:14px;margin-left:6px}
 .row .du{color:var(--fg3);font-variant-numeric:tabular-nums;flex-shrink:0}
-/* 红心（♡/♥）：这个字形只有约 0.68em 宽、0.58em 高，字号给到 21px 墨迹才
-   跟 14px 汉字（约 14×12）一样大；列宽放到 24px，免得吃掉曲名 */
-.row .hf{width:24px;text-align:center;color:#4a5364;flex-shrink:0;font-size:21px;
-  line-height:1;cursor:pointer}
+/* 歌单行右边的红心：跟控制条那颗同一枚 SVG（见下方 .heart path 共用规则），
+   心形 18×16 塞进 24px 列宽 —— 空心/实心只切填充色，行高和列宽都不变 */
+.row .hf{width:24px;flex:0 0 24px;height:21px;color:#4a5364;
+  display:flex;align-items:center;justify-content:center;cursor:pointer}
+.row .hf .heart{display:block;width:18px;height:16px}
 .row .hf.on{color:var(--heart)}
 .row .hf:hover{color:#ff8fa0}
 .row .ck{width:16px;height:16px;flex-shrink:0;accent-color:#4b96d4;cursor:pointer}
@@ -83,6 +90,8 @@ body{background:radial-gradient(circle at 70% 20%,#1a2030 0,#0b0d12 60%);
 #btnFocus{margin-left:auto;background:var(--bg3);border:1px solid var(--line);color:var(--fg2);
   border-radius:7px;padding:3px 12px;font-size:14px;cursor:pointer;font-family:inherit}
 #btnFocus:hover{color:var(--gold);border-color:#4a3f78}
+/* 唱片模式打开时按钮保持高亮，用户一眼知道"再点一下就回去" */
+#btnFocus.on{color:var(--gold);border-color:#4a3f78;background:#2d2a4a}
 /* 手机上的「歌单」抽屉开关：宽屏常驻列表，这个按钮没意义，直接藏掉 */
 #btnList{display:none;background:var(--bg3);border:1px solid var(--line);color:var(--fg2);
   border-radius:7px;padding:3px 12px;font-size:14px;cursor:pointer;font-family:inherit}
@@ -164,16 +173,38 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;
   border-radius:9px;padding:6px 13px;font-size:14px;cursor:pointer;font-family:inherit;
   line-height:1.3;transition:color .12s,border-color .12s,background .12s}
 .ctrl-row button:hover{color:var(--fg);border-color:#4a3f78}
-.ctrl-row button.main{width:54px;height:54px;border-radius:50%;font-size:22px;
+/* 主按钮（播放 / 暂停）：图标不再用 ▶ / ⏸ 字形，改成 CSS 画的形状。
+   字形的墨迹在字身里天生偏左/偏低，22px 的字塞进 54px 的圆，怎么挪都"看着不居中"
+   （用户两次反馈）。现在三角形的包围盒直接落在圆心上，跟字体度量无关。 */
+.ctrl-row button.main{width:54px;height:54px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
   background:linear-gradient(160deg,#e0b566,#b98c3c);color:#1a1206;border:none;
   box-shadow:0 6px 18px rgba(224,181,102,.28)}
+/* 播放三角：16×19，clip-path 画。包围盒放圆心只是"几何居中"，
+   三角形的重量全压在底边那一侧，光看包围盒会觉得偏左，所以再往右挪 2px，
+   让**面积重心**落回圆心（0 / +1 / +2 / +3 四档放大对比后选的 +2）。
+   暂停的两条竖条左右对称，不需要这个补偿。 */
+.ctrl-row button.main .ic{display:block;width:16px;height:19px;background:currentColor;
+  clip-path:polygon(0 0, 100% 50%, 0 100%);transform:translateX(2px)}
+/* 暂停：两条等宽竖条，同样居中 */
+.ctrl-row button.main.is-playing .ic{width:15px;height:19px;clip-path:none;transform:none;
+  background:linear-gradient(90deg,currentColor 0 5px,transparent 5px 10px,currentColor 10px 15px)}
 .ctrl-row button.main:hover{filter:brightness(1.08)}
 .ctrl-row button.on{color:var(--gold);border-color:#4a3f78;background:#2d2a4a}
 .ctrl-row button#fav.on{color:var(--heart);border-color:#7a2b39;background:#2a1620}
-/* 收藏按钮（＋ / ♥）跟歌单里的红心同一口径：字号放大到一个汉字高。
-   外框写死 40×32，正好跟旁边按钮同高，别把控制条撑得参差不齐。 */
+/* 收藏爱心：一枚固定尺寸的 SVG 心形，空心 / 实心只是"填充色"不同 ——
+   以前用 ♥ / ♡ 两个字形切换，实心字比空心字窄，点一下爱心就缩水
+   （2026-11-17 用户反馈）。控制条那颗大按钮和歌单每一行的小心是同一枚模板，
+   只是尺寸不同：几何恒定，切换时盒子一个像素都不动。 */
+.ctrl-row button#fav .heart path,
+.row .hf .heart path{fill:none;stroke:currentColor;stroke-width:1.7;
+  stroke-linejoin:round;transition:fill .12s linear}
+.ctrl-row button#fav.on .heart path,
+.row .hf.on .heart path{fill:currentColor}
+
 .ctrl-row button#fav{width:42px;height:32px;padding:0;display:inline-flex;
-  align-items:center;justify-content:center;font-size:21px;line-height:1}
+  align-items:center;justify-content:center;line-height:1}
+.ctrl-row button#fav .heart{display:block;width:23px;height:20px}
 .ctrl-row .sep{width:1px;height:24px;background:var(--line);margin:0 4px}
 .vol{display:flex;align-items:center;gap:7px;margin-left:6px}
 .vol button{width:38px;padding:6px 0}
@@ -191,20 +222,161 @@ body.focus #stage{background:radial-gradient(circle at 50% 35%,#1b2233 0,#0a0c11
   box-shadow:0 10px 30px rgba(0,0,0,.5);background:#16283c;border:1px solid #2f5478;
   color:#dff0ff;opacity:0;pointer-events:none}
 
-/* 窄屏（手机）：歌单变成抽屉，唱片缩到能放下 */
+/* 歌单抽屉的遮罩：只有窄屏才会 display:block（见下面的媒体查询），
+   桌面上它是 display:none，不影响任何原有排版。 */
+#plMask{display:none}
+/* 抽屉里的 ✕：手机专用，桌面隐藏 */
+#plClose{display:none}
+
+/* ============================ 窄屏（手机 / 平板）============================
+ * 这一页桌面是「左边歌单 392px + 右边唱片机」，并排到手机上必然挤成两条缝。
+ * 窄屏改成：
+ *   · 歌单变成盖在页面上的抽屉（☰ 列表开关、遮罩点空白、✕、选完曲都收起）
+ *   · 唱片机独占一屏，唱片尺寸取「屏宽 / 屏高 / 上限」三者最小值，
+ *     竖屏让唱片看得见，横屏把高度让给舞台
+ *   · 控制条从「一行 9 个钮」改成 4 列 × 2 行网格：
+ *     桌面那行在手机上只有 32px 高、指头点不准，而且 ＋ / ⚙ / 音量
+ *     会被挤出屏幕右边（2026-11-17 反馈"设置根本没做"就是这个）
+ * 媒体查询只看宽度，所以电脑把窗口拉窄也会命中 —— 下面只改排布，
+ * 不动播放逻辑；桌面正常宽度一条都不命中。
+ * ========================================================================= */
 @media (max-width:860px){
-  #btnList{display:inline-block;margin-left:auto}
+
+  /* ---------------- 歌单抽屉 ---------------- */
+  #plMask{display:block;position:fixed;inset:0;z-index:56;
+    background:rgba(3,5,9,.62);opacity:0;pointer-events:none;transition:opacity .2s}
+  body.plOpen #plMask{opacity:1;pointer-events:auto}
+
+  #btnList{display:inline-flex;margin-left:auto}
   #btnFocus{margin-left:0}
-  /* top 跟顶栏真实高度走（窄屏顶栏是两行，写死 50px 会被盖住一截） */
-  #pl{position:fixed;left:0;top:var(--hdrH,50px);bottom:0;z-index:60;width:88vw;
-    max-width:392px;transform:translateX(-105%);transition:transform .22s}
+  /* 抽屉从屏幕最顶上开始、一路占到底：
+     顶栏那一截空着没意义 —— 遮罩盖住之后本来就点不到下面的按钮，
+     留白只是白丢一行空间（2026-11-17 用户要求）。 */
+  #pl{position:fixed;left:0;top:0;bottom:0;z-index:60;
+    width:min(88vw,392px);max-width:none;border-radius:0 12px 12px 0;
+    transform:translateX(-100%);transition:transform .22s cubic-bezier(.3,.8,.3,1);
+    background:#141822;border-right:1px solid var(--line);
+    box-shadow:14px 0 44px rgba(0,0,0,.6);
+    padding-top:8px;padding-bottom:env(safe-area-inset-bottom)}
   body.plOpen #pl{transform:none}
-  #vinylBox{width:min(52vw,300px);height:min(52vw,300px)}
-  .ctrl-row{gap:7px;padding:10px 10px 4px}
-  .vol input[type=range]{width:64px}
-  /* 手机上提示会折成两行，右下角还压着「v1.1.5 / 免责声明」角标，
-     留出下边距把提示抬上去，别叠字 */
-  #tip{padding:4px 12px 30px;line-height:1.6}
+  /* 收起时不吃点击：只靠 transform 挪出屏幕的话，iOS 上仍可能被"点"到 */
+  body:not(.plOpen) #pl{pointer-events:none}
+  /* 右下角那条「版本号 / 免责声明」是 fixed 的，会浮在展开的歌单上挡住最后几行，
+     抽屉开着的时候先藏起来（关掉立刻回来） */
+  body.plOpen #dlBar{opacity:0;pointer-events:none}
+  /* .pl-head 原来是 block（标签行 + 计数行），窄屏把 ✕ 绝对定位到右上角，
+     让出一块 padding 免得压住「角色音声」 */
+  .pl-head{position:relative;padding-right:46px}
+  #plClose{display:flex;position:absolute;right:6px;top:6px;width:38px;height:38px;
+    align-items:center;justify-content:center;border-radius:9px;font-size:17px;
+    line-height:1;cursor:pointer;font-family:inherit;
+    border:1px solid #3a4a60;background:#1c2230;color:#c7d0e0}
+  #plClose:hover{color:var(--gold);border-color:#4a3f78}
+  /* 行加高：桌面 6px 上下内边距在手机上太窄，点不中（44px 是触控的最小高度） */
+  .row,.vgrp{padding-top:11px;padding-bottom:11px}
+  .row .ck{width:18px;height:18px}
+  .vgrp .ava{width:44px;height:44px}
+
+  /* ---------------- 舞台 ---------------- */
+  .stage-bar{padding:6px 12px;gap:8px;flex-wrap:nowrap}
+  /* 「正在播放 xxx」可能很长，先让它省略，别把两个按钮顶出去 */
+  #stageInfo{flex:1 1 auto;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  /* 按钮里的「☰ 列表」原来只靠 padding 撑着，基线对齐会偏下一点点
+     （2026-11-17 用户反馈"内容没垂直居中"）。这里显式居中。 */
+  #btnList,#btnFocus{display:inline-flex;align-items:center;justify-content:center;
+    height:32px;padding:0 11px;font-size:13px;line-height:1;white-space:nowrap}
+  #vinylWrap{padding:4px 10px;flex:1 1 auto;min-height:0}
+  /* 唱片尺寸要按"留给唱片的那点高度"算，不能只看屏高：
+     短屏（例如 375×667）舞台只剩 ~265px，44vh 的唱片会顶出 #vinylWrap，
+     连唱臂一起压到上面那行按钮上（2026-11-17 用户反馈"拨杆压住唱片模式"）。 */
+  #vinylBox{width:min(72vw,38vh,320px);height:min(72vw,38vh,320px)}
+  /* 唱臂原来是 right:-6% / top:-10% 探出唱片框顶上的（桌面那台大唱机看着没问题），
+     窄屏上唱片变小、舞台又紧，臂头正好顶到「☰ 列表 / 唱片模式」那一行上，
+     而且唱片一放大（唱片模式）臂尾就被屏幕右边缘切掉
+     （2026-11-17 用户反馈拨杆压住按钮）。窄屏把它收进唱片框内、缩一圈。 */
+  .tonearm{right:4%;top:6%;width:32%;height:50%}
+  /* 唱片模式唱片更大，右边缘更紧，再往里让一点，免得针头被屏幕切掉 */
+  body.focus .tonearm{right:10%}
+  /* 唱片模式：列表已经让出来了，唱片可以再大一圈，但同样受高度约束 */
+  body.focus #vinylBox{width:min(84vw,38vh,420px);height:min(84vw,38vh,420px)}
+  /* 手机上"唱片模式"原来几乎没动静：桌面那版的全部作用就是「藏起歌单侧栏 +
+     唱片放大一圈」，而手机的歌单本来就是抽屉、本来就收着（2026-11-17 用户问
+     "点了没区别是不是 bug"）。这里给它补上真正看得见的变化：
+     顶栏整条收起、唱片按屏幕铺满，只剩"退出唱片模式"和播放控制。 */
+  body.focus > header[data-shared]{display:none}
+  body.focus{--hdrH:0px}
+  body.focus #vinylBox{width:min(90vw,46vh,420px);height:min(90vw,46vh,420px)}
+  body.focus .stage-bar{padding:2px 10px}
+  .now{padding:0 14px}
+  #tTitle{font-size:17px}
+  #tSub{font-size:13px}
+  .seek-row{padding:6px 16px 0;gap:8px}
+  #curTime,#totTime{width:38px;font-size:13px}
+
+  /* 4 列 × 2 行：⏮ ▶ ⏭ 🔁 / 1.0× ＋ ⚙ 🔊
+     每个格子 46px 高、整行铺满，指头一定点得到；
+     播放按钮做成金色胶囊，仍然是最显眼的那个。 */
+
+  /* 控制条改成「上一曲 / 播放 / 下一曲」独占一行并居中，其余按钮小一号排第二行
+     （2026-11-17 用户要求：三个主按钮居中有对称感，功能键收小放到下一行）。
+     5 列网格：第一行用中间 3 列，第二行正好 5 个功能键一格一个。 */
+  .ctrl-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:8px;padding:8px 12px 4px;margin-bottom:42px;align-items:center}
+  .ctrl-row .sep{display:none}
+  .ctrl-row button{height:38px;padding:0 4px;font-size:13px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;border-radius:10px}
+  #prev{grid-area:1/2;justify-self:center;align-self:center;
+    width:46px;height:46px;font-size:18px}
+  #next{grid-area:1/4;justify-self:center;align-self:center;
+    width:46px;height:46px;font-size:18px}
+  #play{grid-area:1/3;justify-self:center;align-self:center}
+  .ctrl-row button.main{width:56px;height:56px;border-radius:50%;font-size:22px}
+  #mode{grid-area:2/1}
+  #rate{grid-area:2/2}
+  /* 收藏键原来被基础规则写死成 42×32，比同排按钮窄一圈、还贴在自己格子的左边，
+     看着就是"歪的"（2026-11-17 用户反馈）。窄屏让它跟其他四个一样铺满格子、
+     内容居中，五个按钮才对得齐。 */
+  .ctrl-row button#fav{grid-area:2/3;width:auto;height:38px;padding:0;
+    justify-self:stretch;font-size:20px}
+  #plSet{grid-area:2/4}
+  .vol{grid-area:2/5;display:flex;margin:0;gap:0}
+  .vol button{width:100%;height:38px;font-size:16px}
+  /* 手机音量由侧键控制，滑杆既点不准又占一整行 —— 收起，只留静音键 */
+  .vol input[type=range]{display:none}
+
+  /* 键盘提示（空格/←→/Shift）在手机上是纯噪音，也没有键盘；整条收掉 */
+  #tip{display:none}
+  /* 底部 margin 是给右下角「v1.1.x / 免责声明」留的位置：
+     原来那条 fixed 角标正好压在控制条最后一行上（2026-11-17 截图可见） */
+  #mToast{top:calc(var(--hdrH,50px) + 10px);left:10px;right:10px;
+    transform:none;text-align:center}
+}
+
+/* ============================ 横屏（高度紧）============================
+ * 手机横屏可用高度只有 300–430px：顶栏 50 + 舞台剩余，标题、提示、
+ * 音量滑杆全要下来就放不下唱片了。这里全部压成一行紧凑控制条，
+ * 唱片按高度算（min(52vh,26vw)），保证"能看见整条唱片 + 能点控制"。
+ * ==================================================================== */
+@media (orientation: landscape) and (max-height: 520px){
+  .stage-bar{padding:4px 10px;gap:8px}
+  #stageInfo{display:none}                 /* 横屏把宽度让给两个按钮 */
+  #btnList,#btnFocus{height:28px;padding:0 10px;font-size:13px}
+  #vinylWrap{padding:0;flex:1 1 auto;min-height:0}
+  #vinylBox{width:min(52vh,26vw,260px);height:min(52vh,26vw,260px)}
+  body.focus #vinylBox{width:min(62vh,30vw,320px);height:min(62vh,30vw,320px)}
+  .now{padding:0 10px}
+  #tTitle{font-size:16px}
+  #tSub{display:none}
+  .seek-row{padding:2px 14px 0}
+  /* 横屏宽度足够，回到一行平铺（8 个按钮约 470px，844px 屏放得下） */
+  .ctrl-row{display:flex;flex-wrap:nowrap;justify-content:center;gap:6px;
+    padding:2px 10px 4px;margin-bottom:0;overflow:hidden}
+  .ctrl-row button{height:38px;font-size:13px;padding:0 9px}
+  .ctrl-row button.main{width:44px;height:44px;font-size:20px}
+  .ctrl-row button#fav{width:38px;height:38px;font-size:19px}
+  .vol button{width:38px;padding:0}
+  #tip{display:none}
 }
 
 

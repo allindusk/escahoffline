@@ -33,7 +33,7 @@ SEARCH = [
     os.path.join(ROOT, "userdata", "char_story", "files"),
     os.path.join(ROOT, "_manifest_analysis", "char_story", "files"),
 ]
-SIZE = 128
+SIZE = 170
 
 
 def find_bundle(cid: int) -> str | None:

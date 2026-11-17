@@ -13,10 +13,19 @@ name: wiki-daily
 # 只收 SSR / SR / R 三种角色：NPC / サポーター 既不是稀有度、也没有独立剧情，
 # 抓了只会在 char_meta 里堆无用条目（2026-11-01 定）。
 
+# ⚠ GitHub 的 schedule 不保证准时：实测派发延迟约 7h53m（2026-11-05～11-16 共 12 次样本，
+#   区间 6h46～8h35）。所以下面的 cron 时间**不是**想跑的时间，而是「想跑的时间 − 8 小时左右」，
+#   写完要加上延迟才会落在目标时刻。延迟变化后（按 Actions 记录重算即可）请同步改这两行：
+#     curl -s "https://api.github.com/repos/allindusk/escahoffline/actions/workflows/wiki-daily.yml/runs?per_page=20"
+#     看 created_at，减去 cron 时间即实际延迟；同理把注释里的算式一起更新。
 on:
   schedule:
-    - cron: '23 4 * * *'       # UTC 04:23 = 日本时间 13:23（避开整点，GitHub 调度整点最堵）
-    - cron: '23 6 * * 2,3'     # UTC 06:23 = 日本时间 15:23，仅周二 / 周三
+    # 目标：日本时间 13:23（UTC 04:23）每天
+    # 04:23 − 7h53m = 前一天 20:30 → 派发约 04:23Z 次日 = JST 13:23
+    - cron: '30 20 * * *'
+    # 目标：日本时间 15:23（UTC 06:23），仅周二 / 周三
+    # 06:23 − 7h53m = 前一天 22:30；UTC 周一/周二 22:30 派发到 UTC 周二/周三 06:23 = JST 周二/周三 15:23
+    - cron: '30 22 * * 1,2'
   workflow_dispatch: {}         # 也支持手动触发
 
 permissions:

@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -1230,15 +1231,17 @@ def export_char_banners(only=None) -> dict:
     return {"new": n_new, "skip": n_skip, "fail": n_fail}
 
 
-def export_avatar(cid, size: int = 96, force: bool = False,
-                  x2: bool = True) -> bool:
+def export_avatar(cid, size: int = 170, force: bool = False,
+                  x2: bool = True, regen: bool = True) -> bool:
     """从 c-panel 半身像左上角裁正方形做头像 -> ``web/media/img/avatar/<cid>.png``。
 
-    ``force``：即使已存在也重做。**必须支持强刷**——旧版本导出的头像里
-    有整批错图（13/61/70 三个 id 字节完全相同、413 是别人的脸），
-    用户点了「补全」如果按"已存在就跳过"，永远是错的那张。
-    ``x2``：顺带把 ``media/img_x2/avatar/<cid>.webp``（256px）也重做，
-    否则播放器优先读超分层，仍显示旧图。
+    c-panel 原始是 170×270，顶部 170×170 就是胸口以上；现在保留 170，
+    不再缩到 96，播放器的头像显示可以超过 96。
+
+    ``force``：即使已存在也重做；``x2``：顺带重做 340×340 的 WebP。
+    ``regen``：单张调用时为 True（头像落盘立刻生效）；**批量导出时传 False**，
+    由调用方在整批结束后重建一次 —— 否则 385 张头像会各重扫一遍媒体树 +
+    重写一遍 mediaindex（2026-11-17 审计：这一步在逐张路径上是纯浪费）。
     """
     from PIL import Image
     import UnityPy
@@ -1274,11 +1277,455 @@ def export_avatar(cid, size: int = 96, force: bool = False,
                 im.resize((size * 2, size * 2), Image.LANCZOS).save(
                     os.path.join(x2dir, f"{cid}.webp"), "WEBP",
                     quality=92, method=4)
-            regen_mediaindex()    # 头像落盘 → 侧栏这一行从色块换成真头像
+            if regen:
+                regen_mediaindex()    # 头像落盘 → 侧栏这一行从色块换成真头像
             return True
     except Exception as e:
         _log(f"    头像导出失败 {cid}: {e}")
     return False
+
+
+# ================================================================ 官方头像（日常 / 战斗 / NPC / 敌人）
+#
+# 游戏里的头像不是从立绘裁的：官方另有一套 124×124 的 user_icon_* 贴图。
+#   0000+角色编号 = 日常/常服头像
+#   1000+角色编号 = 战斗/变身头像
+#   4xxx         = NPC / 活动图混编（只保留剧情 char_*.js 引用到的）
+#   5xxx         = 活动 / 皮肤头像，不拿来当剧情敌人头像
+#   2xxx         = 剧情敌人头像（立绘 5xxx - 3000）
+#   battle_character_icon 20001.. = 敌人战斗图标（无 2xxx 时兜底）
+#
+# 这一组函数只负责把官方贴图导成播放器用的命名：
+#   d### 日常 / b### 战斗 / n#### NPC / e#### 5xxx 编号敌人与场景 NPC
+# 立绘 -> 头像的选择在 ``avatarmap.js`` 里完成；纯爱/凌辱只决定优先取
+# daily 还是 battle，不改变官方素材本身。
+
+AVATAR_OFFICIAL_PREFIXES = (
+    "bundle_usericon_user_icon_",
+    "bundle_battle_character_icon_character_",
+)
+
+#: 剧情敌人立绘编号 5xxx 与官方 usericon 的对应关系。
+#: 5xxx 是立绘/剧情编号；2xxx 才是同一敌人的干净头像（5xxx - 3000）。
+#: 例如 stand_5015（滅忍）→ usericon_2015，而不是 usericon_5015。
+ENEMY_ICON_OFFSET = 3000
+
+
+def _enemy_avatar_bundles(cid: int) -> list[str]:
+    """敌人头像的官方包候选，按优先级排列。
+
+    第一优先是 ``usericon_2xxx``；它才是剧情敌人头像。``usericon_5xxx``
+    是活动/皮肤头像，不能拿来当剧情敌人头像（会串成活动角色甚至角色头像）。
+    第二优先是战斗图标 20001+，只在没有 2xxx 时兜底。
+    """
+    cid = int(cid)
+    icon = cid - ENEMY_ICON_OFFSET
+    out: list[str] = []
+    if 2000 <= icon <= 2999:
+        out.append(f"bundle_usericon_user_icon_{icon:04d}")
+    out.append(f"bundle_battle_character_icon_character_{15000 + cid:05d}")
+    return out
+
+
+def official_avatar_key(kind: str, cid: int) -> str | None:
+    """官方头像的产物文件名主干。``kind`` 见 :func:`export_avatar_official`。"""
+    if kind == "daily":
+        return f"d{int(cid):03d}"
+    if kind == "battle":
+        return f"b{int(cid):03d}"
+    if kind == "npc":
+        return f"n{int(cid):04d}"
+    if kind in ("enemy", "enemy_battle", "enemy_user"):
+        return f"e{int(cid):04d}"
+    return None
+
+
+def _official_avatar_bundle(kind: str, cid: int) -> str | None:
+    """官方包名。包名补零规则和清单一致。"""
+    cid = int(cid)
+    if kind == "daily":
+        return f"bundle_usericon_user_icon_{cid:04d}"
+    if kind == "battle":
+        return f"bundle_usericon_user_icon_{1000 + cid:04d}"
+    if kind == "npc":
+        return f"bundle_usericon_user_icon_{cid:04d}"
+    if kind == "enemy_user":
+        return f"bundle_usericon_user_icon_{cid:04d}"
+    if kind == "enemy_battle":
+        # 20001 -> 5001；官方敌人战斗图标统一是 15000+编号。
+        return f"bundle_battle_character_icon_character_{15000 + cid:05d}"
+    if kind == "enemy":
+        # 兼容旧调用：优先战斗图标，缺了再退回 usericon。
+        return f"bundle_battle_character_icon_character_{15000 + cid:05d}"
+    return None
+
+
+def export_avatar_official(kind: str, cid: int, size: int = 96,
+                           force: bool = False, x2: bool = True,
+                           regen: bool = False) -> bool:
+    """导出一张官方头像。
+
+    ``kind``：
+      * ``daily`` / ``battle`` —— 角色日常 / 战斗（0000 / 1000 系列）
+      * ``npc``                —— NPC（4xxx）
+      * ``enemy``              —— 剧情敌人（5xxx；实际取 usericon 2xxx）
+      * ``enemy_user``         —— 兼容旧调用，同样按 enemy 候选表
+      * ``enemy_battle``       —— 敌人战斗图标兜底（20001+）
+    ``regen`` 只在单张调用时置 True；批量导出完由调用方统一重写 mediaindex。
+    """
+    from PIL import Image
+    import UnityPy
+
+    key = official_avatar_key(kind, cid)
+    if not key:
+        return False
+    out = os.path.join(IMG, "avatar", key + ".png")
+    if os.path.exists(out) and not force:
+        return True
+
+    bname = _official_avatar_bundle(kind, cid)
+    if kind in ("enemy", "enemy_user", "enemy_battle"):
+        # 敌人统一走候选表：2xxx（剧情敌人头像）优先，战斗图标只兜底。
+        candidates = _enemy_avatar_bundles(cid)
+    else:
+        candidates = [bname] if bname else []
+    src = ""
+    for cand in candidates:
+        p = os.path.join(FILES_STORY, cand)
+        if os.path.exists(p):
+            src = p
+            bname = cand
+            break
+    if not src:
+        return False
+
+    try:
+        env = UnityPy.load(src)
+        image = None
+        # 官方图标在 Texture2D 里；Sprite 只作为异常包结构的兜底。
+        for obj in env.objects:
+            if obj.type.name != "Texture2D":
+                continue
+            image = obj.read().image
+            break
+        if image is None:
+            for obj in env.objects:
+                if obj.type.name != "Sprite":
+                    continue
+                image = obj.read().image
+                break
+        if image is None:
+            return False
+
+        im = image.convert("RGBA")
+        # 正常路径是 124×124 正方图；万一遇到非正方，中心裁成正方而不是拉伸。
+        if im.width != im.height:
+            side = min(im.width, im.height)
+            im = im.crop(((im.width - side) // 2, (im.height - side) // 2,
+                          (im.width + side) // 2, (im.height + side) // 2))
+        im = im.resize((size, size), Image.LANCZOS)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        im.save(out, optimize=True)
+        if x2:
+            x2dir = os.path.join(IMG_X2, "avatar")
+            os.makedirs(x2dir, exist_ok=True)
+            im.resize((size * 2, size * 2), Image.LANCZOS).save(
+                os.path.join(x2dir, key + ".webp"), "WEBP",
+                quality=92, method=4)
+        if regen:
+            regen_mediaindex()
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        _log(f"    官方头像导出失败 {kind}/{cid}: {e}")
+    return False
+
+
+def avatar_bundle_applicable(name: str) -> bool:
+    """这个官方包是否属于本轮头像库（用于下载计划/进度分母）。"""
+    if re.match(r"^bundle_chara_c-panel_\d+$", name):
+        return True
+    m = re.match(r"^bundle_usericon_user_icon_(\d{4})$", name)
+    if m:
+        n = int(m.group(1))
+        # 注意这里**不含 5000..5999**：那批是活动/皮肤头像，导出函数对它们
+        # 直接返回 False（见 export_avatar_bundle）。把它们算进来只会白下载
+        # 一百多个包、白占分母，最后还报「N 个包没有导出图标」误导用户
+        # （2026-11-17 审计：清单里实测 102 个）。
+        return (1 <= n <= 416 or 1001 <= n <= 1416
+                or 2001 <= n <= 2203 or 4001 <= n <= 4399)
+    m = re.match(r"^bundle_battle_character_icon_character_(\d{5})$", name)
+    if m:
+        return 20001 <= int(m.group(1)) <= 20200
+    return False
+
+
+def export_avatar_bundle(name: str, force: bool = True,
+                         regen: bool = True) -> bool:
+    """按官方包名导出对应头像；返回 False 只表示“这张没导出来”。
+
+    兼容旧 cpanel 包（385 张变身侧全身像），也处理本轮新增的：
+      usericon 0001.. 日常、1001.. 战斗、4xxx NPC、
+      battle_character_icon 20001.. 敌人战斗图标。
+    5xxx（活动/皮肤头像）不在这里导出 —— 剧情敌人的干净头像走 usericon 2xxx。
+    ``regen``：批量导出时传 False，整批结束后由调用方重建一次映射。
+    """
+    m = re.match(r"^bundle_chara_c-panel_(\d+)$", name)
+    if m:
+        cid = int(m.group(1))
+        # cpanel 数字头像现在是 player.js 多形态规则直接引用的 170×170 资源，
+        # 即使官方 d/b 已存在也必须导出；否则全新安装后 cpanel 映射会指向空文件。
+        return export_avatar(cid, force=force, regen=regen)
+
+    m = re.match(r"^bundle_usericon_user_icon_(\d{4})$", name)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 416:
+            return export_avatar_official("daily", n, force=force)
+        if 1001 <= n <= 1416:
+            return export_avatar_official("battle", n - 1000, force=force)
+        if 2001 <= n <= 2203:
+            # 2xxx 是剧情敌人的干净头像；产物仍叫 e5xxx。
+            return export_avatar_official("enemy", n + ENEMY_ICON_OFFSET,
+                                          force=force)
+        if 4001 <= n <= 4399:
+            return export_avatar_official("npc", n, force=force)
+        if 5000 <= n <= 5999:
+            # 5xxx 是活动/皮肤头像，不是剧情敌人头像；只允许由 2xxx
+            # 或战斗图标导出，这里不再直接产 e5xxx。
+            return False
+        return False
+
+    m = re.match(r"^bundle_battle_character_icon_character_(\d{5})$", name)
+    if m:
+        n = int(m.group(1))
+        if 20001 <= n <= 20200:
+            return export_avatar_official("enemy_battle", n - 15000, force=force)
+        return False
+
+    return False
+
+
+# 「剧情里用到过哪些 stand 编号」的缓存：(指纹, 结果)。
+# 500 多个 char_*.js 逐个读 + JSON 解析，实测 1.9 秒；而这个结果只跟「装了哪些
+# 剧情」有关。以前每次 /api/cdn/public 都重算，前端要等它才肯发横幅/头像请求，
+# 于是表现为"横幅十几秒才出来、每次刷新都再来一遍"（2026-11-17 反馈）。
+# 指纹用「文件名 + 大小 + 修改时间」，装/删剧情后会变，自然重算。
+_STAND_ID_CACHE: dict = {}
+
+
+def _char_js_sig():
+    """``data/char_*.js`` 的轻量指纹（只 stat，不读内容）。"""
+    if not os.path.isdir(DATA):
+        return (), []
+    items, names = [], []
+    try:
+        entries = list(os.scandir(DATA))
+    except OSError:
+        return (), []
+    for entry in entries:
+        if not re.match(r"char_\d+\.js$", entry.name):
+            continue
+        try:
+            st = entry.stat()
+        except OSError:
+            continue
+        items.append((entry.name, st.st_size, st.st_mtime_ns))
+        names.append(entry.name)
+    items.sort()
+    return tuple(items), names
+
+
+def _story_stand_ids(lo: int, hi: int) -> set[int]:
+    """收集所有 ``char_*.js`` 里真正出现过的 ``stand_*`` 原始编号。
+
+    只用来判断“这个官方头像到底有没有被剧情用到”，不依赖 standmap 的
+    服装分组，避免把活动/皮肤头像也算进剧情。
+    """
+    sig, names = _char_js_sig()
+    key = (lo, hi)
+    hit = _STAND_ID_CACHE.get(key)
+    if hit and hit[0] == sig:
+        return set(hit[1])
+    ids: set[int] = set()
+    for fn in names:
+        try:
+            s = open(os.path.join(DATA, fn), encoding="utf-8-sig").read()
+            body = s[s.find("=") + 1:].strip().rstrip(";")
+            d = json.loads(body)
+        except Exception:                                  # noqa: BLE001
+            continue
+        for part in d.get("parts") or []:
+            for m in part.get("methods") or []:
+                img = str(m.get("StandImage") or "")
+                mm = re.match(r"stand_(\d+)_", img)
+                if not mm:
+                    continue
+                cid = int(mm.group(1))
+                if lo <= cid <= hi:
+                    ids.add(cid)
+    _STAND_ID_CACHE[key] = (sig, ids)
+    return set(ids)
+
+
+def cleanup_unused_npc_avatars() -> int:
+    """只保留剧情里真正用到的 ``stand_4xxx`` NPC 头像。
+
+    ``usericon_4xxx`` 把剧情 NPC 和活动/皮肤 NPC 混在同一段；直接把 184 张
+    全当 NPC 会让播放器里出现活动头像。这里按 ``char_*.js`` 实际引用过滤，
+    未引用的 ``n####`` / x2 一起删掉。剧情里没有官方 4xxx 头像的编号会保持
+    缺失，由前端显示首字色块，不再拿活动图顶替。
+    """
+    avatar_dir = os.path.join(IMG, "avatar")
+    x2_dir = os.path.join(IMG_X2, "avatar")
+    if not os.path.isdir(avatar_dir):
+        return 0
+    keep = _story_stand_ids(4000, 4999)
+    # 还没生成任何剧情脚本时不要“清理”成空；宁可多留，也不要把 NPC 全删。
+    if not keep:
+        return 0
+    removed = 0
+    for entry in os.scandir(avatar_dir):
+        if not entry.is_file() or not entry.name.lower().endswith(".png"):
+            continue
+        stem = entry.name[:-4]
+        m = re.match(r"^n(\d{4})$", stem)
+        if not m:
+            continue
+        cid = int(m.group(1))
+        if cid in keep:
+            continue
+        try:
+            os.remove(entry.path)
+            x2 = os.path.join(x2_dir, stem + ".webp")
+            if os.path.exists(x2):
+                os.remove(x2)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def regen_avatarmap() -> dict:
+    """生成 ``web/data/avatarmap.js``：立绘组 → 日常/战斗/NPC/敌人头像。
+
+    数据源只用两边：
+      * ``web/data/standmap.js`` 的 ``groups``（``n`` 是立绘原始编号，``b`` 是
+        char / npc / enemy，``c`` 是服装/状态 hex）；
+      * ``web/media/img/avatar`` 里本轮导出的 ``d/b/n/e`` 文件。
+    前端拿 ``forms[raw]`` 决定当前立绘该用哪张官方头像；``groups["编号_服装"]``
+    只是把立绘组显式写进映射，方便以后人工查表和覆盖。
+    """
+    def _read_standmap() -> list:
+        p = os.path.join(DATA, "standmap.js")
+        if not os.path.exists(p):
+            return []
+        try:
+            s = open(p, encoding="utf-8-sig").read()
+            body = s[s.find("=") + 1:].strip().rstrip(";")
+            return (json.loads(body) or {}).get("groups") or []
+        except Exception:                                  # noqa: BLE001
+            return []
+
+    def _has(key: str | None) -> bool:
+        return bool(key) and os.path.exists(os.path.join(IMG, "avatar", key + ".png"))
+
+    groups = _read_standmap()
+    forms: dict[str, dict] = {}
+    gm: dict[str, str] = {}
+    char_raws: dict[int, set[str]] = {}
+    for g in groups:
+        raw = str(g.get("n") or "")
+        b = str(g.get("b") or "char")
+        c = str(g.get("c") or "")
+        if not raw:
+            continue
+        if c:
+            gm[f"{raw}_{c}"] = raw
+        try:
+            cid = int(raw)
+        except ValueError:
+            continue
+        # 注意：这里的 raw 保留原始前导零。39 与 039 是同一角色的不同形态，
+        # 必须先把所有原始编号收集起来，才能判断“有没有非常服/非常态 raw”。
+        if b == "char":
+            char_raws.setdefault(cid, set()).add(raw)
+        if raw in forms:
+            continue
+        if b == "char":
+            # 原始编号有前导 0 = 变身侧；没有前导 0 = 日常侧。
+            base = "battle" if raw.startswith("0") and len(raw) > 1 else "daily"
+            entry = {"b": "char", "id": cid, "base": base, "daily": None, "battle": None}
+            dk, bk = f"d{cid:03d}", f"b{cid:03d}"
+            if _has(dk):
+                entry["daily"] = dk
+            if _has(bk):
+                entry["battle"] = bk
+            # 基础形态缺图时，前端可以退回另一边；两边都缺就只能用旧 cpanel。
+            if not entry.get(base):
+                entry["base"] = "battle" if entry.get("battle") else "daily"
+            forms[raw] = entry
+        elif b == "npc":
+            k = f"n{cid:04d}"
+            forms[raw] = {"b": "npc", "id": cid, "avatar": k if _has(k) else None}
+        elif b == "enemy":
+            k = f"e{cid:04d}"
+            forms[raw] = {"b": "enemy", "id": cid, "avatar": k if _has(k) else None}
+
+    # 再补上“有头像但没有立绘组”的官方编号（例如只出现在剧情名条里的 NPC）。
+    for stem in os.listdir(os.path.join(IMG, "avatar")):
+        m = re.match(r"^([dbne])(\d+)\.png$", stem)
+        if not m:
+            continue
+        kind, num = m.group(1), m.group(2)
+        cid = int(num)
+        if kind == "d":
+            raw = str(cid)
+            forms.setdefault(raw, {"b": "char", "id": cid, "base": "daily",
+                                   "daily": f"d{cid:03d}", "battle": None})
+            if forms[raw].get("daily") is None:
+                forms[raw]["daily"] = f"d{cid:03d}"
+        elif kind == "b":
+            raw = f"{cid:03d}"
+            forms.setdefault(raw, {"b": "char", "id": cid, "base": "battle",
+                                   "daily": None, "battle": f"b{cid:03d}"})
+            if forms[raw].get("battle") is None:
+                forms[raw]["battle"] = f"b{cid:03d}"
+        elif kind == "n":
+            raw = str(cid)
+            forms.setdefault(raw, {"b": "npc", "id": cid,
+                                   "avatar": f"n{cid:04d}"})
+        elif kind == "e":
+            raw = str(cid)
+            forms.setdefault(raw, {"b": "enemy", "id": cid,
+                                   "avatar": f"e{cid:04d}"})
+
+    # 只有补零编号（如 078 / 0274）而无同名 raw（78 / 274）的角色，
+    # 就是“只有服装变身/常态即变身”的第二类；有 raw 的则第一类。
+    # 这个判断只用 standmap 的原始编号字符串，不依赖剧情文本，也不需要 AI。
+    padded_only = sorted(
+        cid for cid, raws in char_raws.items()
+        if raws and all(raw != str(cid) for raw in raws)
+    )
+
+    obj = {"v": 3, "forms": forms, "groups": gm,
+           "paddedOnly": padded_only,
+           "counts": {
+               "forms": len(forms),
+               "daily": sum(1 for v in forms.values() if v.get("daily")),
+               "battle": sum(1 for v in forms.values() if v.get("battle")),
+               "npc": sum(1 for v in forms.values() if v.get("b") == "npc"),
+               "enemy": sum(1 for v in forms.values() if v.get("b") == "enemy"),
+               "padded_only": len(padded_only),
+           }}
+    os.makedirs(DATA, exist_ok=True)
+    p = os.path.join(DATA, "avatarmap.js")
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("window.__AVATARMAP=")
+        f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+        f.write(";\n")
+    os.replace(tmp, p)
+    return obj["counts"]
 
 
 # ================================================================ 立绘合成
@@ -1364,6 +1811,29 @@ def compose_stands(nums) -> None:
     按角色过滤跑一次，就会把别的角色的落点记录抹掉。所以这里跑完立即与旧值
     merge，保证增量更新不破坏全量。
     """
+    _compose([str(n) for n in sorted(nums)], nums)
+
+
+def compose_stands_all_packs(nums=None) -> None:
+    """按**已下载的立绘源包**把每套服装的全套表情合成出来（含剧本从未用到的）。
+
+    为什么要单独一条路：装剧情只下载该剧情引用到的源包，合成也只做
+    ``parts.stand`` 里那几张表情；官方每套服装包里一般 7~12 张表情，
+    剩下那批"剧情里从来不会出现"的立绘永远不会有成品 —— 立绘页看着就是
+    整组缺几张。``--all-packs`` 不看剧本、按包做，已存在的成品仍走幂等守卫
+    （不重写），所以重复点「补全」不会白跑。
+
+    ``nums`` 给了就只跑这些编号（调用方分批调用，进度条才有变化）。
+    """
+    chunk = [str(n) for n in sorted(nums or [])]
+    _compose(["--all-packs"] + chunk, chunk)
+
+
+def _compose(args, nums) -> None:
+    """跑一次 ``compose_stand_all.py`` 并做合并 / 质检（两条入口共用）。
+
+    ``nums`` 为空 = 全量按包模式（``--all-packs``），此时质检不按编号过滤。
+    """
     slot_path = os.path.join(DATA, "stand_slot.json")
     backup = None
     if os.path.exists(slot_path):
@@ -1373,7 +1843,6 @@ def compose_stands(nums) -> None:
         backup = os.path.join(arch, "stand_slot.json.prev")
         shutil.copy2(slot_path, backup)
 
-    args = [str(n) for n in sorted(nums)]
     t0 = time.time()
     rc = run_script("compose_stand_all.py", *args, quiet=True)
     if rc != 0:
@@ -1401,7 +1870,9 @@ def compose_stands(nums) -> None:
         for n in nums:
             ids.add(str(n))
             ids.add(f"{int(n):04d}")
-        mine = [b for b in bad if b.get("key", "").split("_")[0] in ids]
+        # 全量按包模式（nums 为空）不按编号过滤：一次跑的就是全库
+        mine = bad if not nums else [b for b in bad
+                                     if b.get("key", "").split("_")[0] in ids]
         if mine:
             _say(f"  ⚠ 立绘落点可疑 {len(mine)} 组（表情/底图对不上，见 "
                  f"_archive/stand_slot_qc.json）")
@@ -1433,6 +1904,96 @@ def clear_x2_pending() -> None:
         pass
 
 
+#: 体检脚本往 stdout 报进度的行前缀（``compose_stand_all.PROG_TAG`` 的副本）。
+#:
+#: 故意不 ``import compose_stand_all`` 来取常量：那个脚本顶层会 import
+#: UnityPy / lz4，缺依赖时连服务都起不来（见本文件开头那段 try/except 的说明）。
+_PROG_TAG = "@PROG"
+
+#: 体检（脚本部分）在整条进度条上占 0–85%，剩下 15% 留给「重做高清图」。
+#: api 的 ``/api/stand/repair`` 用这个数当超分阶段的起点。
+REPAIR_SCRIPT_PCT = 85.0
+
+#: 体检报告落盘位置（脚本写的是它自己的 BASE = ``userdata/_archive``，
+#: 而本模块的 ARCHIVE_DIR 是 ``userdata/cdn/archive`` —— 两者不是一个目录，别混用）。
+_REPAIR_REPORT = os.path.join(ROOT, "userdata", "_archive", "stand_repair_last.json")
+
+
+def _apply_progress(job, line: str) -> None:
+    """把脚本报的一行进度写进任务（``@PROG 42.5 逐个解包检查 800/1900 组``）。"""
+    if job is None:
+        return
+    body = line[len(_PROG_TAG):].strip()
+    head, _, label = body.partition(" ")
+    try:
+        pct = float(head)
+    except ValueError:
+        return
+    try:
+        # span=0：这个阶段的百分比完全由脚本给，不按 done/total 重算。
+        # 乘 0.85 是把脚本的 0–100 映射到整条进度条的前 85%（后面还有
+        # 「重做高清图」要跑，不能让它占满 —— 否则修完立刻又跳回 0%）。
+        job.phase(pct * REPAIR_SCRIPT_PCT / 100.0, 0.0)
+        if label:
+            job.progress(message=label)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def _run_repair_script(job=None) -> int:
+    """跑 ``compose_stand_all.py --repair``，边跑边把 ``@PROG`` 行喂给任务进度。
+
+    为什么不用 ``run_script(quiet=True)``：那条路是 ``subprocess.run``，要把子进程
+    的输出全收完才返回 —— 体检要解包上千个包、跑好几分钟，期间页面上的进度条始终
+    是 0%（2026-11-16 用户反馈「一直是 0%，过几分钟突然 100%」，看着像卡死）。
+    这里改成 Popen 逐行读：子进程每报一行进度，任务条就往前走一点。
+    """
+    cmd = [sys.executable, os.path.join(SCRIPTS, "compose_stand_all.py"), "--repair"]
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
+               PYTHONUNBUFFERED="1")     # 不关缓冲的话管道里要等一大块才吐出来
+    lines: list[str] = []
+    p = proc.popen(cmd, cwd=WS, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                   text=True, encoding="utf-8", errors="replace",
+                   bufsize=1, env=env)
+    try:
+        for raw in p.stdout:
+            if job is not None and getattr(job, "cancelled", False):
+                _say("  用户取消，正在停掉立绘体检")
+                p.terminate()
+                break
+            ln = raw.rstrip()
+            if not ln:
+                continue
+            if ln.startswith(_PROG_TAG):
+                _apply_progress(job, ln)
+                continue
+            lines.append(ln)
+            print("      " + ln)
+    finally:
+        try:
+            p.stdout.close()
+        except Exception:                                      # noqa: BLE001
+            pass
+        proc.reap(p)
+        try:
+            rc = p.wait(timeout=20)
+        except Exception:                                      # noqa: BLE001
+            p.kill()
+            rc = -1
+    # 关键决策（用了哪个包 / 缺哪一层 / 落点来源）必须落盘：GUI 用户看不到控制台，
+    # 出事时只有 app.log 可查（与 run_script 的 quiet 分支保持一致）。
+    try:
+        from .. import log as applog
+        applog.log(f"  [compose_stand_all.py] exit={rc}", tag="stand")
+        for ln in lines[:200]:
+            applog.log("    " + ln, tag="stand")
+        if len(lines) > 200:
+            applog.log(f"    …（其余 {len(lines) - 200} 行略）", tag="stand")
+    except Exception:                                          # noqa: BLE001
+        pass
+    return rc
+
+
 def repair_stands(job=None) -> dict:
     """全库体检并修复立绘（资源管理页「检查并修复立绘」按钮 / ``compose_stand_all --repair``）。
 
@@ -1451,15 +2012,15 @@ def repair_stands(job=None) -> dict:
         os.makedirs(ARCHIVE_DIR, exist_ok=True)
         if os.path.exists(lock):
             _say("  立绘体检已经在跑了，这次跳过")
-            return 0
+            return {"fixed": [], "x2_stale": [], "rc": 0, "busy": True}
         open(lock, "w", encoding="utf-8").close()
     except OSError:
         pass
-    report = {"fixed": [], "x2_stale": []}
+    report: dict = {}
     rc = 1
+    t0 = time.time()
     try:
-        t0 = time.time()
-        rc = run_script("compose_stand_all.py", "--repair", quiet=True)
+        rc = _run_repair_script(job)
         if rc == 0:
             _say(f"  立绘体检完成（{time.time() - t0:.0f}s）")
         else:
@@ -1472,16 +2033,21 @@ def repair_stands(job=None) -> dict:
         except OSError:
             pass
     # 脚本会把「修了哪些组 / 哪些组还有旧高清图」落盘，调用方（api）据此重做超分。
-    # 注意目录：脚本写的是 ``userdata/_archive``（它自己的 BASE），而 stages 的
-    # ARCHIVE_DIR 是 ``userdata/cdn/archive`` —— 两者不是一个目录，别混用。
+    # **必须按 mtime 认这次写的**：脚本失败/提前退出时不落盘，直接读文件会读到
+    # 上一次的报告 —— 那正是"刚检查完就说没有任何问题"的来源之一。
     try:
-        p = os.path.join(ROOT, "userdata", "_archive", "stand_repair_last.json")
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
+        if os.path.exists(_REPAIR_REPORT) \
+                and os.path.getmtime(_REPAIR_REPORT) >= t0 - 5:
+            with open(_REPAIR_REPORT, encoding="utf-8") as f:
                 report = json.load(f)
     except Exception:                                          # noqa: BLE001
-        pass
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
+    report.setdefault("fixed", [])
+    report.setdefault("x2_stale", [])
     report["rc"] = rc
+    report["secs"] = round(time.time() - t0)
     return report
 
 
@@ -1590,6 +2156,12 @@ def regen_standmap() -> None:
         run_script("export_standmap.py", quiet=True)
     except Exception:                                          # noqa: BLE001
         pass
+    # 立绘编号决定“有常态 raw / 只有 padded 服装形态”的分类；
+    # standmap 一变就同步重建 avatarmap 的 paddedOnly，避免自动更新后还用手工名单。
+    try:
+        regen_avatarmap()
+    except Exception:                                          # noqa: BLE001
+        pass
 
 
 def regen_maps() -> None:
@@ -1597,6 +2169,11 @@ def regen_maps() -> None:
     regen_sfxmap()
     # 立绘分组表：装完剧情要能立刻在「角色立绘」页看到新素材
     regen_standmap()
+    # 话者名 → 立绘编号的自动索引：随剧情安装重建，不维护手工短名表。
+    try:
+        run_script("gen_avnames.py", quiet=True)
+    except Exception:                                          # noqa: BLE001
+        pass
     # 2026-11-16：SD 整体停用，不再重新生成 sdmap.js
     # try:
     #     run_script("export_sd.py", "--catalog", quiet=True)

@@ -3,7 +3,8 @@
 设计原则
 --------
 * 页面与 API 同源（不需要 CORS），默认只监听 127.0.0.1
-* 所有响应禁缓存：数据和覆盖层文件经常被改写（F5 就该看到最新）
+* 静态资源按"内容指纹"分级缓存：HTML 一律 no-cache，脚本/样式只有指纹对得上才长缓存
+  （详见文件里「自动版本号」那段注释）—— 改了代码刷新即生效，不需要人记得升版本号
 * 耗时操作一律返回 ``{"job": {...}}``，前端订阅 ``/api/jobs/stream`` 看进度
 * 出错统一 ``{"error": "人话错误信息"}`` + HTTP 状态码
 * 所有写操作都有"没有就报错并说清楚缺什么"，不静默失败
@@ -35,6 +36,66 @@ STOP = threading.Event()
 #: （程序更新：主进程退出 → 更新器覆盖文件 → 拉起新进程）。
 #: 没有它的话，更新完旧页面会一直显示旧 DOM，用户以为"没更新成功"。
 BOOT_ID = "%x%x" % (int(time.time() * 1000), os.getpid())
+
+# ---------------------------------------------------------------- 自动版本号
+# 问题：靠"改了 js 就记得把 ?v= 升一档"一定会漏（漏了用户就一直看到旧代码），
+# 但要是所有脚本都 no-cache，每切一次页面又要为二十多个脚本付一次 304 往返。
+#
+# 现在的口径（三层，各管一段）：
+#   ① HTML 永远 no-cache —— 它是"清单"，必须最新，而且只有几十 KB，304 很便宜；
+#   ② HTML 里每个 .js / .css 的地址，服务端按**文件内容指纹**改写 ?v= —— 文件一改
+#      指纹就变、地址就变，浏览器当新文件取，不需要任何人手改版本号；
+#   ③ 只有"指纹与当前文件完全一致"的地址才回 immutable（一年），其余（旧地址、
+#      裸地址）一律 no-cache —— 所以永远不可能被旧缓存卡住。
+#
+# HTML 里手写的 ?v=1130f 会被服务端覆盖；留着它只是"服务端没跑时"的兜底读法。
+_RE_HTML_REF = re.compile(
+    rb'(?P<attr>(?:src|href)\s*=)(?P<q>["\'])(?P<path>[^"\'<>]+?\.(?:js|css))'
+    rb'(?:[?#][^"\']*)?(?P=q)')
+_HASH_CACHE = {}       # abs_path -> (size, mtime_ns, hash8)
+
+
+def _file_hash(fs_path: str) -> str:
+    """文件内容指纹（8 位十六进制）。内容变则变；同大小同 mtime 时复用缓存。"""
+    try:
+        st = os.stat(fs_path)
+    except OSError:
+        return ""
+    hit = _HASH_CACHE.get(fs_path)
+    if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+        return hit[2]
+    try:
+        import hashlib
+        h = hashlib.md5()
+        with open(fs_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        v = h.hexdigest()[:8]
+    except OSError:
+        v = ""
+    _HASH_CACHE[fs_path] = (st.st_size, st.st_mtime_ns, v)
+    return v
+
+
+def _html_with_versions(fs_path: str, raw: bytes) -> bytes:
+    """把 HTML 里引用的 .js / .css 改写成 ``?v=<内容指纹>``。"""
+    base = os.path.dirname(fs_path)
+
+    def repl(m):
+        p = m.group("path").decode("utf-8", "replace")
+        q = re.split(r"[?#]", p, 1)[0]
+        target = os.path.normpath(os.path.join(base, q.lstrip("/")))
+        v = _file_hash(target) if os.path.isfile(target) else ""
+        if not v:
+            return m.group(0)          # 文件不存在（可选数据）就原样留着
+        return (m.group("attr") + m.group("q")
+                + q.encode("utf-8") + b"?v=" + v.encode()
+                + m.group("q"))
+
+    try:
+        return _RE_HTML_REF.sub(repl, raw)
+    except Exception:                  # noqa: BLE001
+        return raw
 
 
 class SubJob:
@@ -661,6 +722,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "ESCAH/" + paths.app_version()
     protocol_version = "HTTP/1.1"
 
+    #: 本响应自己声明的缓存策略；None = 不缓存（接口、临时响应）。
+    #: 以前 end_headers 对所有响应无脑加 ``no-store``，连 media/ 下的图都算进去，
+    #: 结果是**每次刷新都把几百张横幅/头像重新下载一遍**（2026-11-17 反馈：
+    #: "每次刷新页面都重复加载横幅"）。现在由具体处理器按资源类型声明，
+    #: keep-alive 复用同一个 handler 实例，所以每次响应后必须复位。
+    _cache_hint = None
+
     #: Windows 上 ``mimetypes`` 常常不认 webp/m4a，会退化成
     #: ``application/octet-stream``。浏览器没 nosniff 时靠嗅探还能显示，但很脆；
     #: 这里显式补上（超分图、语音、视频导出都用到）。
@@ -714,10 +782,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def end_headers(self):
-        self.send_header("Cache-Control",
-                         "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
+        # 只给"没人声明过策略"的响应加禁用缓存（接口、动态页）。
+        # 素材/带 ?v= 的脚本已经在 do_GET 里声明了长缓存，这里是让它们生效。
+        if self._cache_hint is None:
+            self.send_header("Cache-Control",
+                             "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+        else:
+            self.send_header("Cache-Control", self._cache_hint)
+        self._cache_hint = None
         super().end_headers()
 
     def log_message(self, fmt, *args):
@@ -876,6 +950,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         t0 = time.time()
+        # 每个请求都从"未声明缓存策略"开始：keep-alive 复用同一个 handler 实例，
+        # 上一轮要是中途抛异常没走到 end_headers()，残留的 immutable 会被安到
+        # 这一轮的错误响应上（错误页被缓存一年，比没有缓存难查得多）。
+        self._cache_hint = None
         try:
             if path.startswith("/api/"):
                 r = self._api_get(path)
@@ -894,6 +972,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 fs = self.translate_path(path)
                 if os.path.isfile(fs):
                     return self._serve_media(fs)
+            # HTML：先按"文件内容指纹"把里面 .js/.css 的 ?v= 改写成最新的，再发出去。
+            # 这样"改了代码忘了升版本号"这件事从流程里消失了（见文件头的说明）。
+            if path == "/" or path.endswith(".html"):
+                fs = self.translate_path("/index.html" if path == "/" else path)
+                if os.path.isfile(fs):
+                    return self._serve_html(fs)
+            # 其余静态文件（脚本 / 样式 / 数据表）：
+            #   · 地址里的 ?v 与文件当前指纹一致 → immutable，一年内零请求；
+            #   · 其余（裸地址、旧版本号）→ no-cache，每次校验，改过就立刻拿到新的。
+            fs = self.translate_path(path)
+            if path.endswith((".js", ".css")) and os.path.isfile(fs):
+                v = (urllib.parse.parse_qs(
+                    urllib.parse.urlparse(self.path).query).get("v") or [""])[0]
+                self._cache_hint = (
+                    "public, max-age=31536000, immutable"
+                    if v and v == _file_hash(fs) else "no-cache")
+            else:
+                self._cache_hint = "no-cache"
             return super().do_GET()
         except (BrokenPipeError, ConnectionResetError,
                 ConnectionAbortedError):
@@ -911,6 +1007,46 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pass
             self._log_req("GET", t0)
 
+    def _serve_html(self, fs_path: str):
+        """发 HTML，并把里面 .js / .css 的 ?v= 改写成文件内容指纹。
+
+        HTML 自己永远 ``no-cache``：它是"清单"，必须最新；正文只有几十 KB，
+        没变时用 ``If-Modified-Since`` 回 304，代价是几十字节。
+        改写失败的极端情况（编码异常等）直接退回原样发送，不能因为版本号发不出页面。
+        """
+        try:
+            with open(fs_path, "rb") as f:
+                raw = f.read()
+            body = _html_with_versions(fs_path, raw)
+            mtime = int(os.path.getmtime(fs_path))
+        except OSError:
+            return super().do_GET()
+
+        ims = (self.headers.get("If-Modified-Since") or "").strip()
+        if ims:
+            try:
+                from email.utils import parsedate_to_datetime
+                if mtime <= int(parsedate_to_datetime(ims).timestamp()):
+                    self._status = 304
+                    self._cache_hint = "no-cache"
+                    self.send_response(304)
+                    self.send_header("Last-Modified", self.date_time_string(mtime))
+                    self.end_headers()
+                    return
+            except Exception:                              # noqa: BLE001
+                pass
+
+        self._status = 200
+        self._cache_hint = "no-cache"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Last-Modified", self.date_time_string(mtime))
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        self.wfile.write(body)
+
     def _serve_media(self, fs_path: str):
         """``/media/`` 下的文件自己发：**必须支持 Range**。
 
@@ -920,7 +1056,46 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         用户看到的就是「点进度条，歌从头开始播」（2026-11-15 反馈）。
         """
         size = os.path.getsize(fs_path)
+        mtime = int(os.path.getmtime(fs_path))
+        # 指纹型 ETag：内容变了它才变，浏览器据此既能复用又不会看到旧内容。
+        etag = '"%x-%x"' % (size, mtime)
         ctype = self.guess_type(fs_path) or "application/octet-stream"
+        # 只有"地址里的 ?v 就是**当前已发布**的素材指纹"才给长期缓存；
+        # 旧地址（旧页面缓存里的、手写的、别人拼的）一律 no-cache 校验。
+        #
+        # 为什么必须校验而不是"有 v 就免检"：图片换了内容、地址没换时，
+        # 免检 + immutable 等于让浏览器拿旧图整整一年。2026-11-17 审计实测
+        # `/media/xxx.png?v=deadbeef` 也回了 immutable —— 「提高CG画质」重做
+        # 高清图后用户夹在旧缓存里，看着就像"修了没效果"。
+        v = (urllib.parse.parse_qs(
+            urllib.parse.urlparse(self.path).query).get("v") or [""])[0]
+        cur = media.published_ver()
+        hint = ("public, max-age=31536000, immutable"
+                if v and cur and v == cur else "no-cache")
+
+        # 条件请求：浏览器手里那份没变就只回 304，不重发正文。
+        # 以前这里既不回 ETag 也不回 Last-Modified，浏览器想复用也用不上 ——
+        # 这也是"每次刷新重复加载横幅"的另一半原因。
+        inm = (self.headers.get("If-None-Match") or "").strip()
+        ims = (self.headers.get("If-Modified-Since") or "").strip()
+        not_modified = False
+        if inm:
+            not_modified = inm == etag
+        elif ims:
+            try:
+                from email.utils import parsedate_to_datetime
+                not_modified = mtime <= int(parsedate_to_datetime(ims).timestamp())
+            except Exception:                                  # noqa: BLE001
+                not_modified = False
+        if not_modified:
+            self._status = 304
+            self._cache_hint = hint
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", self.date_time_string(mtime))
+            self.end_headers()
+            return
+
         start, end = 0, size - 1
         code = 200
         m = re.match(r"bytes=(\d*)-(\d*)\s*$", (self.headers.get("Range") or "").strip())
@@ -945,9 +1120,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("ETag", etag)
+        self.send_header("Last-Modified", self.date_time_string(mtime))
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.send_header("Cache-Control", "no-cache")
+        self._cache_hint = hint
         self.end_headers()
         if self.command == "HEAD":
             return
@@ -1281,6 +1458,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             def _fix(j):
                 j.log("正在检查已经装好的立绘（通常 1~3 分钟）…")
                 info = cdn_stages.repair_stands(j) or {}
+                if info.get("busy"):
+                    j.log("已经有一次立绘检查在跑，这次没有重复执行")
+                    return
+                if j.cancelled:
+                    j.log("已取消，这次没有改动任何图")
+                    return
+                # 脚本没正常跑完（退出码非 0）时，磁盘上那份报告是**上一次**的，
+                # 拿它当结论会报出"检查完了：没有发现问题"—— 用户会以为真没问题。
+                rc = info.get("rc")
+                if rc:
+                    raise RuntimeError(
+                        f"立绘检查中途出错（退出码 {rc}），没有改动任何图；"
+                        f"详细过程见日志目录里的 app.log")
                 fixed = info.get("fixed") or []
                 stale = info.get("x2_stale") or []
                 if info.get("full_rewrite"):
@@ -1293,11 +1483,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if sus:
                     tail = (f"；另有 {len(sus)} 组属于素材本身的问题（表情贴图与身体"
                             f"对不上），重做也变不了，已记录、以后不再重复处理")
+
+                def _done(msg):
+                    """收尾：结论既写进任务消息，也塞进 detail。
+
+                    底部任务条上的那条 15 秒后会自动收起（用户反馈"没看完就没了"），
+                    所以页面「维护」区还要能一直看到上次的结果 —— 数据源就是这里。
+                    """
+                    j.progress(standFix={
+                        "at": info.get("at") or "",
+                        "secs": info.get("secs") or 0,
+                        "fixed": len(fixed), "x2": len(stale),
+                        "sus": len(sus), "text": msg,
+                    })
+                    j.log(msg)
+
                 if not fixed and not stale:
-                    j.log("检查完了：没有发现需要修的立绘" + tail)
+                    _done("检查完了：没有发现需要修的立绘" + tail)
                     return
                 if not stale:
-                    j.log(f"修好 {len(fixed)} 组立绘" + tail + "，刷新页面即可看到")
+                    _done(f"修好 {len(fixed)} 组立绘" + tail + "，刷新页面即可看到")
                     return
                 # 这些组之前做过「提高CG画质」，旧的高清图还是错的 —— 播放器优先读它，
                 # 不处理的话用户会觉得"修了没效果"。stale 是**累积待办**：也可能来自
@@ -1308,7 +1513,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if eng["kind"] == "none" or not pairs:
                     n = media.drop_stand_x2(stale)
                     cdn_stages.clear_x2_pending()
-                    j.log((done + "；" if done else "")
+                    _done((done + "；" if done else "")
                           + f"清掉了 {n} 张旧的高清图（没找到超分引擎，"
                           f"这几组先按原图显示）" + tail + "，刷新即可看到")
                     return
@@ -1319,9 +1524,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 j.log((done + "，" if done else "上次没做完的高清图继续重做：")
                       + f"正在把 {len(stale)} 组的高清图重做一遍"
                       f"（{len(pairs)} 张，可能要几分钟）…")
+                # 体检在进度条上占 0–85%，剩下的 15% 给这一步 —— 直接让超分从 0 起算
+                # 会看到"修完 85% 又倒回 0%"（高水位会把它钉在 85% 不动）。
+                base = cdn_stages.REPAIR_SCRIPT_PCT
+                j.phase(base, 100.0 - base, label="重做高清图")
                 media.upscale_pairs(j, pairs, scale=scale)
                 cdn_stages.clear_x2_pending()
-                j.log(f"全部完成：修好 {len(fixed)} 组立绘、重做高清图 {len(pairs)} 张"
+                _done(f"全部完成：修好 {len(fixed)} 组立绘、重做高清图 {len(pairs)} 张"
                       + tail + "，刷新页面即可看到")
 
             job = jobs.submit("stand", _TITLE, _fix)
@@ -1810,6 +2019,18 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     httpd.daemon_threads = True
     LAN_INFO["ip"] = _lan_ip()
     LAN_INFO["port"] = port
+    # 公共素材统计（/api/cdn/public）第一次要读 500 多个 char_*.js 建索引，本机
+    # 实测 2.2 秒、老硬盘上更久。前端要等它才肯发横幅/头像请求，用户看到的就是
+    # "横幅十几秒才出来"。这里开服就先在后台算一遍，页面来问时直接命中缓存。
+    try:
+        def _warm():
+            try:
+                cdn_install.public_status()
+            except Exception as e:                             # noqa: BLE001
+                applog.debug("预热公共素材统计失败（不影响使用）：%s" % e, tag="boot")
+        threading.Thread(target=_warm, daemon=True).start()
+    except Exception:                                          # noqa: BLE001
+        pass
     print("=" * 56)
     print(f"  ESCAH 离线阅读器  v{paths.app_version()}")
     print("=" * 56)

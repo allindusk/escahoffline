@@ -26,6 +26,7 @@ import contextlib
 import json
 import os
 import re
+import threading
 import time
 
 from .. import facts
@@ -332,6 +333,10 @@ def invalidate_units() -> None:
     _UNITS_CACHE["data"] = None
     _LOCAL_CACHE["data"] = None
     _STATUS_CACHE["data"] = None
+    # 公共素材统计也在安装/卸载/清理后失效：否则装完剧情后 30 秒内
+    # 横幅/头像完成度还是旧值，前端据此不发图请求（2026-11-17）。
+    _PUBLIC_STATUS_CACHE["data"] = None
+    _VOICE_STATE_CACHE["data"] = None
 
 
 def unit_state(key: str) -> str:
@@ -409,6 +414,18 @@ def unit_status_map() -> dict[str, str]:
 
 #: 横幅类包的两种前缀
 BANNER_PREFIXES = ("bundle_episodeicons_episode_character_", "bundle_image_story_")
+
+#: 立绘源包（分层立绘，**单数** ``bundle_standimage_stand_<编号>_<服装>``）：
+#: 一包 = 一个角色的**一套服装**，包内含这一套的全部表情图层。
+#: 注意不能写成 ``bundle_standimage``（不带尾下划线）：那样会把复数的
+#: ``bundle_standimages_stand_<编号>``（完整立绘，另一类素材）也算进来。
+STAND_PACK_PREFIX = "bundle_standimage_"
+
+#: 「全部立绘」做完后写的完成标记（``userdata/_archive/stand_extra_done.json``）。
+#: 存"当时清单里有多少个立绘源包 + 合成出多少张"，界面据此判「已就绪 / 补全」：
+#: 官方上新包 → 清单数变大 → 自动变回「补全」；用户清理过 bundle 缓存 →
+#: 成品还在、标记也还在，不该让他再下一遍（所以判齐**不看**本地包数）。
+STAND_EXTRA_STAMP = "stand_extra_done.json"
 
 #: 演出特效（advfx）要用到的包：
 #:   · bundle_image_adv        —— 表情符号图集 + 画面特效逐帧参数表
@@ -688,6 +705,49 @@ def gallery_have_audio() -> int:
     return len([t for t in (obj.get("tracks") or []) if t.get("s")])
 
 
+def stand_img_count() -> int:
+    """``web/media/img/stand/`` 里的成品立绘张数（只数 webp）。
+
+    这是"全部立绘"这类安装项的**结果指标**：合成成功多少张就看它，
+    不看源包缓存（用户清理过缓存后图还在，不该显示成 0）。
+    """
+    d = os.path.join(config.IMG, "stand")
+    try:
+        return len([n for n in os.listdir(d) if n.lower().endswith(".webp")])
+    except OSError:
+        return 0
+
+
+def stand_extra_stamp_path() -> str:
+    return os.path.join(config.WS, "_archive", STAND_EXTRA_STAMP)
+
+
+def read_stand_extra_stamp() -> dict:
+    """读「全部立绘」完成标记（没做过返回空 dict）。"""
+    try:
+        with open(stand_extra_stamp_path(), encoding="utf-8") as f:
+            return json.load(f) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_stand_extra_stamp(packs: int, files: int) -> None:
+    """写完成标记：``packs`` = 当时清单里的立绘源包数。
+
+    判齐看它而不是"本地源包数"：清理缓存删掉源包后，成品还在、标记也还在，
+    不该让用户以为要重下；官方上新包 → 清单包数变大 → 自动变回「补全」。
+    """
+    p = stand_extra_stamp_path()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"packs": int(packs), "files": int(files),
+                       "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                      f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 # def _is_npc_sd(name: str) -> bool:
     # """``bundle_unit_10001_bc`` 这种是不是 NPC / 敌人（编号 ≥ 10000）。"""
     # if not name.startswith("bundle_unit_"):
@@ -802,28 +862,45 @@ def voice_bundle_name(cid) -> str:
     return "bundle_audioclipsprefab_unit_%05d" % int(cid)
 
 
-def voice_state_map() -> dict:
+_VOICE_STATE_CACHE: dict = {"at": 0.0, "data": None}
+_VOICE_STATE_TTL = 30.0
+_VOICE_STATE_LOCK = threading.Lock()
+
+
+def voice_state_map(force: bool = False) -> dict:
     """``{编号: 本机有没有战斗语音}`` —— 形状与 :func:`sd_state_map` 一致。
 
     只列**清单里真有语音包**的编号，官方没出的单位不会被标成"永远缺"。
+    带 30 秒缓存 + single-flight：``/api/cdn/units`` 每次都调它（基准 80 ms），
+    多 iframe 并发时只算一次；装/卸语音后由 invalidate_units() 清掉。
     """
-    out = {}
-    try:
-        mf = select.Manifest(ensure_manifest())
-    except Exception:                                            # noqa: BLE001
+    now = time.time()
+    c = _VOICE_STATE_CACHE
+    if not force and c["data"] is not None and now - c["at"] < _VOICE_STATE_TTL:
+        return c["data"]
+    with _VOICE_STATE_LOCK:
+        now = time.time()
+        if not force and c["data"] is not None and now - c["at"] < _VOICE_STATE_TTL:
+            return c["data"]
+        out = {}
+        try:
+            mf = select.Manifest(ensure_manifest())
+        except Exception:                                        # noqa: BLE001
+            return out
+        vdir = os.path.join(config.AUDIO, "voice")
+        vmap = _voice_map_ids()
+        for name in mf.index:
+            if not name.startswith("bundle_audioclipsprefab_unit_"):
+                continue
+            num = name[len("bundle_audioclipsprefab_unit_"):]
+            if not num.isdigit():
+                continue
+            # 包名是 5 位补零（00002），导出目录是去零的（2）—— 别拿包名直接拼路径
+            cid = str(int(num))
+            out[cid] = _voice_installed(cid, vmap)
+        c["data"] = out
+        c["at"] = now
         return out
-    vdir = os.path.join(config.AUDIO, "voice")
-    vmap = _voice_map_ids()
-    for name in mf.index:
-        if not name.startswith("bundle_audioclipsprefab_unit_"):
-            continue
-        num = name[len("bundle_audioclipsprefab_unit_"):]
-        if not num.isdigit():
-            continue
-        # 包名是 5 位补零（00002），导出目录是去零的（2）—— 别拿包名直接拼路径
-        cid = str(int(num))
-        out[cid] = _voice_installed(cid, vmap)
-    return out
 
 
 def _char_id(unit: str):
@@ -951,8 +1028,18 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     标题横幅来自 ``bundle_episodeicons_episode_character_<cid>``。剧本**都不引用**
     它们，所以按剧本引用下载是拿不到的；但数量固定、体积小（头像 ~20 MB、
     横幅 ~40 MB）、dependencies 为空（不跟任何包绑定），因此归入公共素材最合适：
-       · 体积可以忽略
-       · **没装的角色也能显示头像与横幅**，方便认人（若按剧情下载，未装角色就是空白）
+      · 体积可以忽略
+      · **没装的角色也能显示头像与横幅**，方便认人（若按剧情下载，未装角色就是空白）
+
+    可选类别 ``stand_extra``（「全部立绘」）
+    ---------------------------------------
+    官方立绘是「一套服装一个源包」（``bundle_standimage_stand_<编号>_<服装>``），
+    包内 7~12 张表情图层，剧本每套只用其中几张。按剧情分发时只把**被引用的**
+    那几张合成出来，剩下那批「剧情里永远不会出现」的表情永远不会落盘 ——
+    用户看到的现象就是立绘页整组缺几张、装遍全部剧情也补不齐。
+    这一项把官方全部立绘源包下齐，再按包内 ``ImageGroup.ExpressionImages``
+    合成全套表情（见 ``stages.compose_stands_all_packs``）。已存在的成品走幂等
+    守卫，重复点「补全」不会白跑。
     """
     parts = tuple(parts) if parts else tuple(PUBLIC_PARTS)
 
@@ -966,6 +1053,21 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     _gal_names = (gallery_jacket_names(mf) + gallery_missing_audio(mf)) \
         if "gallery" in parts else []
     _gal_names = [n for n in _gal_names if n in mf.index]
+    # 「全部立绘」：官方全部立绘源包（2623 个 / 约 589 MB）。剧本只引用到其中
+    # 一部分，剩下那些包里的表情（同一套服装的其它表情）永远不会有成品 ——
+    # 这就是「立绘页一半是灰的」的根因。已下过的包会 skip，不重下。
+    _stand_names = ([n for n in mf.index if n.startswith(STAND_PACK_PREFIX)]
+                    if "stand_extra" in parts else [])
+    # 合成是按**角色编号**一套服装跑一次（清单里 2623 个包只对应 992 个编号），
+    # 所以这一项在进度条上的"工作单位"是编号、不是包。分母用包数会算错：
+    # 解包阶段按包记账，而这一项实际只推进 992 次 → 进度条永远差一截（2026-11-17 审计）。
+    _stand_nums: list[str] = []
+    _stand_seen: set[str] = set()
+    for _n in _stand_names:
+        _mm = re.match(r"^bundle_standimage_stand_(\d+)_", _n)
+        if _mm and _mm.group(1) not in _stand_seen:
+            _stand_seen.add(_mm.group(1))
+            _stand_nums.append(_mm.group(1))   # 补零宽度必须原样保留：036 ≠ 36
     # 2026-11-16：NPC / 敌人的 SD 小人 + 音声整体停用。
     # 原来这里在 parts 含 "sd_npc" 时收集 435 个 bundle_unit_* 与
     # 435 个 bundle_audioclipsprefab_unit_*（1xxxx/2xxxx），现在全部注释。
@@ -986,13 +1088,17 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     if "sfx" in parts:
         _total += len([n for n in mf.index if n.startswith("bundle_sound_")])
     if "avatar" in parts:
-        _total += len([n for n in mf.index if n.startswith("bundle_chara_c-panel_")])
+        _total += len([n for n in mf.index if stages.avatar_bundle_applicable(n)])
     if "banner" in parts:
         _total += len([n for n in mf.index if n.startswith(BANNER_PREFIXES)])
     if "advfx" in parts:
         _total += len([n for n in mf.index if n.startswith(ADVFX_PREFIXES)])
     if "gallery" in parts:
         _total += len(_gal_names)
+    if _stand_nums:
+        # 按**编号**记账（不是包数）：这一项在解包阶段做的是「一套服装合成一次」，
+        # 分母若按 2623 个包算，进度条到最后只会走到约 73%（见上面 _stand_nums）。
+        _total += len(_stand_nums)
     # 2026-11-16：sd_npc 已停用
     # if "sd_npc" in parts:
     #     _total += len(_sd_names) + len(_vc_names)
@@ -1038,7 +1144,7 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         if "avatar" in parts:
             _bytes += sum(int(e.get("size") or 0)
                           for n, e in mf.index.items()
-                          if n.startswith("bundle_chara_c-panel_"))
+                          if stages.avatar_bundle_applicable(n))
         if "banner" in parts:
             _bytes += sum(int(e.get("size") or 0)
                           for n, e in mf.index.items()
@@ -1049,6 +1155,9 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                           if n.startswith(ADVFX_PREFIXES))
         if _gal_names:
             _bytes += sum(int((mf.index.get(n) or {}).get("size") or 0) for n in _gal_names)
+        if _stand_names:
+            _bytes += sum(int((mf.index.get(n) or {}).get("size") or 0)
+                          for n in _stand_names)
         # 2026-11-16：NPC / 敌人 SD + 音声已整体停用，_sd_names/_vc_names 不再定义，
         # 这段遗留的字节统计必须一起删掉（否则带 job 装公共素材时 NameError）。
         for _pref in ("bundle_music_", "bundle_sound_"):
@@ -1088,9 +1197,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         plan.append({"tag": "sfx", "label": "音效", "ents": ents, "sz": sz})
     if "avatar" in parts:
         ents = [e for n, e in mf.index.items()
-                if n.startswith("bundle_chara_c-panel_")]
+                if stages.avatar_bundle_applicable(n)]
         sz = sum(int(e.get("size") or 0) for e in ents)
-        plan.append({"tag": "avatar", "label": "角色头像", "ents": ents, "sz": sz})
+        plan.append({"tag": "avatar", "label": "角色/NPC/敌人头像",
+                     "ents": ents, "sz": sz})
     if "banner" in parts:
         names = [n for n in mf.index if n.startswith(BANNER_PREFIXES)]
         ents = _entries(mf, names)
@@ -1104,6 +1214,11 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         ents = _entries(mf, _gal_names)
         sz = sum(int(e.get("size") or 0) for e in ents)
         plan.append({"tag": "gallery", "label": "原声集", "ents": ents, "sz": sz})
+    if _stand_names:
+        ents = _entries(mf, _stand_names)
+        sz = sum(int(e.get("size") or 0) for e in ents)
+        plan.append({"tag": "stand_extra", "label": "全部立绘",
+                     "ents": ents, "sz": sz})
     # 2026-11-16：sd_npc 下载计划已删除
     # if "sd_npc" in parts:
     #     ents = _entries(mf, _sd_names) + _entries(mf, _vc_names)
@@ -1209,39 +1324,76 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
             out["bytes"] += sz
         elif tag == "avatar":
             n_ok = n_bad = 0
+            # 4xxx 官方头像里混着活动/皮肤 NPC，剧情脚本没引用到的**根本不导出**。
+            # 以前是先全量导出 246 张、再删掉没引用的一批 —— 下次「补全」又重复
+            # 一遍同样的导出→删除（2026-11-17 审计）。没有装任何剧情时 used_npc
+            # 为空，此时不做过滤（宁可多留也不要把 NPC 全删）。
+            try:
+                used_npc = set(stages._story_stand_ids(4000, 4399))
+            except Exception:                                  # noqa: BLE001
+                used_npc = set()
             for i, e in enumerate(ents, 1):
-                # 384 个头像逐个导出要好几分钟，中途得让任务条有话说
+                # 官方头像有 2000 多个包，逐个导出要好几分钟；任务条必须有进度
                 if job is not None and (i % 20 == 0 or i == len(ents)):
-                    job.progress(message=f"解包角色头像 {i}/{len(ents)}…")
+                    job.progress(message=f"解包头像 {i}/{len(ents)}…")
                 name = str(e.get("bundle_name") or "")
-                tail = name.rsplit("_", 1)[-1]
+                mm = re.match(r"^bundle_usericon_user_icon_(\d{4})$", name)
+                if used_npc and mm and 4001 <= int(mm.group(1)) <= 4399 \
+                        and int(mm.group(1)) not in used_npc:
+                    if job is not None:
+                        job.progress(add=1)      # 跳过也要推进，进度条不能卡住
+                    continue
                 try:
-                    # force=True：旧版本生成过一批错头像（同一张图贴到多个 id），
-                    # 必须重做才能修好；x2 一起重做，否则播放器优先读的还是旧超分图。
-                    if stages.export_avatar(int(tail), force=True):
+                    # force=True：旧版本导出的 cpanel 头像有错图；新官方头像也允许
+                    # 官方更新后覆盖旧文件。x2 一起重做。
+                    # regen=False：整批结束后统一重建一次映射，别每张都重扫媒体树。
+                    if stages.export_avatar_bundle(name, force=True, regen=False):
                         n_ok += 1
                     else:
+                        # 不是每张官方头像都有对应文件（编号空洞/包结构异常），
+                        # 这不算致命错误，继续导下一张。
                         n_bad += 1
+                        if job is not None and n_bad <= 3:
+                            job.log(f"   头像跳过 {name}")
                 except Exception as ex:                        # noqa: BLE001
                     n_bad += 1
                     if job is not None and n_bad <= 3:
-                        job.log(f"   头像导出失败 cid={tail}：{str(ex)[:80]}")
+                        job.log(f"   头像导出失败 {name}：{str(ex)[:80]}")
                 if job is not None:
-                    job.progress(add=1)      # 逐张推进：385 张要跑好几分钟
-            # 让 imgmap.avatar 带上这些头像，前端就不用靠试扩展名
+                    job.progress(add=1)
+            # 收尾只做**一轮**：先按剧情引用删掉多余的 NPC 头像，再从磁盘重建
+            # 全部映射。以前这里是「导完重建一轮 → 删图 → 再重建一轮」，每个
+            # regen_* 都是扫一两万文件的子进程，等于白跑一遍。
+            try:
+                stages.cleanup_unused_npc_avatars()
+            except Exception:                                  # noqa: BLE001
+                pass
+            # imgmap.x2.js 是本地超分覆盖层，必须按 img_x2 磁盘重建；
+            # 否则旧版本会留下指向已删文件的 src，页面继续 404。
+            try:
+                from .. import media
+                media.rebuild_x2_overlay()
+            except Exception:                                  # noqa: BLE001
+                pass
             try:
                 stages.regen_imgmap()
             except Exception:                                  # noqa: BLE001
                 pass
+            try:
+                stages.regen_avatarmap()
+            except Exception as ex:                            # noqa: BLE001
+                if job is not None:
+                    job.log(f"   头像映射生成失败：{str(ex)[:80]}")
+            stages.regen_mediaindex()
             out["avatar"] = n_ok
             out["bytes"] += sz
             if job is not None:
-                job.log(f"   头像生成完毕：{n_ok}/{len(ents)}"
-                        + (f"，失败 {n_bad} 个" if n_bad else ""))
+                job.log(f"   头像生成完毕：{n_ok} 张可用"
+                        + (f"，{n_bad} 个包没有可用图标" if n_bad else ""))
             if n_bad:
-                fails.append(f"头像：{n_bad} 个包下到了但裁不出图"
-                             "（包不完整，或缺图片解码组件）")
-                hints.append("重装一次公共素材；仍失败请到「剧情安装」页装依赖")
+                fails.append(f"头像：{n_bad} 个包没有导出图标"
+                             "（官方编号空洞或包不完整）")
+                hints.append("可重装一次公共素材；仍失败请反馈 app.log 的头像段落")
         elif tag == "banner":
             try:
                 stages.export_char_banners()
@@ -1270,6 +1422,60 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                 hints.append("重试一次「补全缺失」；仍失败请反馈日志里的 gallery 段落")
             out["gallery"] = 1 if ok else 0
             out["bytes"] += sz
+        elif tag == "stand_extra":
+            # 下载只是第一步。普通合成路径（``collect_tasks``）只做**剧本引用到**的
+            # 那几张表情，所以这里走 ``--all-packs``：按包内
+            # ``ImageGroup.ExpressionImages`` 把每套服装的全部表情都合成出来
+            # （已存在的成品走幂等守卫，不重写、也不重复占空间）。
+            #
+            # 进度口径：`_total` 里这一项记的是**编号数**（`_stand_nums`），
+            # 与这里 `add=len(chunk)` 一一对应，所以整条进度条单调爬到 100%，
+            # 合成阶段自己占掉它该占的那一段（不再「下载完就 100%、合成像卡死」）。
+            nums = _stand_nums
+            BATCH = 120                          # 一批约 3~5 分钟，进度条不至于冻住
+            bad = 0
+            done_sets = 0
+            cancelled = False
+            for bi in range(0, len(nums), BATCH):
+                if job is not None and job.cancelled:
+                    cancelled = True
+                    break
+                chunk = nums[bi:bi + BATCH]
+                if job is not None:
+                    job.progress(message=f"合成全部立绘 {bi + 1}-{bi + len(chunk)}"
+                                         f"/{len(nums)} 套服装（含剧情没用到的表情）…")
+                try:
+                    stages.compose_stands_all_packs(chunk)
+                    done_sets += len(chunk)
+                except Exception as ex:                        # noqa: BLE001
+                    bad += 1
+                    if job is not None and bad <= 3:
+                        job.log(f"   立绘合成失败（{chunk[0]} 起 {len(chunk)} 套）："
+                                f"{str(ex)[:80]}")
+                if job is not None:
+                    job.progress(add=len(chunk))
+            # 立绘页的分组表 / "这组有没有"清单都靠扫磁盘，必须跟着重建，
+            # 否则图在本机但页面还是灰的（等同没装）。
+            stages.regen_standmap()
+            stages.regen_mediaindex()
+            n_img = stand_img_count()
+            out["stand_extra"] = n_img
+            out["bytes"] += sz
+            if job is not None:
+                job.log(f"   立绘总张数 {n_img}（含剧情里没用到的表情）")
+            # **只有真的跑完才写完成标记**：界面的「已就绪」判据就是它。
+            # 中途取消 / 有批次失败还盖章的话，用户会看到一个假的「已就绪」，
+            # 而且以后再也不会提示补全（2026-11-17 审计）。
+            if cancelled:
+                fails.append("全部立绘：已取消，没有标记为完成")
+                hints.append("再点一次「补全」会接着做（已合成的不会重做）")
+            elif bad:
+                fails.append(f"全部立绘：{bad} 批合成失败（详见日志），未标记为完成")
+                hints.append("重试一次；仍失败请反馈日志里的 compose_stand_all 段落")
+            else:
+                write_stand_extra_stamp(len(_stand_names), n_img)
+                if job is not None:
+                    job.log(f"   已合成 {done_sets}/{len(nums)} 套服装，标记为已就绪")
         # 2026-11-16：sd_npc 解包/导出分支已删除（NPC 敌 SD + 音声整体停用）
         # elif tag == "sd_npc":
         # elif tag == "sd_npc":
@@ -1452,7 +1658,7 @@ def _cur_counts() -> dict:
         "bg": len([n for n in idx if n.startswith("bundle_bgimage_")]),
         "bgm": len([n for n in idx if n.startswith("bundle_music_")]),
         "sfx": len([n for n in idx if n.startswith("bundle_sound_")]),
-        "avatar": len([n for n in idx if n.startswith("bundle_chara_c-panel_")]),
+        "avatar": len([n for n in idx if stages.avatar_bundle_applicable(n)]),
         "banner": len([n for n in idx if n.startswith(BANNER_PREFIXES)]),
         # 演出特效：新类别。oldua 的 stamp 里没有这个键 → new_public() 判为
         # 「从没下过」，老用户刷新清单时会自动把它列进待补，不用手动勾。
@@ -1498,6 +1704,32 @@ def _public_img_ok(folder: str, base: str) -> bool:
     return False
 
 
+def _official_avatar_output(name: str) -> str:
+    """官方头像包对应的产物主干；不是头像包 / 不产图的包返回空串。"""
+    if name.startswith("bundle_usericon_user_icon_"):
+        try:
+            n = int(name.rsplit("_", 1)[-1])
+        except ValueError:
+            return ""
+        if 1 <= n <= 416:
+            return "d%03d" % n
+        if 1001 <= n <= 1416:
+            return "b%03d" % (n - 1000)
+        if 2001 <= n <= 2203:
+            return "e%04d" % (n + stages.ENEMY_ICON_OFFSET)
+        if 4001 <= n <= 4399:
+            return "n%04d" % n
+        return ""
+    if name.startswith("bundle_battle_character_icon_character_"):
+        try:
+            n = int(name.rsplit("_", 1)[-1])
+        except ValueError:
+            return ""
+        if 20001 <= n <= 20200:
+            return "e%04d" % (n - 15000)
+    return ""
+
+
 def public_deficit() -> dict:
     """清单里有、但**磁盘上还没有对应图**的公共素材包（精确到包名）。
 
@@ -1506,8 +1738,10 @@ def public_deficit() -> dict:
     → ``new_public()`` 永远返回空。于是官方一上新角色（1.0.9 带进来 char_416），
     侧栏头像与剧情横幅直接 404，而程序完全不知道（用户 2026-11-04 反馈）。
 
-    这里改成按"包 ↔ 期望落盘的图"一对一核对，只认**一包一图**的两类：
+    这里改成按"包 ↔ 期望落盘的图"一对一核对，覆盖：
       · ``bundle_chara_c-panel_<n>``              → ``media/img/avatar/<n>.png``
+      · ``bundle_usericon_user_icon_*`` / ``bundle_battle_character_icon_*``
+                                                   → ``d/b/n/e`` 官方头像
       · ``bundle_episodeicons_episode_character_<n>`` → ``media/img/story/char_<cid>.webp``
     章节横幅（``bundle_image_story_*``，一个包里一批图）另按"应有张数"登记核对。
 
@@ -1519,6 +1753,7 @@ def public_deficit() -> dict:
     adir = os.path.join(config.IMG, "avatar")
     sdir = os.path.join(config.IMG, "story")
     out = {"avatar": [], "banner": []}
+    used_npc = stages._story_stand_ids(4000, 4399)
     for n in idx:
         if n.startswith("bundle_chara_c-panel_"):
             # 包名是**补零**的（_001 / _0416），落盘的图是**不补零**的（1.png / 416.png），
@@ -1536,6 +1771,19 @@ def public_deficit() -> dict:
                 continue
             if not _public_img_ok(sdir, "char_%d" % cid):
                 out["banner"].append(n)
+        else:
+            base = _official_avatar_output(n)
+            if base and base.startswith("n"):
+                # 活动/皮肤 NPC 与剧情 NPC 共用 4xxx；cleanup 只保留剧情用到的，
+                # 这里也跟着只认这些，否则会把“刻意删掉的活动图”当成永远补不完的缺口。
+                try:
+                    nid = int(base[1:])
+                except ValueError:
+                    nid = 0
+                if not used_npc or nid not in used_npc:
+                    continue
+            if base and not _public_img_ok(adir, base):
+                out["avatar"].append(n)
     inv = _banner_inventory()
     if inv:
         try:
@@ -1630,7 +1878,33 @@ def _banner_inventory() -> set:
     return set()
 
 
-def public_status() -> dict:
+#: 公共素材统计缓存。``/api/cdn/public`` 挂在播放器/CG/原声/立绘每一页首屏，
+#: 一次要读 500+ 个 char_*.js 收集 stand 编号（冷调 2.2 秒，src=stages.py 的
+#: _story_stand_ids），多 iframe 并发时会放大成 3~6 秒（2026-11-17 反馈：
+#: "文件没变却每次点页面都重复耗时读取"）。开服预热（api.py serve()）与首个
+#: 请求共用这把锁，预热结果不再丢弃；装/卸/清理后由 invalidate_units() 清掉。
+_PUBLIC_STATUS_CACHE: dict = {"at": 0.0, "data": None}
+_PUBLIC_STATUS_TTL = 30.0
+_PUBLIC_STATUS_LOCK = threading.Lock()
+
+
+def public_status(force: bool = False) -> dict:
+    """带 30 秒缓存的版本（single-flight：并发只算一次）。"""
+    now = time.time()
+    c = _PUBLIC_STATUS_CACHE
+    if not force and c["data"] is not None and now - c["at"] < _PUBLIC_STATUS_TTL:
+        return c["data"]
+    with _PUBLIC_STATUS_LOCK:
+        now = time.time()
+        if not force and c["data"] is not None and now - c["at"] < _PUBLIC_STATUS_TTL:
+            return c["data"]
+        out = _public_status_calc()
+        c["data"] = out
+        c["at"] = now
+        return out
+
+
+def _public_status_calc() -> dict:
     """公共素材完成度（按**解包产物**算，不是按 bundle 缓存）。
 
     之前的实现有三处错，导致界面出现"BGM 0/217（其实已下完）"
@@ -1693,8 +1967,22 @@ def public_status() -> dict:
     # **解包产物**（上面的 back/music/sfx），官方新增时 backTotal 等会变大，
     # 前端自然显示成 601/620，用户点「更新」即可，不需要额外数字。
     adir2 = os.path.join(config.IMG, "avatar")
-    n_avatar = _count(adir2, (".png", ".webp", ".jpg"))
-    avatar_total = len([n2 for n2 in idx if n2.startswith("bundle_chara_c-panel_")]) or 384
+    # 本轮头像库产物：d### 日常 / b### 战斗 / n#### NPC / e#### 敌人。
+    # 旧的 cpanel <编号>.png 仍然保留作兜底，但不混进“官方头像”计数。
+    avatar_files = [n for n in os.listdir(adir2)
+                    if re.match(r"^[dbne]\d+\.(png|webp|jpg)$", n, re.I)]
+    n_avatar = len(avatar_files)
+    # 分母按**清单里官方头像包的应产物数**算，不能等于当前文件数：
+    # 以前 avatar_total = n_avatar，用户一张都没下时 0/1 尚可，
+    # 但下了一半时会出现 500/500 的假“齐全”，侧栏与播放器照样去请求缺图。
+    # NPC 4xxx 只算剧情真正用到的（cleanup_unused_npc_avatars 会删掉活动图），
+    # 避免把刻意没导出的活动 NPC 算成缺口；已有多出来的文件不惩罚。
+    used_npc = stages._story_stand_ids(4000, 4399)
+    expected_avatar = {
+        b for b in (_official_avatar_output(n) for n in idx)
+        if b and (not b.startswith("n") or int(b[1:]) in used_npc)
+    }
+    avatar_total = max(len(expected_avatar), n_avatar) or 1
 
     # 剧情横幅：按**导出的图片张数**算，角色 / 章节分开数。
     #
@@ -1736,6 +2024,22 @@ def public_status() -> dict:
     gal_have = gallery_have_audio()
     n_gal_jacket = _count(os.path.join(config.IMG, "jacket"), (".webp", ".png"))
     gal_total = len(gallery_audio_nos(idx)) or len(gallery_tracks()) or 165
+
+    # 全部立绘（可选）：分子是**磁盘成品张数**（展示用）；判齐看完成标记里记的
+    # "当时清单有多少个立绘源包" —— 清理缓存删了源包不该判成缺。
+    stand_packs = len([n for n in idx if n.startswith(STAND_PACK_PREFIX)]) or 2623
+    n_stand_img = stand_img_count()
+    _st_stamp = read_stand_extra_stamp()
+    stand_extra_ok = (int(_st_stamp.get("packs") or 0) >= stand_packs
+                      and n_stand_img > 0)
+    # 「没有任何剧情包包含」的张数 = 磁盘总数 − imgmap 里被剧本引用到的键数。
+    # 界面上要写清这部分才是这一项独有的价值（不然用户觉得"我装了剧情怎么还缺"）。
+    try:
+        from .. import media as _media
+        _referenced = len((_media.load_imgmap().get("stand") or {}))
+    except Exception:                                          # noqa: BLE001
+        _referenced = 0
+    stand_extra_only = max(0, n_stand_img - _referenced)
     # NPC / 敌 SD：清单里编号 ≥ 10000 的那批，齐了才算装上。
     # 扣掉「本机导不出 SD」的编号：它们不该占分母，否则界面永远
     # 2026-11-16：SD 小人 + NPC/敌音声整体停用，这几项统计不再需要。
@@ -1783,6 +2087,8 @@ def public_status() -> dict:
             #      （以前只判目录，清单被并发覆盖掉的单位会显示"已安装"却听不到）。
             # 12 = 原声集改成"有音频的曲目数 / 清单曲目数"（gallery/galleryTotal
             #      不再是 0-1 布尔值）；分母含官方新曲，上新后按钮会变回「补全」。
+            # 13 = 加 standExtra（可选「全部立绘」：含剧情没用到的表情）+
+            #      standExtraPacks / standExtraOk。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
             "advfx": 1 if advfx_ok else 0, "advfxTotal": 1,
@@ -1791,11 +2097,17 @@ def public_status() -> dict:
             "gallery": min(gal_have, gal_total), "galleryTotal": gal_total,
             # 封面数单独给，只用于展示（缺封面不该判成"没装好"）
             "jacket": min(n_gal_jacket, gal_total), "jacketTotal": gal_total,
+            # 全部立绘（v13）：磁盘成品张数 + 是否已经按最新清单跑完过。
+            # standExtraPacks 是清单里的立绘源包数（不是本地包数 —— 清理过缓存
+            # 的用户本地是 0，但成品和标记都在，不该让他重下）。
+            "standExtra": n_stand_img, "standExtraPacks": stand_packs,
+            "standExtraOnly": stand_extra_only,
+            "standExtraOk": bool(stand_extra_ok),
             # NPC / 敌人 SD：已合成的编号数 / 清单里的编号数
             "sdNpc": n_sd_npc, "sdNpcTotal": sd_npc_total,
             # 战斗语音：已导出的 NPC 单位数 / 清单里的 NPC 单位数
             "voice": n_voice, "voiceTotal": voice_total,
-            "v": 12,
+            "v": 13,
             "bytes": 0}
 
 
@@ -2350,6 +2662,22 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
         # 用户会当成"没装好"。这一行必须落日志。
         job.log("⚠ 角色头像没裁出来（左侧列表会显示首字色块）：多半是半身像包"
                 "没下到，或包的格式不认识 —— 重装这部剧会重新下载")
+
+    # 官方独立头像（日常 / 战斗）也一起拿：播放器现在优先用这两张，
+    # 不再依赖 cpanel 裁图。装单部剧情也能立刻看到官方头像。
+    off_names = [f"bundle_usericon_user_icon_{int(cid):04d}",
+                 f"bundle_usericon_user_icon_{1000 + int(cid):04d}"]
+    off_ents = _entries(mf, [n for n in off_names if n in mf.index])
+    if off_ents:
+        stages.fetch(off_ents, workers, "官方头像", skip=True,
+                     pause_event=_pe(job), job=job)
+        stages.export_avatar_official("daily", cid)
+        stages.export_avatar_official("battle", cid)
+        try:
+            stages.regen_avatarmap()
+            stages.regen_mediaindex()
+        except Exception:                                      # noqa: BLE001
+            pass
 
     # 角色剧情的**横幅**（游戏「角色剧情」入口那张图）也在公共素材里：
     # `bundle_episodeicons_episode_character_<cid:05d>` → media/img/story/char_<cid>.webp。

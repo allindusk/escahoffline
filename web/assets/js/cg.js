@@ -100,8 +100,11 @@ function cgCands(f) {
 
 /* 头像文件重做过但文件名没变，浏览器会一直吃旧缓存（典型现象：魔女グリム 显示成
    エスカ・サファイア）。所以这里所有头像 URL 都带一个版本参数；x2 映射里已经带了
-   自己的时间戳，这里只兜住"硬拼路径"那几条。 */
+   自己的时间戳，这里只兜住"硬拼路径"那几条。
+   版本参数优先用服务端算的素材指纹（window.__MEDIA_VER）：素材变了地址自动变，
+   这才不用靠人记得改常量。 */
 const AVC = '1101';
+function avc() { return window.__MEDIA_VER || AVC; }
 
 function avatarCands(id) {
   // 本机清单说没有（官方刚上新、素材还没装）→ 一个候选都不给，调用方画首字
@@ -117,9 +120,9 @@ function avatarCands(id) {
   // 只写 .webp 的话，全新环境里所有头像 404、侧栏一片空白。
   // 导出的是 **.png**，先试 png 再试 webp（顺序反了会先吃一个 404 才回退）。
   if (!out.length) {
-    push('media/img/avatar/' + id + '.png?v=' + AVC);
-    push('media/img/avatar/' + id + '.webp?v=' + AVC);
-    push('media/img/avatar/' + id + '.jpg?v=' + AVC);
+    push('media/img/avatar/' + id + '.png?v=' + avc());
+    push('media/img/avatar/' + id + '.webp?v=' + avc());
+    push('media/img/avatar/' + id + '.jpg?v=' + avc());
   }
   // 超分头像不再硬拼路径，见上面 IMGX2.avatar（没跑过超分的人永远是 404）
   return out;
@@ -384,8 +387,15 @@ function renderCharList(box) {
         : `<span class="ava-ph">${(c.zh || c.name || '?').trim().slice(0, 1)}</span>`) +
       `<span class="info"><span class="nm">${c.name}</span>` +
       `<span class="sub">${c.zh ? c.zh + ' · ' : ''}${c.t ? c.t + ' · ' : ''}${c.groups.length} 组 / ${c.total} 张${dTxt}</span></span>`;
-    // 必须走候选链：头像实际是 .png，只写死一个 src 会 404 且不会回退
-    if (have) setChain(d.querySelector('img'), cands);
+    // 必须走候选链：头像实际是 .png，只写死一个 src 会 404 且不会回退。
+    // 取图推迟到这一行快进视野（侧栏几百行同时取图会顶住整页）
+    if (have) {
+      if (window.MediaUI && MediaUI.lazyRun) {
+        MediaUI.lazyRun(d, () => setChain(d.querySelector('img'), cands));
+      } else {
+        setChain(d.querySelector('img'), cands);
+      }
+    }
     d.onclick = () => pickChar(c.id);
     box.appendChild(d);
   }
@@ -573,7 +583,14 @@ function appendCards() {
       toggleGFav(g);
     };
     card.onclick = () => openLB(gi, 0);
-    if (have) setChain(card.querySelector('.thumb img'), cgCands(g.f[0]));
+    if (have) {
+      // 缩略图也等卡片快进视野再取（一屏只看得见几张，没必要整批下）
+      if (window.MediaUI && MediaUI.lazyRun) {
+        MediaUI.lazyRun(card, () => setChain(card.querySelector('.thumb img'), cgCands(g.f[0])));
+      } else {
+        setChain(card.querySelector('.thumb img'), cgCands(g.f[0]));
+      }
+    }
     frag.appendChild(card);
   }
   grid.appendChild(frag);

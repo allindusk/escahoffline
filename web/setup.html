@@ -11,7 +11,9 @@
 <link rel="stylesheet" href="assets/css/storylist.css?v=1124a">
 <!-- 「自己动手翻」教程浮窗的样式：与播放器共用同一份 -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1117g">
+<!-- 悬停说明气泡（14px）+「?」角标：原生 title 只有 12px，低于全站字号下限 -->
+<link rel="stylesheet" href="assets/css/tip.css?v=1116c">
 </head>
 <body>
 <div class="layout">
@@ -662,6 +664,10 @@
           <b>停止本地服务</b>：关掉后台程序，本页面会立刻失效。想再用就重新双击
           <code>启动.bat</code>。
         </p>
+        <!-- 体检结论留在这里：底部任务条十几秒就会自己收起，不然
+             「没有发现需要修的立绘」一闪就没了（2026-11-16 反馈）。
+             用 .tip（带左侧高亮条）而不是普通说明小字，结论要显眼。 -->
+        <p class="tip" id="standFixInfo" hidden></p>
       </div>
 
       <div class="panel">
@@ -875,17 +881,17 @@
 <script src="data/charmeta.js"></script>
 <script src="data/advindex.js"></script>
 <!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（见 web/index.html 的说明） -->
-<script src="data/mediaindex.js?v=1106a"
+<script src="data/mediaindex.js?v=11170540"
         onerror="window.__MEDIA=window.__MEDIA||null"></script>
 <script src="assets/js/common.js?v=1116a"></script>
-<script src="assets/js/dialog.js?v=1130d"></script>
-<script src="assets/js/mediaui.js?v=1123b"></script>
+<script src="assets/js/dialog.js?v=1117a"></script>
+<script src="assets/js/mediaui.js?v=1117b1"></script>
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
-<script src="assets/js/storylist.js?v=1124a"></script>
-<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/storylist.js?v=1124b"></script>
+<script src="assets/js/header.js?v=1130f"></script>
 <script src="assets/js/tour.js?v=1130a"></script>
 <script src="assets/js/miniplayer.js?v=1130a"></script>
-<script src="assets/js/disclaimer.js?v=1101a"></script>
+<script src="assets/js/disclaimer.js?v=1117c"></script>
 <script src="assets/js/health.js?v=1130a"></script>
 <!-- 「自己动手翻」教程（唯一文案，播放器也用这一份） -->
 <script src="assets/js/trans_tut.js?v=1133b"></script>
@@ -893,7 +899,8 @@
 <!-- 容量 / 耗时的唯一来源（server/facts.py → api/facts）：必须比 setup.js 先加载，
      setup.js 里拼的提示文案直接用 FACT.t(...) -->
 <script src="assets/js/facts.js?v=1131a"></script>
-<script src="assets/js/setup.js?v=1116j"></script>
-<script src="assets/js/mobile.js?v=1115b"></script>
+<script src="assets/js/tip.js?v=1116c"></script>
+<script src="assets/js/setup.js?v=1117a"></script>
+<script src="assets/js/mobile.js?v=1117c"></script>
 </body>
 </html>

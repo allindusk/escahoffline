@@ -161,7 +161,14 @@ window.TOUR = (() => {
   </div>
 </div>`;
     document.body.appendChild(w);
-    const close = () => { w.remove(); try { localStorage.setItem(KEY, '1'); } catch (e) { } };
+    /* 必须写页面传进来的 key（auto() 读的就是 opt.key），不能写死全局 KEY：
+       两个页面分别用 escah_tour_index / escah_tour_setup，写错 key 会让欢迎卡
+       点「直接开始」后刷新又弹出来（2026-11-17 反馈）。 */
+    const seenKey = (opt && opt.key) || KEY;
+    const close = () => {
+      w.remove();
+      try { localStorage.setItem(seenKey, '1'); } catch (e) { }
+    };
     w.querySelector('#wTour').onclick = () => { close(); start(opt.steps, opt); };
     w.querySelector('#wGo').onclick = close;
     w.querySelector('#wSetup').onclick = () => { close(); (window.__go ? window.__go('setup.html') : (location.href = 'setup.html')); };

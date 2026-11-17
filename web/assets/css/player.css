@@ -454,6 +454,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   box-shadow:0 8px 36px rgba(0,0,0,.75)}
 #msgWindow.on{opacity:1}
 #msgName{position:absolute;top:calc(-15px + var(--nameY,0px));padding:2px 16px;font-size:16.8px;
+  z-index:3;
   font-weight:700;color:#1a1206;letter-spacing:1px;border-radius:5px;
   background:linear-gradient(180deg,#f0d090,#c99b45);box-shadow:0 2px 10px rgba(0,0,0,.6);
   display:none}
@@ -461,7 +462,65 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #msgName.align-center{left:50%;right:auto;transform:translateX(calc(-50% + var(--nameX,0px)));text-align:center}
 #msgName.align-right{left:auto;right:calc(22px - var(--nameX,0px));text-align:right}
 #msgName.on{display:block}
-/* 文字：多层 text-shadow 模拟描边（向外扩，不糊字），再加一层柔光 */
+
+/* ---------- 话者头像（可选） ----------
+   头像挂在名条旁边或对话框的角上，位置由 JS 按 --avSize / --avGap / --avX / --avY 算。
+   金色画框和名条用同一套香槟金；PNG 自带的底色看不见时，
+   可以用「自动抠底 + 换色」把它换成对话框同色。
+   整个头像 pointer-events:none，点对话框照样翻页。 */
+#msgAvatar{position:absolute;left:0;top:0;z-index:2;display:block;
+  width:var(--avSize,54px);height:var(--avSize,54px);padding:2px;border-radius:50%;
+  background:linear-gradient(155deg,#f8e8bb 0%,#e4c178 26%,#c99b45 52%,#8a6320 78%,#5c3d10 100%);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,.65),
+    0 6px 18px rgba(0,0,0,.62),
+    inset 0 0 0 1px rgba(255,248,224,.18);
+  pointer-events:none;visibility:hidden;opacity:0;
+  transform:translateY(4px) scale(.95);
+  transition:opacity .18s ease, transform .22s cubic-bezier(.2,.8,.3,1);
+  will-change:opacity,transform}
+#msgAvatar.on{visibility:visible;opacity:1;transform:none}
+/* 换人时只弹一下，不是每一句都闪 */
+#msgAvatar.avSwap{animation:avSwap .34s cubic-bezier(.2,.8,.3,1)}
+@keyframes avSwap{
+  0%{transform:translateY(4px) scale(.9);filter:brightness(1.35)}
+  55%{transform:translateY(0) scale(1.04)}
+  100%{transform:none;filter:none}
+}
+#msgAvatar .avBox{position:relative;width:100%;height:100%;border-radius:inherit;
+  overflow:hidden;background:var(--avPlate,#0b1220);isolation:isolate;
+  box-shadow:inset 0 0 10px rgba(0,0,0,.55)}
+/* 官方 d/b/n/e 是 96×96 PNG，人物四周有透明留白 —— 这层留白由画框的
+   渐变底板（--avPlate）承接，不再为它铺模糊底/抠底：那两套方案已经从
+   设置页和代码里一起删掉了（2026-11-17 审计，不可达的死代码）。 */
+#msgAvatar .avImg{display:block;width:100%;height:100%;object-fit:cover;
+  position:relative;z-index:1;
+  opacity:0;transition:opacity .18s ease;user-select:none;-webkit-user-drag:none}
+#msgAvatar .avImg.ready{opacity:1}
+/* 官方 96×96 头像的透明留白约 6px：按 96→108 外扩（1.125），
+   超出 .avBox 的部分由 overflow:hidden 裁掉，人物有效画面贴住画框。
+   只用 avOfficial 类，170/340 的 c-panel 数字头像不受影响。 */
+#msgAvatar .avImg.avOfficial{transform:scale(1.125);transform-origin:center}
+/* 金环内的一层高光，让头像不像一张贴图 */
+#msgAvatar::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(150deg,rgba(255,255,255,.26),rgba(255,255,255,0) 36%,rgba(0,0,0,.20));
+  mix-blend-mode:overlay;opacity:.65}
+/* 画框样式 */
+#msgAvatar.avRing-goldwide{padding:4px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.7),0 8px 22px rgba(0,0,0,.66),
+    inset 0 0 0 1px rgba(255,248,224,.2)}
+#msgAvatar.avRing-dark{padding:2px;
+  background:linear-gradient(180deg,#232833,#0a0d14 55%,#05070b);
+  box-shadow:0 0 0 1px rgba(0,0,0,.75),0 6px 16px rgba(0,0,0,.6),
+    inset 0 0 0 1px rgba(242,214,158,.52)}
+#msgAvatar.avRing-none{padding:0;background:none;
+  box-shadow:0 5px 16px rgba(0,0,0,.6)}
+#msgAvatar.avRing-none::after{border-radius:inherit}
+/* 形状 */
+#msgAvatar.avShape-circle,#msgAvatar.avShape-circle .avBox{border-radius:50%}
+#msgAvatar.avShape-rounded,#msgAvatar.avShape-rounded .avBox{border-radius:calc(var(--avSize,54px) * .2)}
+#msgAvatar.avShape-square,#msgAvatar.avShape-square .avBox{border-radius:2px}
+
 #msgText{font-size:var(--msgFS,21px);line-height:var(--msgLH,1.62);
   font-family:var(--msgFont,"Microsoft YaHei","Hiragino Sans",sans-serif);
   white-space:pre-wrap;word-break:break-word;color:var(--msgColor,#f2f5fb);
@@ -518,32 +577,87 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
     calc(var(--halo) * .72) calc(var(--halo) * .72) 0 rgba(0,0,0,.9),
     0 2px 10px rgba(0,0,0,.95)}
 /* 设置面板 */
-/* top 跟着 header 的固定高度 50px 走，否则面板会压住顶栏下沿 */
+/* 贴着底部控制条（⚙ 设置按钮就在右下角）弹出：用户点完按钮鼠标就在手边，
+   不用再跨半屏移到右上角。控制条高约 45px（padding 7×2 + 按钮 30 + 边框），
+   面板下沿留在它上方 7px；面板向上生长，最多顶到 header 下方。 */
 /* 两列布局：单列 264px 时内容高约 1055px，1080p 下必然出滚动条。
    两列后基本一屏放得下；屏幕窄了自动降回单列（见文件末尾媒体查询）。 */
-#settings{position:fixed;right:12px;top:56px;z-index:120;
+#settings{position:fixed;right:12px;bottom:52px;z-index:120;
   width:min(608px,calc(100vw - 128px));
-  display:grid;grid-template-columns:1fr 1fr;gap:0 22px;align-content:start;
+  display:block;
   background:rgba(18,22,32,.97);border:1px solid var(--line);border-radius:10px;
   /* 关闭按钮已经移到面板外（浮窗），这里不用再给左侧留 44px 空白 */
   padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:14px;
-  max-height:calc(100vh - 62px);overflow-y:auto}
-/* 分节标题 / 说明文字 / 底部按钮：占满整行，不然两列会被拦腰截断。
-   .row（复选框行）**不再**整行 —— 一行放两项才省地方（画面/播放那一节）。 */
-#settings>h4,#settings>.reset-row,#settings>div:not([class]){
-  grid-column:1/-1}
+  max-height:calc(100vh - 110px);overflow-y:auto}
+/* 分类页签栏：顶部一行按钮，当前类高亮。窄屏可横向滚动，不换行。 */
+#setTabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  padding:0 0 9px;margin:0 0 4px;border-bottom:1px solid var(--line)}
+#setTabs button{flex:0 0 auto;background:var(--bg3);border:1px solid var(--line);
+  color:var(--fg2);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:14px;
+  line-height:1.2;white-space:nowrap}
+#setTabs button:hover{color:var(--fg);border-color:#5b4d7a}
+#setTabs button.on{background:#2d2a4a;border-color:#6b5aa8;color:var(--gold);font-weight:600}
+/* 恢复本页默认：独立于页签栏的页脚，样式刻意跟页签区分（幽灵按钮 + 金色描边），
+   免得被当成"第 6 个分类"误点。 */
+.set-foot{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);text-align:right}
+.set-foot button{background:transparent;border:1px solid #7a6438;color:var(--gold);
+  border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px;line-height:1.2}
+.set-foot button:hover{background:rgba(224,181,102,.12);border-color:var(--gold);color:#ffe7b3}
+/* 每个分类页内部沿用原来的两列网格：一行放两项，省地方。 */
+/* 列宽必须严格相等：`1fr` 等于 `minmax(auto,1fr)`，某项内容（例如
+   「背景颜色」行多出两个色块）一旦比半列还宽，就会把那一列挤宽，
+   两列宽度不一样很难看。minmax(0,1fr) 让列宽只由容器决定，内容自己截断。 */
+.set-page{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 22px;align-content:start}
+.set-page[hidden]{display:none}
 /* 同一行里两个控件高度不齐时，别让下面的项跟着错位 */
-#settings>label,#settings>.row{align-self:start}
+.set-page>label,.set-page>.row{align-self:start}
 /* 「名称 + 下拉框」压在同一行（一行一列），下拉框不占满宽度。
    上限 68% 是为了长选项（「原始 1x（最清晰）」「无框 + 柔和底衬」）在半列里也放得下。 */
 #settings label.ctlrow{display:flex;align-items:center;gap:8px;
   justify-content:space-between}
 #settings label.ctlrow select{width:auto;flex:0 1 auto;min-width:0;max-width:68%;
   margin-top:0;text-overflow:ellipsis}
-/* 占位格：某一类控件剩下单数时（「话者名」只有一个下拉框等），单独那项
+/* 占位格：某一类控件剩下单数时（「话者」只有一个下拉框等），单独那项
    仍旧只占**一列**，用一个 0 高度的空格把下一类顶到新的一行。
    不要改成给它 grid-column:1/-1 —— 单行独项被拉成半屏宽很难看（用户明确反对）。 */
-#settings>.sp{height:0}
+.set-page>.sp{height:0}
+/* 角色头像展开区：在「话者」页内，内部继续两列排；默认隐藏，
+   由 #setAvShow 勾选/取消控制。
+   整块用淡金底 + 虚线框 + 左侧金色强调条圈成一个视觉分组，并在顶部放小标题；
+   这样勾选后展开的一堆滑块一眼就知道「都属于角色头像」，不跟别的设置混在一起。 */
+.set-page>.av-settings{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:0 22px;align-content:start;
+  margin:6px 0 8px;padding:10px 14px 4px;
+  border:1px dashed #5b4d7a;border-left:3px solid var(--gold);
+  border-radius:8px;background:rgba(224,181,102,.05)}
+.set-page>.av-settings[hidden]{display:none}
+/* 分组标题跨两列：明确下面这些设置项都归角色头像管。
+   是一行真元素（data-i18n="sect.avatar"）而不是 ::before content ——
+   content 里的文本切语言时翻不了（2026-11-17 审计）。 */
+.set-page>.av-settings>.av-title{grid-column:1/-1;
+  font-size:14px;font-weight:600;color:var(--gold);
+  padding:0 0 6px;margin-bottom:4px;border-bottom:1px solid rgba(224,181,102,.16)}
+/* 条件行必须真的收起：设置页的 label 有 display:flex，会覆盖 hidden 的默认规则。 */
+.set-page>.av-settings label[hidden],
+.set-page>.av-settings [hidden]{display:none!important}
+/* 「背景颜色」这一行：下拉框右边紧跟「自定义」的两个色块，两个色块跟着下拉框
+   一起靠在右端，**不单独占一行** —— 面板高度是按最高页锁死的，多一行 46px
+   矮屏上就会出现滚动条。 */
+#settings #avToneRow{flex-wrap:nowrap}
+/* 名字不换行、不让位；让下拉框去挤（它是唯一能截断的） */
+#settings #avToneRow>span:first-child{flex:0 0 auto;white-space:nowrap}
+#settings #avToneRow .avtone-pick{display:inline-flex;align-items:center;gap:6px;
+  min-width:0;flex:1 1 auto;justify-content:flex-end}
+#settings #avToneRow .avtone-pick select{flex:0 1 auto;max-width:none;width:auto;
+  min-width:56px;margin-top:0}
+/* 「自定义渐变」的两个色块：起→止并排，固定尺寸，不给浏览器默认的宽高。
+   注意别写成两个独立的 flex 兄弟节点，否则窄列里会被挤成一条缝。 */
+.set-page>.av-settings .avsw2{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto}
+.set-page>.av-settings .avsw2 input[type=color]{
+  width:32px;height:25px;padding:0;border:1px solid var(--line2);border-radius:5px;
+  background:transparent;cursor:pointer;flex:0 0 auto}
+.set-page>.av-settings .avsw2 input[type=color]::-webkit-color-swatch-wrapper{padding:2px}
+.set-page>.av-settings .avsw2 input[type=color]::-webkit-color-swatch{border:none;border-radius:3px}
 /* 「?」角标：这一项鼠标移上去有详细说明。
    没有它用户根本不知道有气泡可看（用户 2026-11-11 提的）。
    角标本身不挂 title —— 气泡由父项（带 title 的 span / label）提供，
@@ -569,14 +683,11 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #tipBox.on{opacity:1;transform:none}
 /* 当前模式下不起作用的设置项：变淡 + 禁止操作（无框字幕时的背景色 / 不透明度） */
 #settings select:disabled,#settings input:disabled{opacity:.4;cursor:not-allowed}
-#settings h4{font-size:14px;color:var(--gold);letter-spacing:1px;margin:7px 0 4px;
-  padding-bottom:5px;border-bottom:1px solid var(--line);font-weight:600}
-#settings h4:first-child{margin-top:0}
 #settings[hidden]{display:none}
-/* 关闭按钮：**固定在面板左侧、垂直居中**的浮窗。
+/* 关闭按钮：**固定在面板右上角**的浮窗。
    position:fixed + 兄弟节点 = 不随面板内容滚动，也不会被 overflow 裁掉。
    具体 top/right 由 player.js 按面板实际矩形实时计算（窄屏会自动夹住）。 */
-#setClose{position:fixed;z-index:121;top:50%;right:286px;transform:translateY(-50%);
+#setClose{position:fixed;z-index:121;top:64px;right:20px;
   width:30px;height:30px;padding:0;border-radius:50%;cursor:pointer;
   border:1px solid var(--line2);background:rgba(18,22,32,.97);color:var(--fg2);
   font-size:14.6px;line-height:1;display:flex;align-items:center;justify-content:center;
@@ -603,13 +714,11 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #btnSet{background:var(--bg3);border:1px solid var(--line);color:var(--fg);
   border-radius:6px;padding:4px 9px;cursor:pointer;font-size:15.7px}
 #btnSet:hover{color:var(--gold)}
-#settings .reset-row{margin-top:8px;text-align:right}
-#settings .reset-row button{background:var(--bg3);border:1px solid var(--line);
-  color:var(--fg);border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
-#settings .reset-row button:hover{color:var(--gold);background:#2a3448}
 /* 窄屏放不下两列：降回单列 + 允许滚动（此时关闭按钮会贴到面板左边框内） */
 @media (max-width:860px){
-  #settings{width:calc(100vw - 96px);grid-template-columns:1fr;gap:0}
+  #settings{width:calc(100vw - 96px)}
+  .set-page{grid-template-columns:minmax(0,1fr);gap:0}
+  .set-page>.av-settings{grid-template-columns:minmax(0,1fr);gap:0}
 }
 #msgText.narr{font-style:normal}
 /* 台词行内图标：<sprite=0> 是那颗粉色小爱心（素材由 export_adv_effects.py 从

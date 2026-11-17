@@ -1,0 +1,72 @@
+/* 悬停说明气泡 + 「?」角标
+ * ---------------------------------------------------------------------------
+ * 为什么不用原生 title：气泡字号由浏览器决定（Edge/Chrome 约 12px），比全站
+ * 14px 的字号下限还小，看着像"缩水的说明"（用户多次反馈"悬浮字体太小"）。
+ * 所以统一改成自绘气泡，字号锁 14px，逻辑在 assets/js/tip.js。
+ *
+ * 为什么还要「?」角标：原生 title 唯一的可见线索是鼠标指针变成问号，用户根本
+ * 不知道那里有说明。把说明搬到「?」上，等于给"可以悬停"一个看得见的入口。
+ */
+#tipBox {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10050;                 /* 高过移动端全屏面板（mobile.css 里 300/310） */
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: rgba(12, 16, 24, .98);
+  border: 1px solid #3a4a60;
+  color: #e6e9f0;
+  font-size: 14px;                /* 全站下限，别再调小 */
+  line-height: 1.6;
+  white-space: pre-line;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .72);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+
+#tipBox.on {
+  opacity: 1;
+  transform: none;
+}
+
+/* 「?」角标：18px 圆，字 14px（等同于一个小按钮的视觉重量） */
+.qhint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid #46586e;
+  color: #9fb0c4;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  vertical-align: -2px;
+}
+
+.qhint:hover,
+.qhint:focus-visible {
+  color: #fff;
+  border-color: #6a92bd;
+  background: rgba(106, 146, 189, .22);
+  outline: none;
+}
+
+/* 手机上只能点、不能悬停：角标要放大到手指按得中（22px 是实测的最小可点尺寸） */
+@media (max-width: 860px) {
+  .qhint {
+    width: 22px;
+    height: 22px;
+    font-size: 15px;
+    margin-left: 8px;
+  }
+}

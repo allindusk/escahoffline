@@ -112,7 +112,10 @@
     el.style.color = bad ? '#ffb3ba' : '#dff0ff';
     el.style.opacity = '1';
     clearTimeout(el._t);
-    el._t = setTimeout(() => { el.style.opacity = '0'; }, 3200);
+    /* 停留时长按字数算：固定 3.2 秒时，一句"检查完了：没有发现需要修的立绘"
+       还没读完就没了（2026-11-16 反馈）。上限 12 秒，别让提示赖着不走。 */
+    const _keep = Math.min(12000, Math.max(3200, 1200 + String(msg).length * 110));
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, _keep);
     // 顶部气泡 3 秒就没了，右下角留一份记录，方便回看刚做了什么
     notify(msg, bad ? 'err' : 'info');
   }
@@ -856,6 +859,13 @@
       ? '曲目 ' + cnt(pub.gallery, pub.galleryTotal) + ' 首'
         + (pub.jacketTotal ? '（封面 ' + cnt(pub.jacket, pub.jacketTotal) + '）' : '')
       : '封面 ' + cnt(pub.jacket, pub.jacketTotal) + ' 张';
+    /* 全部立绘是 v13 才有的可选类别。为什么单独一项：
+       官方立绘包里"一套服装一个包"，包内有 7~12 张表情图；剧本每套只用其中
+       几张，剩下的（「照」「苦」这类）永远不会被任何剧情引用 → 装完所有剧情
+       也拿不到。旧版把这些也当成"没打包的素材"，用户以为装完剧情就齐了。 */
+    const extraVer = pubVer >= 13;
+    const standExtraOk = extraVer ? !!pub.standExtraOk : true;
+    const standImgTxt = '立绘 ' + (pub.standExtra || 0) + ' 张';
     /* 2026-11-16：NPC / 其他分类的音声不再下载/展示，可选区只剩原声集。 */
     const pubAll = ready && !pubStale && bgOk && backRefMiss === 0
       && exact(pub.music, pub.musicTotal) && exact(pub.sfx, pub.sfxTotal)
@@ -915,13 +925,14 @@
       '</div>' +
 
       // ② 公共素材
-      '<div class="bp-row"><span class="nm">公共素材（背景图 / 背景音乐 / 音效 / 头像 / 剧情横幅）</span>' +
-      '<span class="dim" title="背景按「已装剧情引用到的张数」算（= 已导出 + 引用但缺图）；'
-      + '音乐/音效/头像按「已导出 / 清单里的包」算；'
-      + '横幅按图片张数算（角色一包一张，主线/活动/其他的章节标题图一个包一批）。'
-      + '清单里有、但没有任何已装剧情引用的背景包不会导出成图 —— 它们不进分母，'
-      + '只在后面标注「另有 N 个未引用」；引用到了却没有图才会显示成缺。'
-      + '官方更新后点「补全」只会下新增的，已有的跳过">' +
+      '<div class="bp-row"><span class="nm">公共素材（背景图 / 背景音乐 / 音效 / 角色·NPC·敌人头像 / 剧情横幅）' +
+      '<span class="qhint" tabindex="0" data-tip="背景按「已装剧情引用到的张数」算（= 已导出 + 引用但缺图）；'
+      + '音乐/音效按「已导出 / 清单里的包」算；头像按官方 usericon + 敌人战斗图标导出的张数算，'
+      + '包含角色日常/战斗、NPC、敌人；'
+      + '横幅按图片张数算（角色一包一张，主线/活动/其他的章节标题图一个包一批）。清单里有、'
+      + '但没有任何已装剧情引用的背景包不会导出成图 —— 它们不进分母，只在后面标注「另有 N 个未引用」；'
+      + '引用到了却没有图才会显示成缺。官方更新后点「补全」只会下新增的，已有的跳过">?</span></span>' +
+      '<span class="dim">' +
       pubLine + '</span>' +
       // 已就绪后不再给「更新」入口：公共素材的增量补齐已经并进
       // 「更新 → 刷新资源清单」了（那边检测到新增会自动补），
@@ -936,18 +947,46 @@
       // ②' 可选类别：默认不装，各自一个按钮（体积大，不是人人要）
       (optVer
         ? '<div class="bp-row"><span class="nm">原声集（封面 + 独占曲）' +
-          '<span class="st none" style="margin-left:6px">可选</span></span>' +
-          '<span class="dim" title="每首一张封面（447×411）。'
-          + '多数曲目与你已经装过的 BGM 是同一份音频，直接复用本地文件，'
-          + '不重复下载；只有画廊独占的曲目会额外下（每首约 2.5 MB）。'
-          + '官方上新曲后这里会重新显示「补全」，点一下就能听到'
-          + '（新曲暂时只有内部编号名，公开曲名补齐后会自动更新）。'
-          + '装好后「原声集」页才有得听、有封面转">' +
+          '<span class="st none" style="margin-left:6px">可选</span>' +
+          '<span class="qhint" tabindex="0" data-tip="每首一张封面（447×411）。'
+          + '多数曲目与你已经装过的 BGM 是同一份音频，直接复用本地文件，不重复下载；'
+          + '只有画廊独占的曲目会额外下（每首约 2.5 MB）。官方上新曲后这里会重新显示「补全」，'
+          + '点一下就能听到（新曲暂时只有内部编号名，公开曲名补齐后会自动更新）。'
+          + '装好后「原声集」页才有得听、有封面转">?</span></span>' +
+          '<span class="dim">' +
           '约 30 MB · ' + galCnt + '</span>' +
           (galOk ? '<span class="st ok">已就绪</span>'
             : '<button id="bpGallery" title="已有的会跳过，重复点不会重下">'
               + (galHave > 0 ? '补全' : '安装') + '</button>') +
           '</div>'
+          /*
+           * ②'' 全部立绘：这些**不在任何剧情包里**。
+           * 用户最常见的误解是"装一部剧情 = 这部剧的立绘都在里面"。实际官方是
+           * 「一套服装一个包」，包内 7~12 张表情，剧本只用其中几张；剩下那批
+           * 永远不会出现在剧情里，所以按引用分发的剧情包永远收不到它们。
+           * 这一项就是补那批：缺的源包才下，然后在本地把全套表情合成出来。
+           */
+          + (extraVer
+            ? '<div class="bp-row"><span class="nm">全部立绘（含剧情里没用到的）' +
+              '<span class="st none" style="margin-left:6px">可选</span>' +
+              '<span class="qhint" tabindex="0" data-tip="官方立绘是「一套服装一个包」，每个包里有 7~12 张表情图；'
+              + '剧本每套只用其中几张，剩下那批永远不会出现在剧情里，所以装遍所有剧情也拿不到。'
+              + '另外剧情包不是一个大包，而是上千个小包拼起来的：同一套服装的立绘常常被捆在'
+              + '某部活动剧情里，其中大部分表情并不参与演出。'
+              + '这一项把「任何剧情包都没包含」的部分补齐：缺的包才下载（多数已随剧情装好），'
+              + '再在本机合成全部表情。合成在后台跑，期间可关掉页面。">?</span></span>' +
+              '<span class="dim">' +
+              '约 589 MB · ' +
+              (pub.standExtraOnly
+                ? '其中 ' + pub.standExtraOnly + ' 张不在任何剧情包里'
+                  + '（立绘共 ' + (pub.standExtra || 0) + ' 张）'
+                : standImgTxt) +
+              '</span>' +
+              (standExtraOk ? '<span class="st ok">已就绪</span>'
+                : '<button id="bpStandExtra" title="已有的会跳过，重复点不会重下">'
+                  + (pub.standExtra > 0 ? '补全' : '安装') + '</button>') +
+              '</div>'
+            : '')
           /* 2026-11-16：NPC / 其他分类的音声不再下载/展示，整行删除
           + '<div class="bp-row">...NPC / 敌人音声...</div>'
           */
@@ -961,7 +1000,7 @@
 
     /* 「补全」只补**缺的类别**（键名与后端 facts.PUBLIC_PARTS 一致）。
        以前这里一律不传 parts → 后端把 6 个类别全部重走一遍：明明只差一个
-       演出特效，也要把 602 个背景包逐个打开检查、385 个头像强制重裁，
+       演出特效，也要把 602 个背景包逐个打开检查、2000 多个头像包全部重导，
        几十分钟起步，进度条还得在 60% 停很久（用户 2026-11-10 反馈：
        "只缺特效也要全量重跑，那这个『补全』还有什么意义"）。
        已经齐的类别不传 → 连解包阶段都不会碰它们。 */
@@ -983,7 +1022,7 @@
         if (!(await Dlg.confirm('补齐公共素材？\n\n'
           + '· 这次只补缺的部分：' + (list || '全部')
           + '\n· 已经齐的类别不重跑 —— 不重新下载，也不重新解包'
-          + '\n· 只差一两项时通常十几秒就完；缺头像会慢些（385 张要重裁）'
+          + '\n· 只差一两项时通常十几秒就完；补头像会慢些（要解开官方 usericon / 战斗图标）'
           + '\n· 期间可关掉页面，任务在后台继续\n\n开始？',
           { anchor: bp, ok: '开始补齐' }))) return;
         // 空对象 = 后端按默认全量（只有清单没读到时才会落到这里）
@@ -1009,6 +1048,11 @@
     };
     optBtn('#bpGallery', 'gallery', '原声集（封面 + 独占曲）',
       '封面 12 MB；此外只会下"本机没有同曲音频"的曲目，官方新曲也在这里补');
+    /* 全部立绘：先下缺的源包，再在本地把每套服装的全套表情合成出来。
+       这是唯一能拿到「剧情里从来不会出现」那些表情的入口。 */
+    optBtn('#bpStandExtra', 'stand_extra', '全部立绘（含剧情里没用到的）',
+      '官方立绘源包共 2623 个、约 589 MB，多数已随剧情下过，只补缺的；'
+      + '下载后要在本机合成表情（多出来的约 9.7 千张），要跑一阵子');
     // 2026-11-16：NPC / 其他分类的 SD 与音声都不再下载，安装入口已删除
     // optBtn('#bpSdNpc', 'sd_npc', ...);
 
@@ -1349,6 +1393,13 @@
     if (jobTimer) { clearInterval(jobTimer); jobTimer = null; }
     const tick = async () => {
       if (document.hidden) return;
+      /* 「任务条上那条完成记录给用户看多久」用的是**页面可见的累计时长**，
+         不是墙钟：人离开电脑（页面隐藏 / 切到别的标签）时任务跑完了，
+         回来时不该已经算过期（2026-11-16 反馈："离开一会儿就什么都看不到"）。 */
+      const _tNow = Date.now() / 1000;
+      ST._visClock = (ST._visClock || 0)
+        + Math.max(0, Math.min(5, _tNow - (ST._tickAt || _tNow)));
+      ST._tickAt = _tNow;
       try {
         const d = await api('jobs');
         ST._fail = 0;
@@ -1506,6 +1557,29 @@
       if (info) info.textContent = '没成功：' + (rbF.error || '未知错误');
     }
 
+    /* 「检查并修复立绘」的结论也要留在页面上：它在底部那条进度条上只停 15 秒，
+       用户反馈"看到说没有需要修的立绘，还没读完就没了"（2026-11-16）。
+       数据来自后端 detail.standFix（worker 收尾时写），刷新页面也能看到上次结论。 */
+    const sfJob = (list || []).find(j => j.kind === 'stand'
+      && (j.state === 'done' || j.state === 'failed'));
+    if (sfJob && ST._standFixId !== sfJob.id) {
+      ST._standFixId = sfJob.id;
+      const box = $('#standFixInfo');
+      if (box) {
+        const d = (sfJob.detail && sfJob.detail.standFix) || {};
+        box.hidden = false;
+        if (sfJob.state === 'failed') {
+          box.textContent = '上次检查没跑完：' + (sfJob.error || '未知错误');
+        } else {
+          const secs = Math.max(1, Math.round(d.secs || sfJob.elapsed || 0));
+          box.innerHTML = '<b>上次检查'
+            + (d.at ? esc('（' + d.at + '）') : '') + '：</b>'
+            + esc(d.text || sfJob.message || '已完成')
+            + esc('（用时 ' + secs + ' 秒）');
+        }
+      }
+    }
+
     // 导出任务「刚跑完」→ 按用户设置自动弹出文件夹。
     // **必须按状态跃迁判断**：以前是"列表里存在任意 done 的 video/cg 任务"就打开，
     // 而去重标记 ST._expShown 只在内存里 —— 每次刷新/重进页面都会把历史上的
@@ -1561,10 +1635,18 @@
       }
       if (j.state === 'done' && isExp) afterExportDone(j);
     }
-    // 清掉已经不在列表里的 id，别让这个表无限膨胀
+    // 清掉已经不在列表里的 id，别让这几个表无限膨胀
     const alive = new Set(jobsNow.map(j => j && j.id));
     for (const id of Object.keys(ST._jobSeen)) {
       if (!alive.has(id)) delete ST._jobSeen[id];
+    }
+    // 「看着跑过」与「首次看到结束的时刻」两张小表跟着一起清；
+    // 万一清了任务列表之外的路径没走到，也留个上限兜底。
+    for (const tbl of ['_liveJob', '_endSeen']) {
+      const m = ST[tbl];
+      if (!m) continue;
+      for (const id of Object.keys(m)) if (!alive.has(id)) delete m[id];
+      if (Object.keys(m).length > 300) ST[tbl] = {};
     }
     // 自动更新失败（所有线路不通）→ 给可点的 GitHub 链接与手动步骤
     const up = (list || []).find(j => j.kind === 'update' && j.detail && j.detail.manual);
@@ -1673,9 +1755,24 @@
     // 操作记录和页面上的固定位置，不依赖这一条。
     // 另外以前只过滤 done，导致**取消的任务永远挂在底部条上**不走。
     list = list.filter(j => {
-      if (j.state === 'running' || j.state === 'queued') return true;
-      const endAt = (j.ended || (j.started || j.created) + (j.elapsed || 0));
+      if (j.state === 'running' || j.state === 'queued') {
+        /* 记下"这次是看着它跑起来的"：只有这类任务，结束时才需要给用户留
+           完整的阅读时间。页面刚打开时列表里那些历史任务不算 —— 否则一进
+           页面就冒出一堆几天前的结果，还得一条条等它自己过期。 */
+        ST._liveJob = ST._liveJob || {};
+        ST._liveJob[j.id] = 1;
+        return true;
+      }
       const keep = j.state === 'failed' ? 40 : 15;
+      if (ST._liveJob && ST._liveJob[j.id]) {
+        /* 计时起点 = 用户**在页面上第一次看到它结束**的那一刻，且只用
+           页面可见的时间（ST._visClock）。人不在电脑前时这个钟不走，
+           回来还能看满 15 秒；以前按服务端结束时间算，回来早就过期了。 */
+        ST._endSeen = ST._endSeen || {};
+        if (ST._endSeen[j.id] === undefined) ST._endSeen[j.id] = ST._visClock || 0;
+        return (ST._visClock || 0) - ST._endSeen[j.id] < keep;
+      }
+      const endAt = (j.ended || (j.started || j.created) + (j.elapsed || 0));
       return now - endAt < keep;
     }).slice(0, 3);
     if (!list.length) { hideJobbar(); return; }

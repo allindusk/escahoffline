@@ -61,7 +61,14 @@ body.hide-bar #gBar{display:none !important}
   font:inherit;font-size:14px;line-height:1}
 #gBar button:hover,#gBar button.on{color:#e0b566;border-color:#4a3f78}
 #gBar .play{width:30px;min-width:30px;background:#e0b566;color:#141822;
-  border-color:#e0b566;font-size:15px}
+  border-color:#e0b566;font-size:15px;display:flex;align-items:center;
+  justify-content:center;padding:0}
+/* 播放 / 暂停图标改成 CSS 画的形状：字形 ▶ / ⏸ 的墨迹在字身里天生偏，30px 的
+   小按钮里靠排版怎么调都"看着歪"（2026-11-17 用户反馈）。三角往右 1.5px 归位。 */
+#gBar .play .ic{display:block;width:11px;height:12px;background:#141822;
+  clip-path:polygon(0 0,100% 50%,0 100%);transform:translateX(1.5px)}
+#gBar .play.is-playing .ic{width:10px;height:12px;clip-path:none;transform:none;
+  background:linear-gradient(90deg,#141822 0 3px,transparent 3px 7px,#141822 7px 10px)}
 #gBar .vol{flex:1;min-width:44px;width:60px;height:4px;margin:0 2px;
   accent-color:#e0b566;cursor:pointer}
 #gBar .time{flex:none;color:#6b7488;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -82,6 +89,11 @@ body.hide-bar #gBar{display:none !important}
   body.story #gBar{bottom:150px}
   #gBar .card{width:min(330px,94vw);padding:8px 9px}
   #gBar .cover{width:32px;height:32px}
+  /* 一行要塞 8 项，310px 装不下，末尾的「1:23 / 4:56」直接被卡片右边切掉
+     （2026-11-17 手机截图）。手机的音量本来就是系统侧键在管，滑杆收掉 ——
+     跟原声集页一个口径；时间贴右边，再也不会顶出卡片。 */
+  #gBar .vol{display:none}
+  #gBar .time{margin-left:auto}
 }
 </style>
 </head>
@@ -101,7 +113,7 @@ body.hide-bar #gBar{display:none !important}
     <div class="seek"><i></i></div>
     <div class="ctrl">
       <button class="prev" title="上一首">⏮</button>
-      <button class="play" title="播放 / 暂停">▶</button>
+      <button class="play" title="播放 / 暂停"><span class="ic"></span></button>
       <button class="next" title="下一首">⏭</button>
       <button class="mode" title="循环模式">🔁</button>
       <button class="rate" title="倍速">1.0×</button>
@@ -124,7 +136,8 @@ body.hide-bar #gBar{display:none !important}
   /* ------------------------------------------------------------ 导航
      只换内容 iframe 的 src（或把常驻的原声集切到前台），top document 永不重载。
      这就是"播放组件是全站的、列表页只负责传曲目"的做法。 */
-  var current = '';
+  var current = '';      // 地址栏 / 前台是哪个页面
+  var fPcur = '';        // 内容 iframe 上一次已知的地址（它可能自己跳走过）
   /** 内容 iframe 当前**真实地址**（相对形式）；跨域 / 还没加载时返回 ''。
    *  去重不能只看壳里自己记的 current：iframe 可能绕过 nav 自己导航过
    *  （hook 还没装上时点的链接、页面脚本里的 location.href），那之后
@@ -136,6 +149,21 @@ body.hide-bar #gBar{display:none !important}
       return cu.pathname.replace(/^\//, '') + cu.search + cu.hash;
     } catch (e) { return ''; }
   }
+  /** 掐掉内容 iframe 里正在响的 <audio>。
+   *  为什么需要：内容 iframe 偶尔也会把 music.html 装进去（绕过 hook 的导航），
+   *  那份文档自带一支 <audio>，和常驻播放器的音频叠成两路 —— 同一首歌听两遍
+   *  （2026-11-17 报障）。切回原声集时顺手把它按停，只留常驻那份在响。 */
+  function muteFrameAudio(fr, keep) {
+    try {
+      var d = fr.contentDocument;
+      if (!d || (keep && d === keep.contentDocument)) return;
+      var list = d.getElementsByTagName('audio');
+      for (var i = 0; i < list.length; i++) {
+        if (!list[i].paused) list[i].pause();
+      }
+    } catch (e) { /* 跨域 / 还没加载完，忽略 */ }
+  }
+
   function nav(href, replace) {
     href = String(href || 'index.html');
     var u = new URL(href, location.href);
@@ -146,6 +174,7 @@ body.hide-bar #gBar{display:none !important}
     document.body.classList.toggle('show-page', !isMusic);
     document.body.classList.toggle('story', /(^|\/)index\.html/.test(rel));
     if (isMusic) {
+      muteFrameAudio(fP, fM);      // 内容区若残留一份音乐页，先按停它
       // 播放器 iframe 一直都在，只是切回前台：不 reload、不重新解码、不中断
       // 若链接带了 ?play / ?voice 参数，转成命令交给常驻播放器
       var q = new URLSearchParams(u.search);
@@ -160,6 +189,7 @@ body.hide-bar #gBar{display:none !important}
          或者「点了却跳到上一个页面」（2026-11-15 反馈）。 */
       if (rel !== frameRel() || replace === true) fP.src = rel;
       current = rel;
+      fPcur = rel;
     }
     try {
       history[replace === true ? 'replaceState' : 'pushState'](
@@ -199,16 +229,46 @@ body.hide-bar #gBar{display:none !important}
       按 B 去重，就会点了没反应、或者跳到上一个页面（2026-11-15 反馈）。 */
   function syncFromFrame() {
     var rel = frameRel();
-    if (!rel || rel === current) return;
-    current = rel;
+    if (!rel || rel === fPcur) return;
+    fPcur = rel;
     var isMusic = /(^|\/)music\.html/.test(rel);
-    document.body.classList.toggle('show-music', isMusic);
-    document.body.classList.toggle('show-page', !isMusic);
+    if (isMusic) {
+      /* 内容 iframe 自己跳到了音乐页（页面脚本直接 location.href 之类，hook 拦不住）：
+         那不是我们要的 —— 全站只能有常驻播放器那一份。这里把这份副本直接清空，
+         否则它自带一支 <audio>，和常驻的一起响就是"同一首歌听两遍"
+         （2026-11-17 报障：回原声集时播放条还没消失、同时两路音频）。
+         副本刚才抢票会把常驻那份暂停，所以随后让常驻的接着放。 */
+      muteFrameAudio(fP, fM);
+      try { fP.src = 'about:blank'; } catch (e) { /* 忽略 */ }
+      fPcur = '';
+      if (document.body.classList.contains('show-music')) return;   // 已经在前台，不用再切
+      current = 'music.html';
+      document.body.classList.add('show-music');
+      document.body.classList.remove('show-page');
+      setTimeout(function () {
+        if (S && S.playing && S.paused) send('toggle');
+      }, 400);
+      try {
+        history.replaceState(null, '', 'shell.html?p=' + encodeURIComponent('music.html'));
+      } catch (e) { /* 忽略 */ }
+      return;
+    }
+    /* 前台已经是原声集（show-music）时，内容 iframe 停在上一个页面完全正常 ——
+       **不能拿它去改外壳状态**。否则每 700ms 轮询一次就会把用户从原声集弹回旧页面，
+       表现就是"切到原声集页面时一定闪一下 / 刷新一次"（2026-11-17 报障）。 */
+    if (document.body.classList.contains('show-music')) return;
+    current = rel;
+    document.body.classList.add('show-page');
+    document.body.classList.remove('show-music');
     document.body.classList.toggle('story', /(^|\/)index\.html/.test(rel));
     try {
       history.replaceState(null, '', 'shell.html?p=' + encodeURIComponent(rel));
     } catch (e) { /* 忽略 */ }
   }
+
+  /* iframe 自己导航时 load 事件要等整页都加载完才来，那段空窗里外壳还按旧状态显示
+     （正是"回到原声集、底部播放条还没消失"的那一两秒）。轮询地址变化提前同步。 */
+  setInterval(syncFromFrame, 700);
 
   fM.addEventListener('load', function () {
     hook(fM);
@@ -328,7 +388,9 @@ body.hide-bar #gBar{display:none !important}
     elRail.style.width = p;
     if (!dragging) elSeek.style.width = p;
     elTime.textContent = fmt(S.pos) + ' / ' + fmt(S.dur);
-    elPlay.textContent = S.paused ? '▶' : '⏸';
+    // 图标是 CSS 画的（见 #gBar .play .ic），这里只切状态，不再塞字符
+    if (!elPlay.querySelector('.ic')) elPlay.innerHTML = '<span class="ic"></span>';
+    elPlay.classList.toggle('is-playing', !S.paused);
     g.classList.toggle('paused', !!S.paused);
     elMode.textContent = MODE[S.mode] || '🔁';
     elMode.classList.toggle('on', S.mode && S.mode !== 'list');
@@ -349,7 +411,9 @@ body.hide-bar #gBar{display:none !important}
   elMute.onclick = function () { send('mute'); };
   elVol.oninput = function () { send('vol', +elVol.value / 100); };
   $('.rail').onclick = function (ev) {
-    if (touch && !g.classList.contains('open')) { g.classList.add('open'); return; }
+    if (touch && !g.classList.contains('open')) {
+      g.classList.add('open'); armIdle(); return;
+    }
     var r = this.getBoundingClientRect();
     send('seek', Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)));
   };
@@ -371,11 +435,43 @@ body.hide-bar #gBar{display:none !important}
     var p = frac(ev); dragging = false;
     send('seek', p);
   });
-  if (touch) {
-    document.addEventListener('click', function (ev) {
-      if (!g.contains(ev.target)) g.classList.remove('open');
-    });
+  /* 手机上「点一下展开」之后怎么收回成条形（桌面靠 mouseleave 自动收，手机没有）：
+     ① 点卡片以外的任何地方就收起 —— 可是页面内容全在 iframe 里，父页收不到那里的
+        click，所以同源 iframe 也各挂一份监听（异源挂不上，靠 ② 兜底）。
+     ② 卡片开着时 5 秒没人操作自动收回；正在拖进度条时不抢。
+     ③ 桌面端 .open 从来不会被置上（悬停就展开），这套逻辑在 PC 上是空转，
+        不改变原来"鼠标移出即收起"的手感。 */
+  var idleTimer = 0;
+  function closeBar() {
+    if (dragging) return;
+    g.classList.remove('open');
+    clearTimeout(idleTimer);
   }
+  function armIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(closeBar, 5000);
+  }
+  document.addEventListener('click', function (ev) {
+    if (!g.contains(ev.target)) closeBar();
+  }, true);
+  g.addEventListener('pointerdown', function () {
+    if (g.classList.contains('open')) armIdle();
+  }, true);
+  // 同源 iframe 里的点击也算"点外面"；每次 load 都要重挂（文档换了新的）
+  function hookOutside(iframe) {
+    function hook() {
+      try {
+        var doc = iframe.contentDocument;
+        if (!doc || doc.__gBarHooked) return;
+        doc.__gBarHooked = true;
+        doc.addEventListener('click', closeBar, true);
+      } catch (e) { /* 异源挂不上，交给自动收起 */ }
+    }
+    iframe.addEventListener('load', hook);
+    hook();
+  }
+  hookOutside(fM);
+  hookOutside(fP);
 
   /* 故意**不注册全站快捷键**：剧情播放页用空格翻台词 / 方向键快进，
      外壳在捕获阶段抢按键会直接把剧情操作吃掉（2026-11-15 用户反馈）。

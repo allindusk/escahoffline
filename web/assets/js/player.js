@@ -53,7 +53,8 @@ const ST = {
   skips: [], typeSkip: false, voiceHas: false, voiceP: null,
   typeRate: 1,           // 打字速度倍率（越大越快）
   allLines: [], lineMap: {}, curLine: -1, linePage: 0,
-  curName: '', fastForward: false, curMsgIdx: null,
+  curName: '', curRawName: '', curAvatarId: null,
+  fastForward: false, curMsgIdx: null,
   timeIdx: null,         // 每句开头的估算时间点（Float64Array，见 buildTimeIndex）
   typing: false,         // 打字机是否正在输出（决定「下一句」先补全还是翻页）
   rush: false,           // 按住 Ctrl 的快进状态
@@ -624,11 +625,15 @@ const Z_VAL = { Back: 1, Middle: 3, Front: 5 };
  */
 function standKey(m) { return m.Position || 'Center'; }
 
-/* 图片资源版本号：合成图更新过，加参数强制浏览器取新文件 */
-const IMG_VER = '7';
+/* 图片资源版本号。
+   优先用服务端算的素材指纹（window.__MEDIA_VER，写在各页的 data/mediaindex.js 里）：
+   素材增删改 → 指纹变 → URL 变，浏览器可以放心长期缓存而不会看到旧图。
+   指纹拿不到时（纯静态托管 / 老包）退回下面这个常量。 */
+const IMG_VER = '9';
 function imgSrc(path) {
   if (!path) return path;
-  return path + (path.includes('?') ? '&' : '?') + 'v=' + IMG_VER;
+  const v = window.__MEDIA_VER || IMG_VER;
+  return path + (path.includes('?') ? '&' : '?') + 'v=' + v;
 }
 
 /* 图片层到底有没有图可拿（侧栏横幅 / 头像 / 章节横幅都靠它决定要不要发请求）。
@@ -2919,15 +2924,581 @@ function renderMsg(el, text) {
   }
 }
 
+/* ================= 话者头像 =================
+ * 头像素材是 web/media/img/avatar/<角色id>.png，和名条/对话框是两套坐标：
+ *   名条本身可以左/中/右对齐，还有 nameX/nameY 位移，所以头像的位置只能按
+ *   #msgName 的实际布局盒算（offsetLeft/offsetTop），不能写死在 CSS 里。
+ * 角色名 → 头像 id 的解析顺序：
+ *   1. 当前说话人的立绘：立绘图片 key 是 stand_<角色编号>_...，头像直接用这个编号
+ *      （和 stand.html 的取法一致，不再依赖话者名/GroupId 映射）
+ *   2. 画外音/没有立绘时，才退回本篇主卡 S.char（仍要求名字对得上）
+ *   都不中 → 首字色牌（可以在设置里关掉）。
+ * PNG 的底色是画在图里的，CSS 改不了；「自动抠底」用画布从边缘泛洪，
+ * 把和背景同色的区域挖成透明，再垫上用户选的色调。 */
+const AV_POS_LIST = ['left', 'right', 'box-tl', 'box-tr', 'box-bl', 'box-br'];
+const AV_SHAPE_LIST = ['circle', 'rounded', 'square'];
+const AV_RING_LIST = ['gold', 'goldwide', 'dark', 'none'];
+const AV_TONE_LIST = ['dialog', 'sky', 'aurora', 'pearl', 'blush', 'jade', 'emerald', 'danxia', 'custom'];
+/* 多形态角色分两类：
+ * A. 有「常服 raw + 变身 padded」两套（如 36 / 036）：
+ *    - 常服立绘 → daily
+ *    - 变身 padded 立绘 → c-panel 170
+ *    - 純愛 CG → daily
+ *    - 陵辱 CG → c-panel 170
+ * B. 只有「带前导 0」的服装变身组（如 078 / 0274）：
+ *    - 普通立绘 → c-panel 170
+ *    - 純愛 CG → battle
+ *    - 陵辱 CG → c-panel 170
+ * 名单由 standmap 的 padded-only 编号生成，避免以后新增形态时漏掉。
+ * 优先读 regen_avatarmap() 写出的 __AVATARMAP.paddedOnly（它直接从 standmap
+ * 的原始编号算，剧情自动更新后重建即可）；下面的长串只是旧数据的兜底。 */
+const AV_ALWAYS_PADDED_IDS = (window.__AVATARMAP && Array.isArray(window.__AVATARMAP.paddedOnly))
+  ? window.__AVATARMAP.paddedOnly.map(Number)
+  : '69,72,78,80,82,93,95,96,118,119,121,122,126,127,128,131,132,134,135,137,138,139,141,142,151,163,164,167,168,169,172,174,177,178,179,183,184,185,186,187,189,192,200,201,202,204,205,207,208,213,214,215,216,217,219,220,225,226,230,232,235,237,238,239,245,247,248,249,250,251,254,255,258,259,260,261,264,266,267,268,271,272,273,274,275,278,279,280,284,285,286,287,289,290,292,295,297,298,299,300,303,304,305,309,311,312,313,314,315,316,318,319,320,321,328,329,331,332,335,336,340,341,342,345,346,349,350,351,353,355,356,358,359,361,362,366,367,368,369,374,375,376,381,382,383,384,386,387,390,391,392,405,406,407,408,409,411,412,414,415,416'.split(',').map(Number);
+const AV_ALWAYS_PADDED_SET = new Set(AV_ALWAYS_PADDED_IDS);
+// 385 张 c-panel 数字头像（170×170）在 imgmap 的 avatar 里是**纯数字 key**。
+// 注意不能用 IMGX2 当判据：那是可选的超分覆盖层，「提高CG画质」没跑过的机器上
+// 它是空的 —— 那样多形态角色（36/036 这类）会全部退回 d/b，cpanel 永远用不上
+// （2026-11-17 审计）。三层映射任一登记过就算有。
+const AV_CPANEL_IDS = new Set(
+  [IMGMAP, IMGBASE, IMGX2]
+    .reduce((keys, m) => keys.concat(Object.keys((m && m.avatar) || {})), [])
+    .filter(k => /^\d+$/.test(k) && Number(k) >= 1 && Number(k) <= 416)
+    .map(Number)
+);
+const AV_FORM_RULES = Object.create(null);
+// 没有 c-panel 的 padded-only 角色（目前只有空号 364）保留旧兜底规则。
+for (const id of AV_ALWAYS_PADDED_IDS) {
+  AV_FORM_RULES[id] = { base: 'daily', pure: 'battle', violation: 'daily' };
+}
+for (const id of AV_CPANEL_IDS) {
+  AV_FORM_RULES[id] = AV_ALWAYS_PADDED_SET.has(id)
+    ? { base: 'cpanel', pure: 'battle', violation: 'cpanel' }
+    : { base: '', pure: 'daily', violation: 'cpanel', battle: 'cpanel' };
+}
+/* 「背景颜色」预设 = 头像**底板**，只从头像 PNG 的透明区域透出来（官方 d/b/n/e
+ * 四周约 55% 是透明留白，c-panel 只有羽化边缘透色）。所以取值必须够亮、够有
+ * 区分度 —— 早先给过一组近黑色（最亮通道 42/255），跟「原图背景」的
+ * rgb(10,14,22) 在 54px 上肉眼分不出来，用户反馈「只有原图和自定义能改成功」。
+ *
+ * 现在改成对角渐变（aurora 是三段），取色思路参照近几代手机壳厂爱用的
+ * 渐变色系：冷色系（晴空/极光/湖青/翡翠）、暖色系（落日橙/樱粉）、中性（珍珠白）。
+ * 名字只写颜色本身，不挂任何品牌名和机型，换机器也不用改。
+ * 值 = 渐变 stop 数组，第一项同时用作单色兜底（--avTintColor / 色块初值）。 */
+const AV_TONES = {
+  sky:     ['#6fc3f0', '#4fc3c0'],            // 晴空：天蓝 → 青
+  aurora:  ['#8b6cf0', '#4fa9e0', '#5fd6a8'], // 极光：紫 → 蓝 → 青绿
+  pearl:   ['#f4ede2', '#d8cbb8'],            // 珍珠白：米白 → 香槟
+  blush:   ['#f6a8c4', '#c887d8'],            // 樱粉：粉 → 淡紫
+  jade:    ['#4fbfae', '#1f6f8f'],            // 湖青：青绿 → 深湖蓝
+  emerald: ['#2f8f68', '#123f38'],            // 翡翠：翠绿 → 墨绿
+  danxia:  ['#e8a13a', '#c0441f'],            // 落日橙：橙 → 赤
+};
+/** 渐变角度：左上亮 → 右下深，正好和 #msgAvatar::after 的高光同向 */
+const AV_TONE_ANGLE = '160deg';
+/** #rrggbb 校验，非法时用兜底色 */
+function avHex(v, dflt) {
+  return (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)) ? v.toLowerCase() : dflt;
+}
+const AV_ID_CACHE = new Map();
+let avLoadToken = 0, avSwapTimer = 0;
+ST.lastAvId = null;
+
+function avNorm(s) {
+  // 话者常写简称/平假名（はーたん），立绘 GroupId 却是全名/片假名（メイドハータン）。
+  // 统一转平假名再比较，避免「はーたん」误落到别的角色（如 253 閃忍ハータン）。
+  return String(s == null ? '' : s)
+    .replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60))
+    .replace(/[\s\u3000・·･\-—–_,，.。、!！?？:：;；/／「」『』（）()［］\[\]【】<>《》]/g, '')
+    .toLowerCase();
+}
+/** 名字相似度：台词里常用简称，立绘 GroupId / 卡面名是全名，所以先看包含关系 */
+function avScore(full, name) {
+  if (!full || !name) return 0;
+  if (full === name) return 1000;
+  if (full.indexOf(name) >= 0) {
+    return 520 + Math.min(name.length, full.length) * 20 - full.length;
+  }
+  if (name.indexOf(full) >= 0) {
+    return 470 + full.length * 20 - name.length;
+  }
+  const c = commonSub(full, name);
+  return c >= 2 ? c * 24 : 0;
+}
+function avValid(id) {
+  id = String(id == null ? '' : id);
+  // 官方头像的 key 是 d036 / b036 / n4001 / e5001；
+  // 旧 cpanel 头像是纯数字 36。两种都要放行。
+  if (!/^\d+$/.test(id) && !/^[dbne]\d+$/i.test(id)) return false;
+  if (!window.ESC || !ESC.media || typeof ESC.media.has !== 'function') return true;
+  return ESC.media.has('avatar', id) !== false;
+}
+/** 当前说话人的立绘：优先取唯一亮着的那张（autoTalk 已经把其他人压暗）；
+ *  多张同时亮时，再按名字挑最像的。 */
+function avStandFor(raw) {
+  const nm = avNorm(raw);
+  const lit = [];
+  if (ST.stands && ST.stands.size) {
+    ST.stands.forEach(el => { if (!el.classList.contains('dim')) lit.push(el); });
+  }
+  if (lit.length === 1) {
+    /* 画面只有一张立绘时，也必须是当前话者的立绘。
+       例如「时贞」说话、画面上却是エスカ的立绘：立绘存在不代表
+       头像属于时贞，名字对不上就返回 null，宁可不显示头像。 */
+    const el = lit[0];
+    const gid = avNorm(el.dataset.gid || '');
+    if (nm && gid && avScore(gid, nm) >= 500) return el;
+    return null;
+  }
+  if (nm && lit.length) {
+    let best = null, bestScore = 0;
+    lit.forEach(el => {
+      const gid = avNorm(el.dataset.gid || '');
+      if (!gid) return;
+      const s = avScore(gid, nm);
+      if (s > bestScore) { bestScore = s; best = el; }
+    });
+    if (best && bestScore >= 500) return best;
+  }
+  return null;
+}
+/** 当前 CG 的剧情类型。官方 CG key 用 Shift-JIS hex 编了「純愛 / 陵辱」：
+ *   83438378_303738_8F8388A4_... = 純愛
+ *   83438378_303738_97CB904A_... = 陵辱
+ * 普通对话没有 CG 时返回空串——此时一律按立绘形态取头像，不按剧情类型强制。
+ */
+/** 扫描到的 228 个剧情文件里，纯爱/凌辱标记主要写在本段 BGM：
+ *  `純愛`=8F8388A4；`陵辱`=97CB904A；H 组还有
+ *  `凌辱エロ`=97BD904A8347838D，必须按前缀 97BD904A 一并识别。
+ */
+function avTagOf(text) {
+  const s = String(text || '').toUpperCase();
+  if (s.indexOf('8F8388A4') >= 0) return 'pure';
+  if (s.indexOf('97CB904A') >= 0 || s.indexOf('97BD904A') >= 0) return 'violation';
+  return '';
+}
+function avCgTag() {
+  return avTagOf((VIS.cg && VIS.cg.key) || '');
+}
+let AV_CG_CHAR_MAP = null;
+/** 当前 CG 属于哪个角色：cgmap 的 c 就是角色 id（正数）。
+ *  负数 -1/-2/-3 是主线/活动/其他剧情的非角色 CG 桶，不能强行套角色。 */
+function avCgCharId() {
+  if (!VIS.cg || !VIS.cg.key) return '';
+  const key = String(VIS.cg.key).replace(/\.(jpg|jpeg|png|webp)$/i, '');
+  if (!AV_CG_CHAR_MAP) {
+    AV_CG_CHAR_MAP = Object.create(null);
+    (window.__CGMAP || []).forEach(g => {
+      const c = Number(g.c);
+      if (!(c >= 0)) return;
+      (g.f || []).forEach(f => {
+        const k = String(f).replace(/\.(jpg|jpeg|png|webp)$/i, '');
+        if (k && !(k in AV_CG_CHAR_MAP)) AV_CG_CHAR_MAP[k] = String(c);
+        if (k && !(k.toUpperCase() in AV_CG_CHAR_MAP)) AV_CG_CHAR_MAP[k.toUpperCase()] = String(c);
+      });
+    });
+  }
+  return AV_CG_CHAR_MAP[key] || AV_CG_CHAR_MAP[key.toUpperCase()] || '';
+}
+/** CG 场景下返回剧情类型标签；没有 CG 时返回空串。
+ *  普通立绘始终按立绘形态取，纯爱/凌辱只在 CG 上生效。
+ *  当前 CG 无法判定标签时返回空串，调用方直接不显示头像。 */
+function avCgSide() {
+  if (!VIS.cg || !VIS.cg.key) return '';
+  return avCgTag() || avPartBgmTag() || '';
+}
+/** 把「剧情标签 / 空」换算成该角色实际要取的 daily / battle / cpanel。
+ *  没有 CG 覆盖时返回该角色的 base 规则（没有规则则走 entry.base）。
+ *  cpanel = 385 张 c-panel 的 170×170 数字头像。 */
+function avFormSide(id, side) {
+  if (side === 'daily' || side === 'battle' || side === 'cpanel') return side;
+  const rule = AV_FORM_RULES[String(Number(id))];
+  if (side === 'pure') return rule ? rule.pure : 'daily';
+  if (side === 'violation') return rule ? rule.violation : 'battle';
+  return rule ? rule.base : '';
+}
+/** 立绘图片 key = stand_<角色编号>_<服装>_<表情>。
+ *
+ * 头像不是从立绘裁的：官方另有 user_icon 包，每个角色通常有
+ * 日常（d###）和战斗/变身（b###）两张。映射表 avatarmap.js 里：
+ *   - 原始编号没有前导 0（36）= 日常形态 → base=daily
+ *   - 原始编号有前导 0（036）= 战斗/变身形态 → base=battle
+ * 现在多形态角色改用 c-panel 170×170：
+ *   - 常服/普通立绘 → daily；变身的 padded 立绘 → cpanel
+ *   - 純愛 CG → daily；陵辱 CG → cpanel
+ *   - 只有服装变身组的角色：普通/陵辱 → cpanel，純愛 → battle
+ */
+function avPickEntry(entry, side) {
+  if (!entry) return null;
+  if (entry.b !== 'char') return entry.avatar || null;
+  const daily = entry.daily || '', battle = entry.battle || '';
+  let wantSide = avFormSide(entry.id, side);
+  const rule = AV_FORM_RULES[String(Number(entry.id))];
+  const cpanelId = String(entry.id);
+  if (!wantSide && entry.base === 'battle' && rule && rule.battle === 'cpanel') {
+    wantSide = 'cpanel';
+  }
+  if (wantSide === 'cpanel') return avValid(cpanelId) ? cpanelId : null;
+  let want;
+  if (wantSide === 'daily') want = daily;
+  else if (wantSide === 'battle') want = battle;
+  else if (entry.base === 'battle') want = battle;
+  else want = daily;
+  /* 只取当前形态真正需要的那一张。要 daily 但 d### 缺失时，
+     不要拿 b### 顶替 —— 那正是用户看到的“乱映射已有错误头像”。 */
+  if (want && avValid(want)) return want;
+  return null;
+}
+function avIdFromStandKey(stKey, side) {
+  const st = String(stKey || '');
+  const m = /^(?:stand|char)_(\d+)_([0-9A-Fa-f]+)(?:_|$)/i.exec(st);
+  const raw = m ? m[1] : '';
+  if (raw) {
+    const map = window.__AVATARMAP;
+    const gkey = m ? (raw + '_' + m[2].toUpperCase()) : '';
+    const entry = map && map.forms
+      ? (map.forms[raw] || (map.groups && map.forms[map.groups[gkey]]))
+      : null;
+    const picked = avPickEntry(entry, side);
+    if (picked) return picked;
+    /* 不退回旧 cpanel 数字头像：映射要的是官方 d/b/n/e，
+       文件没下 / 没导出时这里必须返回 null，让调用方不显示头像，
+       不能拿本机残留的旧数字图顶替。 */
+  }
+  return null;
+}
+function avStandId(el, side) {
+  return el ? avIdFromStandKey(el.dataset.stId, side) : null;
+}
+function avLastStandId(side) {
+  const ms = ST.methods || [];
+  /* seekTo 期间 curMsgIdx 可能还是上一句的旧值（实测从 3 跳到 154 时
+     curMsgIdx=3），所以同时参考 ST.idx，取更靠后的位置。 */
+  const end = Math.min(
+    Math.max(0, ms.length - 1),
+    Math.max((ST.idx || 0) - 1, ST.curMsgIdx != null ? Number(ST.curMsgIdx) : 0)
+  );
+  const nm = String(ST.curRawName || '').trim();
+  for (let i = Math.min(end, ms.length - 1); i >= 0; i--) {
+    const m = ms[i];
+    if (!m || (m.Method !== 'ShowStand' && m.Method !== 'ShowStandEffect')) continue;
+    const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
+    const group = String(m.GroupId || '').trim();
+    /* CG 场景可回看 CG 之前最后一张立绘；但只有立绘组名和当前话者
+       对得上才用，避免「时贞」的台词被套成尤诺头像。c=正数的 CG
+       已经在前面按角色 id 处理，不需要过这一关。 */
+    if (nm && group && !(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
+    const id = avIdFromStandKey(key, side);
+    if (id) return id;
+  }
+  /* CG-only 场景：CG 前面一张 ShowStand 都没有时，允许看同段后面
+     第一张 GroupId 能对上的 ShowStand。Hシーン集第6段（CG at 29，
+     立绘 at 278）就是这种结构；GroupId 仍必须和当前话者匹配，所以
+     「时贞」不会因为后面有ユーノ的立绘而被套头像。 */
+  for (let i = Math.min(end + 1, ms.length - 1); i < ms.length; i++) {
+    const m = ms[i];
+    if (!m || (m.Method !== 'ShowStand' && m.Method !== 'ShowStandEffect')) continue;
+    const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
+    const group = String(m.GroupId || '').trim();
+    if (!nm || !group) continue;
+    if (!(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
+    const id = avIdFromStandKey(key, side);
+    if (id) return id;
+  }
+  /* 有些段（Hシーン集这类「从 CG 直接开始」的剪切版）本段里根本没有 ShowStand，
+     但前一段末尾的立绘状态就是画面上的状态。这里**通用地**看上一段最后一个
+     ShowStand，仍然要求 GroupId 和当前话者匹配 —— 名字对不上宁可不显示，
+     绝不把 A 的台词套成 B 的头像。
+     以前这里写死过「某部剧 第 N 段 → 某角色 stand_xxx」的对照表：剧情一更新
+     就会错位，而且等于把具体角色编号写进前端代码，已经删掉（2026-11-17 审计）。 */
+  const data = (typeof S !== 'undefined' && S.data) ? S.data : null;
+  if (data && Array.isArray(data.parts) && ST.part > 0) {
+    const prev = data.parts[ST.part - 1];
+    const pm = (prev && prev.methods) || [];
+    for (let i = pm.length - 1; i >= 0; i--) {
+      const m = pm[i];
+      if (!m || (m.Method !== 'ShowStand' && m.Method !== 'ShowStandEffect')) continue;
+      const group = String(m.GroupId || '').trim();
+      if (!nm || !group) continue;
+      if (!(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
+      const id = avIdFromStandKey(m.StandImage || m.Stand || m.StandKey || m.Image || '',
+        side);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+/** CG key 本身没写 8F8388A4/97CB904A 时，从本段 BGM 列表补判
+ *  純愛/陵辱（89B98A79_8F8388A4 / 89B98A79_97CB904A）。 */
+function avPartBgmTag() {
+  const data = (typeof S !== 'undefined' && S.data) ? S.data : null;
+  const part = data && data.parts ? data.parts[ST.part] : null;
+  const music = (part && part.music ? part.music : []).join('|').toUpperCase();
+  const hasPure = music.indexOf('8F8388A4') >= 0;
+  const hasViolation = music.indexOf('97CB904A') >= 0 || music.indexOf('97BD904A') >= 0;
+  if (hasPure && !hasViolation) return 'pure';
+  if (hasViolation && !hasPure) return 'violation';
+  return '';
+}
+/** 没有立绘时退回本篇主卡。主卡编号可能同时有 `78`（只有日常）
+ *  和 `078`（日常+战斗）两条记录；按 avFormSide 换算出的目标侧挑记录。
+ *  例如聖夜純愛 CG 要 b078、陵辱 CG 要 d078，不能固定拿第一条。 */
+function avMainEntry(sc, side) {
+  const map = window.__AVATARMAP;
+  if (!map || !map.forms) return null;
+  const keys = [String(sc), String(sc).padStart(3, '0'), String(sc).padStart(4, '0')];
+  const pool = keys.map(k => map.forms[k]).filter(Boolean);
+  if (!pool.length) return null;
+  const wantSide = avFormSide(sc, side);
+  if (wantSide === 'battle') return pool.find(e => e.battle) || pool[0];
+  if (wantSide === 'daily') return pool.find(e => e.daily) || pool[0];
+  // 没有 CG 覆盖且没有角色规则时，优先选同时有 daily/battle 的完整形态。
+  return pool.find(e => e.daily && e.battle) || pool[0];
+}
+/** 话者名 → 角色 id。数据由 gen_avnames.py 从所有剧情的 ShowStand
+ *  GroupId + ShowMessageWindow.Name 自动生成，不再维护手工短名表。
+ *  短名只在所有 GroupId 中唯一命中时才会写入 spk；像「ライカ」这种
+ *  同时命中閃忍/聖夜/真夏的短名直接跳过，宁可没有头像也不乱套。 */
+function avSpeakerId(raw) {
+  const nm = avNorm(raw);
+  if (!nm) return null;
+  const data = window.__AVNAMES || null;
+  if (!data) return null;
+  const spk = data.spk || {};
+  for (const k in spk) {
+    if (avNorm(k) === nm && spk[k] != null) return String(spk[k]);
+  }
+  const gid = data.gid || {};
+  for (const k in gid) {
+    if (avNorm(k) === nm && gid[k] != null) return String(gid[k]);
+  }
+  return null;
+}
+function avResolve(raw) {
+  const nm = avNorm(raw);
+  if (!nm) return null;
+  const cgChar = avCgCharId();
+  /* 当前 CG 判断不出纯爱/凌辱时不显示头像：未知场景强行套某一边
+     比没有头像更容易违和。普通立绘（没有 CG）不受此限制。 */
+  const side = avCgSide();
+  if (VIS.cg && VIS.cg.key && !side) return null;
+  const stand = avStandFor(raw);
+  const standKey = stand ? (stand.dataset.stId || stand.dataset.gid || '') : '';
+  const cacheKey = String(ST.char == null ? '' : ST.char) + '|' + nm + '|' + standKey
+    + '|' + String(ST.curRawName || '') + '|' + String(ST.part == null ? '' : ST.part) + '|' + String((VIS.cg && VIS.cg.key) || '')
+    + '|' + String(cgChar || '') + '|' + side;
+  if (AV_ID_CACHE.has(cacheKey)) return AV_ID_CACHE.get(cacheKey);
+  let id = null;
+  /* 当前 CG 在 cgmap 里能查到正数 c（角色 id）时，优先用该角色的头像。
+     negative c 是 NPC/主线 CG 桶，不能强行套角色。 */
+  if (cgChar) {
+    const entry = avMainEntry(cgChar, side);
+    const picked = avPickEntry(entry, side);
+    if (picked) id = picked;
+  }
+  if (!id) id = avStandId(stand, side);
+  /* CG 之前最后一张立绘也要能回看：CG-only 场景没有 ST.stands，
+     但剧本 methods 里仍有 ShowStand，且 GroupId 可校验当前话者。 */
+  if (!id && VIS.cg && VIS.cg.key) id = avLastStandId(side);
+  /* 话者名直接映射角色 id：CG-only / 多角色交替说话时，不能只依赖
+     段级 ST.char（它只代表本段一个角色），否则永远只有一个头像。 */
+  if (!id) {
+    const spkId = avSpeakerId(raw);
+    if (spkId) {
+      const entry = avMainEntry(spkId, side);
+      const picked = avPickEntry(entry, side);
+      if (picked) id = picked;
+    }
+  }
+  /* 不再使用 othereps/part.c 做段级兜底：它只能说明本段主角色，
+     不能证明当前 CG 一定属于该角色，容易把同段其他话者套错。 */
+  /* 画外音/没有立绘时，才退回本篇主卡；名字对不上就不硬套主角头像。 */
+  if (!id) {
+    const sc = ST.char == null ? '' : String(ST.char);
+    if (sc) {
+      const entry = avMainEntry(sc, side);
+      const official = avPickEntry(entry, side);
+      if (official) {
+        const full = avNorm((window.__NAMES || {})[sc] || '');
+        if (full && avScore(full, nm) >= 500) id = official;
+      }
+    }
+  }
+  AV_ID_CACHE.set(cacheKey, id);
+  return id;
+}
+function avToneColor() {
+  if (SET.avTone === 'custom') {
+    const a = avHex(SET.avColor, '#2f6fd0');
+    const b = avHex(SET.avColor2, '#8fd3f4');
+    return `linear-gradient(${AV_TONE_ANGLE},${a},${b})`;
+  }
+  if (SET.avTone === 'dialog') {
+    const c = String(SET.msgBg || '10,14,22').split(',').map(Number);
+    return `rgb(${Number.isFinite(c[0]) ? c[0] : 10},${Number.isFinite(c[1]) ? c[1] : 14},${Number.isFinite(c[2]) ? c[2] : 22})`;
+  }
+  const stops = AV_TONES[SET.avTone];
+  if (!stops) return '#0b1220';
+  return `linear-gradient(${AV_TONE_ANGLE},${stops.join(',')})`;
+}
+/** 单色版（染色层 --avTintColor 与色块初值用；渐变图层不能塞进 background-color） */
+function avToneHex() {
+  if (SET.avTone === 'custom') return avHex(SET.avColor, '#2f6fd0');
+  const c = String(SET.msgBg || '10,14,22').split(',').map(Number);
+  const hex = v => Math.max(0, Math.min(255, Number.isFinite(v) ? v : 0)).toString(16).padStart(2, '0');
+  if (SET.avTone === 'dialog') return '#' + hex(c[0]) + hex(c[1]) + hex(c[2]);
+  const stops = AV_TONES[SET.avTone];
+  return stops ? stops[0] : '#0b1220';
+}
+/** 某个色调的首/末两色 —— 切到「自定义」时用它接着改，别让色块跳回默认蓝 */
+function avToneStops(tone) {
+  if (tone === 'custom') return [avHex(SET.avColor, '#2f6fd0'), avHex(SET.avColor2, '#8fd3f4')];
+  if (tone === 'dialog') {
+    const c = String(SET.msgBg || '10,14,22').split(',').map(Number);
+    const hex = v => Math.max(0, Math.min(255, Number.isFinite(v) ? v : 0)).toString(16).padStart(2, '0');
+    const h = '#' + hex(c[0]) + hex(c[1]) + hex(c[2]);
+    return [h, h];
+  }
+  const stops = AV_TONES[tone];
+  if (!stops) return ['#0b1220', '#0b1220'];
+  return [stops[0], stops[stops.length - 1]];
+}
+/** 两个色块跟着当前色调走：选预设时显示该预设的首末色（一进「自定义」就能接着微调） */
+function syncAvColorInputs() {
+  const pair = avToneStops(SET.avTone);
+  const a = $('#setAvColor'), b = $('#setAvColor2');
+  if (a) a.value = pair[0];
+  if (b) b.value = pair[1];
+}
+function avApplyStyle() {
+  const st = $('#stage'), av = $('#msgAvatar');
+  if (!st || !av) return;
+  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 54));
+  st.style.setProperty('--avSize', size + 'px');
+  st.style.setProperty('--avPlate', avToneColor());
+  av.classList.remove('avShape-circle', 'avShape-rounded', 'avShape-square');
+  av.classList.add('avShape-' + (AV_SHAPE_LIST.includes(SET.avShape) ? SET.avShape : 'circle'));
+  av.classList.remove('avRing-gold', 'avRing-goldwide', 'avRing-dark', 'avRing-none');
+  av.classList.add('avRing-' + (AV_RING_LIST.includes(SET.avRing) ? SET.avRing : 'gold'));
+  /* 只显示真正拿到 id 的头像。文件缺失 / 映射对不上时 curAvatarId 为 null，
+     这里直接不显示 —— 不拿首字色块占位，也不拿旧数字头像顶替。 */
+  const show = SET.avShow !== false && !!ST.curRawName && ST.curAvatarId != null;
+  av.classList.toggle('on', show);
+}
+/** 头像位置：名条会左/中/右对齐 + nameX/nameY 位移，所以按实际布局盒算 */
+function avPlace() {
+  const av = $('#msgAvatar'), nm = $('#msgName'), win = $('#msgWindow');
+  if (!av || !nm || !win || !av.classList.contains('on') || !nm.classList.contains('on')) return;
+  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 54));
+  const x = Number(SET.avX) || 0;
+  const y = Number(SET.avY) || 0;
+  const pos = AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'left';
+  let left = 0, top = 0;
+  if (pos.indexOf('box-') === 0) {
+    const W = win.clientWidth, H = win.clientHeight;
+    const out = size * .18;
+    left = (pos === 'box-tl' || pos === 'box-bl') ? -out : W - size + out;
+    top = (pos === 'box-tl' || pos === 'box-tr') ? -size * .42 : H - size * .58;
+  } else {
+    let nl = nm.offsetLeft, nt = nm.offsetTop;
+    const nw = nm.offsetWidth, nh = nm.offsetHeight;
+    if (nm.classList.contains('align-center')) nl = nl - nw / 2 + (Number(SET.nameX) || 0);
+    const gap = Number(SET.avGap) || 0;
+    left = pos === 'right' ? nl + nw + gap : nl - size - gap;
+    top = nt + (nh - size) / 2;
+  }
+  av.style.left = Math.round((left + x) * 10) / 10 + 'px';
+  av.style.top = Math.round((top + y) * 10) / 10 + 'px';
+}
+function avPaint() {
+  const av = $('#msgAvatar');
+  if (!av) return;
+  const img = av.querySelector('.avImg');
+  if (!img) return;
+  const token = ++avLoadToken;
+  img.classList.remove('ready');
+  /* 官方 d/b/n/e 头像四周约有 6px 透明留白：必须外扩 1.125 才能填满画框。
+     c-panel 是满幅胸像，不能跟着裁。 */
+  const official = /^[dbne]\d+$/i.test(String(ST.curAvatarId || ''));
+  img.classList.toggle('avOfficial', official);
+  if (ST.curAvatarId == null) {
+    img.removeAttribute('src');
+    return;
+  }
+  const cands = avatarCands(ST.curAvatarId);
+  if (!cands.length) {
+    ST.curAvatarId = null;
+    avApplyStyle();
+    return;
+  }
+  let i = 0;
+  const next = () => {
+    if (token !== avLoadToken) return;
+    if (i >= cands.length) {
+      ST.curAvatarId = null;
+      avApplyStyle();
+      return;
+    }
+    const src = cands[i++];
+    img.onload = () => {
+      if (token !== avLoadToken) return;
+      img.classList.add('ready');
+    };
+    img.onerror = next;
+    img.src = src;
+  };
+  next();
+}
+function avShow(raw, display) {
+  ST.curRawName = raw || '';
+  if (display) ST.curName = display;
+  const av = $('#msgAvatar');
+  if (!av) return;
+  if (!raw) {
+    ST.curAvatarId = null;
+    ST.lastAvId = null;
+    av.classList.remove('on');
+    return;
+  }
+  const id = avResolve(raw);
+  const keyId = id == null ? 'letter' : String(id);
+  const changed = ST.lastAvId !== keyId;
+  ST.lastAvId = keyId;
+  ST.curAvatarId = id;
+  avApplyStyle();
+  if (changed) avPaint();
+  avPlace();
+  requestAnimationFrame(avPlace);
+  if (changed) {
+    av.classList.remove('avSwap');
+    void av.offsetWidth;
+    av.classList.add('avSwap');
+    clearTimeout(avSwapTimer);
+    avSwapTimer = setTimeout(() => av.classList.remove('avSwap'), 420);
+  }
+}
+function setMsgName(who, raw) {
+  const n = $('#msgName');
+  if (!n) return;
+  ST.curName = who || '';
+  if (who) { n.textContent = who; n.classList.add('on'); }
+  else { n.textContent = ''; n.classList.remove('on'); }
+  avShow(raw || '', who || '');
+}
+window.addEventListener('resize', avPlace);
+if (window.ResizeObserver) {
+  try { new ResizeObserver(avPlace).observe($('#msgWindow')); } catch (e) { }
+}
+
 function showWindow(m) {
-  const w = $('#msgWindow'), n = $('#msgName');
+  const w = $('#msgWindow');
   if (!SET.showWin) return Promise.resolve();
   w.style.transition = '';        // 清掉上一次擦除留下的内联过渡/位移
   w.style.transform = '';
   w.classList.add('on');
   const who = spkName(m);
-  if (who) { n.textContent = who; n.classList.add('on'); }
-  else n.classList.remove('on');
+  setMsgName(who, m && m.Name ? m.Name : '');
   const t = $('#msgText');
   t.classList.remove('partNotice');      // 段间提示的样式只属于提示那一行
   t.classList.toggle('narr', !who);
@@ -3884,15 +4455,17 @@ async function seekTo(midx, opt) {
     }
     const whoJump = lastWindow ? spkName(lastWindow) : '';
     ST.curName = whoJump;
+    /* seekTo 还没更新 ST.idx 时，avShow 需要知道当前句的方法下标，
+       否则 CG 前的 ShowStand 会从上一句的位置往回找。 */
+    ST.curMsgIdx = midx;
     ST.voiceHas = !!(lastWindow && lastWindow.VoiceMark === '○');
     if (lastWindow) {
-      const w = $('#msgWindow'), n = $('#msgName');
+      const w = $('#msgWindow');
       w.classList.add('on');
-      if (whoJump) { n.textContent = whoJump; n.classList.add('on'); }
-      else n.classList.remove('on');
-      $('#msgText').classList.toggle('narr', !whoJump);
-      // 跳过来也要把"谁在说话"的压暗补上（TalkCharacter 只在有写的地方才重放）
+      // 先补上“谁在说话”的压暗，头像才知道该取哪张立绘的编号
       autoTalk(whoJump);
+      setMsgName(whoJump, lastWindow.Name || '');
+      $('#msgText').classList.toggle('narr', !whoJump);
     }
 
     // 3) 音频状态（BGM / 循环音效）：跳过的段落里的 PlayMusic 要补上，否则进来没声音
@@ -3935,6 +4508,7 @@ async function seekTo(midx, opt) {
  *  opt.noResume：忽略播放进度、从这一段开头播（重播 / 下一段 / 自动续播下一段用）。
  *  默认行为是从**上次看到的那一句**接着播 —— 侧栏点进来就能马上定位。 */
 async function playPart(partIdx, opt) {
+  if (!S || !S.data || !Array.isArray(S.data.parts) || !S.data.parts[partIdx]) return;
   MUL_EARLY.clear();               // 换段后 midx 重新从 0 开始
   // 只换播放循环，不销毁 BGM：重播/切段后音乐还能续上（脚本里的 PlayMusic 会自然换曲）
   haltLoop();
@@ -4037,11 +4611,11 @@ function gapWait(ms) {
 /** 把提示写进对话框：不动背景/立绘、不动进度、也不进右侧文本列表。
  *  玩家把对话框关掉了（控制条「对话框」按钮）就退化成顶部 toast，绝不强行弹框。 */
 function showPartNotice(text) {
-  const w = $('#msgWindow'), t = $('#msgText'), n = $('#msgName');
+  const w = $('#msgWindow'), t = $('#msgText');
   if (!w || !t) return;
   if (!SET.showWin) { toast(text); return; }
   w.classList.add('on');
-  if (n) { n.textContent = ''; n.classList.remove('on'); }
+  setMsgName('', '');
   t.classList.remove('narr');
   t.classList.add('partNotice');
   t.textContent = text;
@@ -4414,7 +4988,15 @@ const DEFAULTS = { alpha: 90, fs: 21, typeRate: 1, showWin: true,
               msgH: 150, msgY: 26,          // 对话框高度 / 垂直位置（都是 px）
               msgX: 0, msgAlign: 'left',
               msgBox: 'box',                // 文本框外观：box / soft / bare
-              nameX: 0, nameY: 0, nameAlign: 'left' };
+              nameX: 0, nameY: 0, nameAlign: 'left',
+              // 角色头像：默认关闭，设置项也默认折叠；勾选后才展开。
+              // avUserOn 才是用户真正的开关意愿，avShow 只由它推导；
+              // 这样旧配置/旧云端里的 avShow:true 不会把默认关闭覆盖掉。
+              avShow: false, avUserOn: false, avPos: 'left', avShape: 'circle',
+              // avColor / avColor2 = 「自定义」渐变的两端色
+              avRing: 'gold', avTone: 'dialog',
+              avColor: '#2f6fd0', avColor2: '#8fd3f4',
+              avSize: 54, avGap: 2, avX: 0, avY: 0 };
 /* 工作副本：所有改动作用在 SET 上，恢复默认时 Object.assign(SET, DEFAULTS) 即可 */
 const SET = { ...DEFAULTS };
 
@@ -4444,6 +5026,11 @@ function applySettings() {
     nmEl.classList.remove('align-left', 'align-center', 'align-right');
     nmEl.classList.add('align-' + (SET.nameAlign || 'left'));
   }
+  /* 头像：样式/位置跟着设置走。图本身不用重画 —— 换色调只改底板渐变，
+     不碰<img>，所以没有"每次拖滑块都重跑画布"的问题。 */
+  avApplyStyle();
+  syncAvToneRow();
+  avPlace();
   /* 文本框外观：box=有边框 / soft=无框+柔和底衬 / bare=无框+纯文字（只剩字幕）。
      用 class 而不是内联样式，CSS 那边全靠 #msgWindow.wb-* 覆盖，改动集中在一处。 */
   const wEl = $('#msgWindow');
@@ -4479,6 +5066,11 @@ function applySettings() {
   $('#valMsgX').textContent = (SET.msgX || 0) + 'px';
   $('#valNameX').textContent = (SET.nameX || 0) + 'px';
   $('#valNameY').textContent = (SET.nameY || 0) + 'px';
+  if ($('#valAvSize')) $('#valAvSize').textContent = Math.round(SET.avSize ?? 54) + 'px';
+  if ($('#valAvGap')) $('#valAvGap').textContent = Math.round(SET.avGap ?? 2) + 'px';
+  if ($('#valAvX')) $('#valAvX').textContent = Math.round(SET.avX || 0) + 'px';
+  if ($('#valAvY')) $('#valAvY').textContent = Math.round(SET.avY || 0) + 'px';
+  syncAvColorInputs();
   updateWinBtn();
   $('#valBgm').textContent = Math.round(SET.bgmVol * 100) + '%';
   $('#valSe').textContent = Math.round(SET.seVol * 100) + '%';
@@ -4503,6 +5095,18 @@ function syncSettingControls() {
   $('#setNameX').value = SET.nameX ?? 0;
   $('#setNameY').value = SET.nameY ?? 0;
   $('#setNameAlign').value = SET.nameAlign || 'left';
+  if ($('#setAvShow')) $('#setAvShow').checked = SET.avUserOn === true;
+  syncAvPanel();
+  if ($('#setAvPos')) $('#setAvPos').value = SET.avPos || 'left';
+  if ($('#setAvShape')) $('#setAvShape').value = SET.avShape || 'circle';
+  if ($('#setAvRing')) $('#setAvRing').value = SET.avRing || 'gold';
+  if ($('#setAvTone')) $('#setAvTone').value = SET.avTone || 'dialog';
+  if ($('#setAvColor')) $('#setAvColor').value = avToneHex();
+  syncAvColorInputs();
+  if ($('#setAvSize')) $('#setAvSize').value = Math.round(SET.avSize ?? 54);
+  if ($('#setAvGap')) $('#setAvGap').value = Math.round(SET.avGap ?? 2);
+  if ($('#setAvX')) $('#setAvX').value = Math.round(SET.avX || 0);
+  if ($('#setAvY')) $('#setAvY').value = Math.round(SET.avY || 0);
   $('#setBgm').value = Math.round((SET.bgmVol ?? .7) * 100);
   $('#setSe').value = Math.round((SET.seVol ?? .9) * 100);
   $('#setVoice').value = Math.round((SET.voiceVol ?? 1) * 100);
@@ -4531,6 +5135,122 @@ function syncSettingControls() {
   // 只碰 SSR/SR/R（带 data-r 的）；第四格「播放记录」不是稀有度，状态由 setHistView 管
   document.querySelectorAll('.rar-row button[data-r]').forEach(b =>
     b.classList.toggle('on', rarArr.includes(b.dataset.r)));
+}
+
+/* ============ 设置面板分类页签 ============
+   一次只显示一类，避免点开就是一整屏滑块把人看花。
+   只切 DOM 的 hidden / 高亮，不写 SET —— 页签位置不是用户偏好，刷新后回到第一类。 */
+let SET_PAGE = 'view';
+function showSetPage(name) {
+  const pages = document.querySelectorAll('#settings .set-page');
+  if (!pages.length) return;
+  let target = null;
+  pages.forEach(p => {
+    const on = p.dataset.page === name;
+    p.hidden = !on;
+    if (on) target = p;
+  });
+  if (!target) return;
+  SET_PAGE = name;
+  document.querySelectorAll('#setTabs button[data-page]').forEach(b => {
+    b.classList.toggle('on', b.dataset.page === name);
+    b.setAttribute('aria-selected', b.dataset.page === name ? 'true' : 'false');
+  });
+  /* 面板高度已固定为最高一页，切页不再变高，无需重算关闭按钮位置。
+     （以前高度随页变才需要 dispatch resize，现在那样做反而会触发无谓的重测。） */
+}
+document.querySelectorAll('#setTabs button[data-page]').forEach(b => {
+  b.addEventListener('click', () => showSetPage(b.dataset.page));
+});
+
+/* 面板高度**按「组件最多」的那一页自适应**，不是拍脑袋给个数：
+ *   · 逐个分类页单独显示，读完 scrollHeight 取最大值（页签栏/页脚/各处 margin
+ *     都算进去，避免手工累加漏 margin 导致最高页自己冒滚动条）；
+ *   · 页里所有 hidden 的条件行（头像展开区、选「自定义」才出现的两个色块……）
+ *     量的时候**一律当已显示**展开再量 —— 这样隐藏组件显不显示都不改变高度，
+ *     切页 / 切「自定义」面板不跳、也不会突然冒出滚动条；
+ *   · 高度用 px 落地是为了切页时不跳动；但每次打开、窗口 resize、切语言都会
+ *     重新量一遍，所以它跟内容始终同步（不是一次量完就锁死）。
+ *   · 窗口矮到连最高页都装不下（异形分辨率）时，由 CSS 的
+ *     max-height:calc(100vh - 110px) + overflow-y:auto 兜底，此时才允许滚动。
+ *   · 移动端面板是全屏铺满的，不参与。 */
+let SET_H = 0, setHBusy = false;
+function fixSettingsHeight() {
+  const st = $('#settings');
+  if (!st || setHBusy) return;
+  // 全屏面板（手机竖屏）靠 CSS 铺满，不设高度
+  if (window.matchMedia && window.matchMedia('(max-width:860px)').matches) {
+    st.style.height = '';
+    SET_H = 0;
+    return;
+  }
+  const pages = Array.prototype.slice.call(st.querySelectorAll('.set-page'));
+  if (!pages.length) return;
+  /* 所有可能被 hidden 掉的东西：分类页本身 + 页内条件行（含嵌套，
+     如 #avSettings 里的 #avColorRow），量的时候全部展开。 */
+  const hideables = Array.prototype.slice.call(
+    st.querySelectorAll('.set-page, .set-page [hidden]')
+  );
+  const savedHidden = hideables.map(el => el.hidden);
+  const wasHidden = st.hidden;
+  const oldHeight = st.style.height;
+  setHBusy = true;                      // 测量期间自己制造的 hidden 变动不算内容变化
+  st.hidden = false;                    // display:none 时量不到高度
+  st.style.height = 'auto';             // 让高度由内容撑开，才能读到真实 scrollHeight
+  hideables.forEach(el => { el.hidden = false; });
+  pages.forEach(p => { p.hidden = true; });
+  let maxH = 0;
+  pages.forEach(p => {
+    p.hidden = false;
+    maxH = Math.max(maxH, st.scrollHeight);
+    p.hidden = true;
+  });
+  hideables.forEach((el, i) => { el.hidden = savedHidden[i]; });
+  st.hidden = wasHidden;
+  st.style.height = oldHeight || '';
+  // +6px 余量：抵消子像素/字体度量的舍入，保证最高页也不出现滚动条
+  SET_H = Math.ceil(maxH) + 6;
+  st.style.height = SET_H + 'px';
+  // MutationObserver 的回调在本次任务结束后才来，留一点时间窗忽略自己造成的变动
+  setTimeout(() => { setHBusy = false; }, 80);
+}
+/* 兜底自适应：面板里任何结构变化（新条件行、文案换行变高）都会重算；
+   只在「当前确实装不下」时才动，重算完就停，不会自己跟自己打转。 */
+function watchSettingsHeight() {
+  const st = $('#settings');
+  if (!st || typeof MutationObserver !== 'function') return;
+  const mo = new MutationObserver(() => {
+    if (setHBusy || st.hidden) return;
+    if (st.scrollHeight <= st.clientHeight) return;   // 装得下就不用管
+    requestAnimationFrame(() => { if (!setHBusy) fixSettingsHeight(); });
+  });
+  mo.observe(st, { attributes: true, attributeFilter: ['hidden', 'class'], subtree: true, childList: true });
+}
+
+/* 每个分类页管哪些 SET 字段：「恢复本页默认设置」只把这些字段还原成出厂值，
+   其它页调好的设置一概不动。新增设置项时记得登记到对应页，否则恢复不到。
+   不在任何设置页的字段（showWin 在控制栏、sortBy/rarSel 在侧栏）不列入。 */
+const SET_PAGE_FIELDS = {
+  view:   ['fit', 'holdLastPart', 'showPartial', 'useX2'],
+  window: ['msgBox', 'msgBg', 'msgColor', 'msgFont', 'msgAlign',
+           'alpha', 'fs', 'msgLH', 'msgH', 'msgY', 'msgStroke', 'msgX'],
+  name:   ['nameX', 'nameY', 'nameAlign',
+           'avShow', 'avUserOn', 'avPos', 'avShape', 'avRing',
+           'avTone', 'avColor', 'avColor2', 'avSize', 'avGap', 'avX', 'avY'],
+  text:   ['instantText', 'typeRate', 'pausePerChar', 'pauseBase', 'pauseAfterVoice'],
+  audio:  ['bgmVol', 'seVol', 'voiceVol'],
+};
+
+/** 角色头像的展开区跟复选框同步：关掉时整块设置不占面板高度 */
+function syncAvPanel() {
+  const box = $('#avSettings');
+  if (box) box.hidden = SET.avUserOn !== true;
+  syncAvToneRow();
+}
+/** 「自定义」才需要那两个取色块：其它预设是固定渐变，摆着只会让人以为能改。 */
+function syncAvToneRow() {
+  const color = $('#avColorRow');
+  if (color) color.hidden = (SET.avTone || 'dialog') !== 'custom';
 }
 
 function loadSettings() {
@@ -4569,6 +5289,31 @@ function loadSettings() {
       if (v !== undefined) SET[k] = v;
     }
   }
+  /* 头像设置做一次兜底：旧配置没有这些键就是默认值，滑块/下拉的值不合法就夹回范围 */
+  const avNum = (k, mn, mx, def) => {
+    const v = Number(SET[k]);
+    SET[k] = Number.isFinite(v) ? Math.min(mx, Math.max(mn, v)) : def;
+  };
+  avNum('avSize', 20, 140, 54);
+  avNum('avGap', -30, 60, 2);
+  avNum('avX', -200, 200, 0);
+  avNum('avY', -80, 80, 0);
+  /* 新默认：角色头像关闭且设置折叠。avShow 不直接信任旧配置，
+     只由新键 avUserOn 推导 —— 旧 localStorage / 旧云端里的 avShow:true 一律当没勾选。 */
+  SET.avUserOn = SET.avUserOn === true;
+  SET.avShow = SET.avUserOn;
+  if (!AV_POS_LIST.includes(SET.avPos)) SET.avPos = 'left';
+  if (!AV_SHAPE_LIST.includes(SET.avShape)) SET.avShape = 'circle';
+  if (!AV_RING_LIST.includes(SET.avRing)) SET.avRing = 'gold';
+  /* 抠图 / 融合两套旧方案已经整块删除（老配置里残留的 avBg/avKey/avTint
+     不再有任何效果，也不占设置面板）。 */
+  /* 旧版本的五个纯色预设（ink/plum/gold/rose/slate）已换成渐变，老配置按色相
+     就近搬到新预设，别让用户下次打开发现「背景颜色」自己变回原图了。 */
+  const AV_TONE_OLD = { ink: 'sky', plum: 'aurora', gold: 'danxia', rose: 'blush', slate: 'pearl' };
+  if (AV_TONE_OLD[SET.avTone]) SET.avTone = AV_TONE_OLD[SET.avTone];
+  if (!AV_TONE_LIST.includes(SET.avTone)) SET.avTone = 'dialog';
+  SET.avColor = avHex(SET.avColor, '#2f6fd0');
+  SET.avColor2 = avHex(SET.avColor2, '#8fd3f4');
   syncSettingControls();
   applySettings();
   /* 老用户第一次升级到「设置也同步」的版本：本机设置还没登记进偏好层，
@@ -4576,15 +5321,24 @@ function loadSettings() {
   if (window.UD && window.UD.syncSet) window.UD.syncSet(SET, true);
 }
 
-/* 恢复默认：清空浏览器保存的设置，回到出厂值 */
+/* 恢复本页默认：只把当前分类页的字段还原成出厂值，其它页调过的设置不动。
+   不再 removeItem('escah_set') —— 那会把整份设置清掉、连带冲掉其它页；
+   applySettings() 会把合并后的 SET 整个写回，UD 同步层只推真正变了的键。 */
 function resetSettings() {
-  Object.assign(SET, structuredClone(DEFAULTS));
-  localStorage.removeItem('escah_set');
+  const fields = SET_PAGE_FIELDS[SET_PAGE] || [];
+  if (!fields.length) return;
+  fields.forEach(k => { SET[k] = structuredClone(DEFAULTS[k]); });
   syncSettingControls();
   applySettings();
-  toast('已恢复默认设置');
+  toast('已恢复本页默认设置');
 }
-$('#btnSet').onclick = () => { const s = $('#settings'); s.hidden = !s.hidden; };
+$('#btnSet').onclick = () => {
+  const s = $('#settings');
+  s.hidden = !s.hidden;
+  /* 每次打开都按当前字体/窗口重新量一遍（代价是几次 reflow），
+     而不是「首次量一次就锁死」—— 否则改过语言、换过缩放后高度会对不上。 */
+  if (!s.hidden) fixSettingsHeight();
+};
 
 /* ============ 设置页的悬停说明气泡（替代原生 title） ============
  * 原生 title 的气泡字号由浏览器决定（Edge/Chrome 约 12px），比全站 14px 的字号下限
@@ -4644,6 +5398,13 @@ function initSettingTips() {
     hide();
   });
   P.addEventListener('scroll', hide, { passive: true });
+  /* 点击控件本体时立刻收起气泡：点开原生下拉框后，鼠标移到弹出的选项上
+     不会再触发面板内的 mouseout（原生列表不在 DOM 里），气泡就一直挂着不好看。
+     用捕获阶段，抢在 <label> 把 click 转发给内部 select 之前处理。 */
+  P.addEventListener('click', e => {
+    const t = e.target;
+    if (t && t.closest && t.closest('select,input,button')) hide();
+  }, true);
   ['#btnSet', '#setClose'].forEach(s => {
     const b = $(s);
     if (b) b.addEventListener('click', hide);   // 面板一关就收掉
@@ -4670,6 +5431,11 @@ function initSettingTips() {
       show(el);
     });
   }
+  /* 气泡挂在 body 上（fixed），面板又是被 ✕ / ☰ / Esc 各自改 hidden 关掉的 ——
+     哪天面板从别处关掉，气泡就成了"关不掉的浮窗"。点面板以外一律收掉。 */
+  document.addEventListener('click', e => {
+    if (!P.contains(e.target)) hide();
+  }, true);
 }
 initSettingTips();
 
@@ -4827,8 +5593,8 @@ if ($('#setClose')) {
 }
 
 /* 关闭按钮是**面板外的浮窗**，位置随面板实时算：
- *   · 垂直居中于面板（不是视口 —— 面板高度随内容变）
- *   · 水平贴面板左侧 10px；窄屏放不下就夹在屏幕内
+ *   · 贴在面板右上角内侧（面板不再铺满整页后，左边没有空位给它了）
+ *   · 右上角正好是页签栏右端的空白区，不遮挡任何控件
  * 面板显隐由很多地方改（按钮、Esc、代码），用 MutationObserver 统一同步，
  * 免得漏一处就出现"面板关了按钮还在"。 */
 (function bindSetClose() {
@@ -4839,9 +5605,8 @@ if ($('#setClose')) {
   function place() {
     const r = st.getBoundingClientRect();
     if (!r.height) return;
-    btn.style.top = Math.round(r.top + r.height / 2) + 'px';
-    const right = window.innerWidth - r.left + 10;
-    btn.style.right = Math.max(6, Math.min(right, window.innerWidth - 40)) + 'px';
+    btn.style.top = Math.round(r.top + 8) + 'px';
+    btn.style.right = Math.max(6, Math.round(window.innerWidth - r.right + 8)) + 'px';
   }
 
   function sync() {
@@ -4856,8 +5621,13 @@ if ($('#setClose')) {
   new MutationObserver(sync).observe(st, {
     attributes: true, attributeFilter: ['hidden'],
   });
-  window.addEventListener('resize', function () { if (!st.hidden) place(); });
+  window.addEventListener('resize', function () {
+    SET_H = 0;                 // 尺寸变了重新量最高页（桌面↔移动切换也要能松开固定高度）
+    fixSettingsHeight();
+    if (!st.hidden) place();
+  });
   sync();
+  watchSettingsHeight();       // 面板内结构/文案变化时兜底重算（只在装不下时动）
 })();
 /* 设置面板的滑块：自己接管拖动。
    有些内嵌浏览器（Electron / webview）里原生 range 只响应"点击跳到该点"，
@@ -4920,6 +5690,50 @@ $('#btnWin').onclick = () => {
 $('#setNameX').oninput = e => { SET.nameX = +e.target.value; applySettings(); };
 $('#setNameY').oninput = e => { SET.nameY = +e.target.value; applySettings(); };
 $('#setNameAlign').onchange = e => { SET.nameAlign = e.target.value; applySettings(); };
+/* ---- 角色头像 ---- */
+if ($('#setAvShow')) $('#setAvShow').onchange = e => {
+  SET.avShow = e.target.checked;
+  SET.avUserOn = e.target.checked;
+  syncAvPanel();
+  applySettings();
+  // 刚打开头像时自动切到「话者」页，否则展开项在别的页里用户看不到
+  if (SET.avShow) showSetPage('name');
+  toast(SET.avShow ? '已启用角色头像' : '已关闭角色头像');
+};
+if ($('#setAvPos')) $('#setAvPos').onchange = e => { SET.avPos = e.target.value; applySettings(); };
+if ($('#setAvShape')) $('#setAvShape').onchange = e => { SET.avShape = e.target.value; applySettings(); };
+if ($('#setAvRing')) $('#setAvRing').onchange = e => { SET.avRing = e.target.value; applySettings(); };
+if ($('#setAvTone')) $('#setAvTone').onchange = e => {
+  const prev = SET.avTone;
+  SET.avTone = e.target.value;
+  /* 切到「自定义」时，两个色块从刚选的那个预设接过来（首/末色），
+     这样点一下就能在原配色上微调，不会突然跳成默认蓝。 */
+  if (SET.avTone === 'custom' && prev !== 'custom') {
+    const pair = avToneStops(prev);
+    SET.avColor = pair[0];
+    SET.avColor2 = pair[1];
+  }
+  /* 第一项「原图背景（跟随对话框）」兼作原来的「恢复原图背景」按钮：
+     选它就是把底板换成对话框同色 + 提示，省掉一个独立按钮占的那一行。 */
+  if (SET.avTone === 'dialog') toast('已恢复原图背景');
+  applySettings();
+};
+if ($('#setAvColor')) $('#setAvColor').oninput = e => {
+  SET.avColor = e.target.value;
+  SET.avTone = 'custom';
+  if ($('#setAvTone')) $('#setAvTone').value = 'custom';
+  applySettings();
+};
+if ($('#setAvColor2')) $('#setAvColor2').oninput = e => {
+  SET.avColor2 = e.target.value;
+  SET.avTone = 'custom';
+  if ($('#setAvTone')) $('#setAvTone').value = 'custom';
+  applySettings();
+};
+if ($('#setAvSize')) $('#setAvSize').oninput = e => { SET.avSize = +e.target.value; applySettings(); };
+if ($('#setAvGap')) $('#setAvGap').oninput = e => { SET.avGap = +e.target.value; applySettings(); };
+if ($('#setAvX')) $('#setAvX').oninput = e => { SET.avX = +e.target.value; applySettings(); };
+if ($('#setAvY')) $('#setAvY').oninput = e => { SET.avY = +e.target.value; applySettings(); };
 $('#setPartial').onchange = e => { SET.showPartial = e.target.checked; applySettings(); };
 if ($('#setHoldPart5')) {
   $('#setHoldPart5').onchange = e => {
@@ -5409,7 +6223,13 @@ function renderHistList(box, filter = '') {
       + `<span class="cpy" title="复制名字">⧉</span>`
       + `<span class="del" title="从记录里删掉这一条（不影响收藏）">✕</span>`
       + `</span>`;
-    if (chain.length) applyChain(d.querySelector('img'), chain);
+    if (chain.length) {
+      if (window.MediaUI && MediaUI.lazyRun) {
+        MediaUI.lazyRun(d, () => applyChain(d.querySelector('img'), chain));
+      } else {
+        applyChain(d.querySelector('img'), chain);
+      }
+    }
     bindTip(d, () => {
       const parts = r.n ? `第 ${r.p + 1} 段 · 共 ${r.n} 句` : '';
       return (bnr ? `<img src="${esc(imgSrc(bnr))}" alt="" `
@@ -5545,8 +6365,15 @@ function renderSidebarBody(filter = '') {
       `<span class="cpy" title="复制角色名">⧉</span>` +
       // 收藏星放在最右边：每行位置一致，鼠标只需要上下移动
       favHTML('char_' + c.id) + `</span>`;
-    // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）
-    if (haveImg) applyChain(d.querySelector('img'), imgChain);
+    // 先试横幅，失败自动退回头像（缺横幅的角色照样有图）。
+    // 取图本身推迟到这一行快进入视野（侧栏 385 行同时取图会把启动拖成十几秒）
+    if (haveImg) {
+      if (window.MediaUI && MediaUI.lazyRun) {
+        MediaUI.lazyRun(d, () => applyChain(d.querySelector('img'), imgChain));
+      } else {
+        applyChain(d.querySelector('img'), imgChain);
+      }
+    }
     bindTip(d, () => {
       const parts = c.parts || 0;
       const tr = (typeof transStatsOf === 'function') ? '' : '';
@@ -6627,6 +7454,7 @@ async function switchLang(explicit) {
   toast(L10N.t('toast.lang', '显示语言：' + L10N.lang(), { name: L10N.label() }));
   if (S.key) await L10N.loadStory(S.key);
   refreshForLang();
+  SET_H = 0; fixSettingsHeight();   // 文案长短变了，重新量最高页
 }
 if ($('#btnLang')) $('#btnLang').onclick = () => switchLang();
 
@@ -6958,6 +7786,14 @@ function shareMsgStyle() {
     // 名字的三档对齐（设置里的「话者名 → 对齐」）
     nameAlign: (nm && nm.classList.contains('align-center')) ? 'center'
       : (nm && nm.classList.contains('align-right')) ? 'right' : 'left',
+    // 话者头像（分享图也按播放器里的位置/大小/间距画，保持所见即所得）
+    avShow: SET.avShow !== false,
+    avPos: AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'left',
+    avShape: AV_SHAPE_LIST.includes(SET.avShape) ? SET.avShape : 'circle',
+    avSize: n(getComputedStyle(stage).getPropertyValue('--avSize'), 54),
+    avGap: n(SET.avGap, 2),
+    avX: n(SET.avX, 0),
+    avY: n(SET.avY, 0),
   };
 }
 
@@ -6985,8 +7821,40 @@ function shareRoundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
+/** 分享图里画一枚圆形/圆角头像；位置由调用方按播放器设置算好 */
+function shareDrawAvatar(g, im, ax, ay, size, shape, scale) {
+  if (!im || !size) return;
+  const k = scale;
+  const radius = shape === 'rounded' ? size * .2 : shape === 'square' ? 2 * k : size / 2;
+  const shapePath = () => {
+    g.beginPath();
+    if (shape === 'circle') g.arc(ax + size / 2, ay + size / 2, size / 2, 0, Math.PI * 2);
+    else shareRoundRect(g, ax, ay, size, size, radius);
+  };
+  g.save();
+  shapePath();
+  g.clip();
+  g.fillStyle = '#0b1220';
+  g.fillRect(ax, ay, size, size);
+  const iw = im.naturalWidth, ih = im.naturalHeight;
+  if (iw && ih) {
+    const s = Math.max(size / iw, size / ih);
+    const dw = iw * s, dh = ih * s;
+    g.drawImage(im, ax + (size - dw) / 2, ay + (size - dh) / 2, dw, dh);
+  }
+  g.restore();
+  g.save();
+  shapePath();
+  g.lineWidth = Math.max(1, 2 * k);
+  g.strokeStyle = '#e6c283';
+  g.shadowColor = 'rgba(245,205,130,.55)';
+  g.shadowBlur = 6 * k;
+  g.stroke();
+  g.restore();
+}
+
 /** 把一句话画成「播放器里的对话框」（尺寸/位置/字体都按用户设置等比映射到图片上） */
-function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale) {
+function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale, avImg) {
   const k = scale;                                   // 1280 舞台 → 图片宽
   const boxX = st.left * k;
   const boxW = W - (st.left + st.right) * k;
@@ -7058,6 +7926,21 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale) {
       : st.nameAlign === 'right' ? boxX + boxW - 22 * k - pillW
         : boxX + 22 * k;
     const ny = boxY - (15 * k) - pillH / 2;
+    // 头像先画在名条下层（播放器里 #msgAvatar 的 z-index 也比 #msgName 低）
+    if (avImg && st.avShow) {
+      const avS = Math.max(20, Math.min(140, st.avSize || 54)) * k;
+      const gap = (st.avGap || 0) * k;
+      let ax = 0, ay = 0;
+      if (st.avPos.indexOf('box-') === 0) {
+        const out = avS * .18;
+        ax = (st.avPos === 'box-tl' || st.avPos === 'box-bl') ? boxX - out : boxX + boxW - avS + out;
+        ay = (st.avPos === 'box-tl' || st.avPos === 'box-tr') ? boxY - avS * .42 : boxY + boxH - avS * .58;
+      } else {
+        ax = st.avPos === 'right' ? nx + pillW + gap : nx - avS - gap;
+        ay = ny - avS / 2;
+      }
+      shareDrawAvatar(g, avImg, ax + st.avX * k, ay + st.avY * k, avS, st.avShape, k);
+    }
     if (st.namePill) {
       const grd = g.createLinearGradient(0, ny - pillH / 2, 0, ny + pillH / 2);
       grd.addColorStop(0, '#f0d090');
@@ -7086,7 +7969,7 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale) {
  *  false 用海报自带的白字排版。
  *  W 可传 720（游戏原生分辨率那档），所有尺寸按 1080 基准等比缩放，
  *  版式完全一样、只是整张图小一圈。 */
-function shareCompose(shot, picks, W, ownStyle, fsBase) {
+function shareCompose(shot, picks, W, ownStyle, fsBase, avImg) {
   W = W || SHARE_W;
   const k = W / SHARE_DESIGN;            // 设计基准 1080 → 目标宽（1920 / 1280）
   const imgH = Math.round(W * 9 / 16);
@@ -7152,7 +8035,7 @@ function shareCompose(shot, picks, W, ownStyle, fsBase) {
      · 否则 → 海报自带的白字排版 + 暗角 */
   const st = ownStyle ? shareMsgStyle() : null;
   if (st) {
-    shareDrawPlayerMsg(g, W, imgH, st, src[0].who || '', src[0].text || '', W / 1280);
+    shareDrawPlayerMsg(g, W, imgH, st, src[0].who || '', src[0].text || '', W / 1280, avImg);
   } else {
     const head = blocks[0];
     const headH = head.length * lhTxt;
@@ -7209,6 +8092,31 @@ function shareCanvasBlob(cv, type, quality) {
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return new Blob([buf], { type: m[1] });
+}
+
+/** 分享长图里的头像：按话者名解析一次，图片加载好后再重画预览 */
+const SHARE_AV_IMG = new Map();
+function shareAvatarImg(who, onReady) {
+  if (!who) return null;
+  const id = avResolve(who);
+  if (id == null) return null;
+  if (SHARE_AV_IMG.has(id)) return SHARE_AV_IMG.get(id);
+  const cands = avatarCands(id);
+  if (!cands.length) { SHARE_AV_IMG.set(id, null); return null; }
+  const im = new Image();
+  SHARE_AV_IMG.set(id, null);
+  let i = 0;
+  const next = () => {
+    if (i >= cands.length) { SHARE_AV_IMG.set(id, null); return; }
+    im.src = cands[i++];
+  };
+  im.onload = () => {
+    SHARE_AV_IMG.set(id, im);
+    if (onReady) onReady();
+  };
+  im.onerror = next;
+  next();
+  return null;
 }
 
 /** 打开分享弹窗：左边是成品预览，右边勾台词 */
@@ -7325,7 +8233,9 @@ function openShare() {
     }
     const own = q('#shOwn') ? q('#shOwn').value === '1' : false;   // 默认海报样式
     const fsBase = q('#shFs') ? +q('#shFs').value : 24;
-    const cv = shareCompose(shot, picks, outW, own, fsBase);
+    const first = lines[picks[0]] || {};
+    const avImg = own ? shareAvatarImg(first.who || '', paint) : null;
+    const cv = shareCompose(shot, picks, outW, own, fsBase, avImg);
     if (!cv) {
       holder.innerHTML = '<div class="shEmpty">这几句拼不出来，换几句试试</div>';
       return;
@@ -7730,6 +8640,9 @@ function applyRemotePrefsToUI() {
     const v = UD.prefValue('set', k, undefined);
     if (v !== undefined && SET[k] !== v) { SET[k] = v; any = true; }
   }
+  /* 远端设置同样不能拿旧的 avShow:true 覆盖新默认；只看 avUserOn */
+  SET.avUserOn = SET.avUserOn === true;
+  if (SET.avShow !== SET.avUserOn) { SET.avShow = SET.avUserOn; any = true; }
   if (any) { syncSettingControls(); applySettings(); }
   // 列表分类 / 资源筛选
   const src = UD.prefValue('ui', 'src', null);

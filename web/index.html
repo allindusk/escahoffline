@@ -5,11 +5,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1130e">
+<link rel="stylesheet" href="assets/css/player.css?v=1117db">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1115d">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1117l">
+<!-- 悬停说明气泡（14px）：原生 title 只有 12px，低于全站字号下限 -->
+<link rel="stylesheet" href="assets/css/tip.css?v=1116c">
 </head>
 <body>
 <!-- MulColorBackground / MulStand 的调色板：CSS filter 做不了「R/G/B 各自相乘」，
@@ -21,7 +23,17 @@
      放在里面会跟着内容滚走（以前 top:50% 相对内容高度算，一拉就看不见了） -->
 <button id="setClose" title="关闭设置（Esc）" hidden>✕</button>
 <div id="settings" hidden>
-  <h4 data-i18n="sect.view">画面/播放</h4>
+  <!-- 分类页签：一次只显示一类，避免点开就是一整屏滑块把人看花。
+       文案复用现有 sect.* i18n key，日文界面自动跟着切。 -->
+  <div id="setTabs" role="tablist">
+    <button type="button" class="on" data-page="view" role="tab" data-i18n="sect.view">画面/播放</button>
+    <button type="button" data-page="window" role="tab" data-i18n="sect.window">文本框</button>
+    <button type="button" data-page="name" role="tab" data-i18n="sect.name">话者</button>
+    <button type="button" data-page="text" role="tab" data-i18n="sect.text">文本节奏</button>
+    <button type="button" data-page="audio" role="tab" data-i18n="sect.audio">音量</button>
+  </div>
+  <!-- 画面/播放 -->
+  <section class="set-page" data-page="view">
   <!-- 面板本身就是两列网格：这一节严格「一行两项」——
        画面缩放 | 播完第 5 段暂停，显示不完整立绘 | 优先使用超分图。
        立绘的尺寸/位置已全部删掉（改了只会偏离游戏原演出）。
@@ -43,7 +55,9 @@
     <input type="checkbox" id="setUseX2" checked>
   </div>
 
-  <h4 data-i18n="sect.window">文本框</h4>
+  </section>
+  <!-- 文本框 -->
+  <section class="set-page" data-page="window" hidden>
   <!-- 排序规则（用户 2026-11-11 要求）：同一节里**同类型的控件聚在一起**，
        下拉框两项一行、滑块两项一行。某类剩下奇数个时，多的那个就留在
        左列独占一行**一格**——不要为了"填满"把它拉成跨两列（用户明确反对）。 -->
@@ -110,7 +124,15 @@
   <label data-i18n="set.msgX">水平位移 <span id="valMsgX">0px</span>
     <input type="range" id="setMsgX" min="-300" max="300" step="5" value="0">
   </label>
-  <h4 data-i18n="sect.name">话者名</h4>
+  </section>
+  <!-- 话者 + 角色头像 -->
+  <section class="set-page" data-page="name" hidden>
+  <label data-i18n="set.nameX">水平位移 <span id="valNameX">0px</span>
+    <input type="range" id="setNameX" min="-300" max="300" step="5" value="0">
+  </label>
+  <label data-i18n="set.nameY">垂直位移 <span id="valNameY">0px</span>
+    <input type="range" id="setNameY" min="-60" max="40" step="2" value="0">
+  </label>
   <label class="ctlrow" data-i18n="set.nameAlign">对齐
     <select id="setNameAlign">
       <option value="left" data-i18n="opt.align.left">左对齐</option>
@@ -118,15 +140,80 @@
       <option value="right" data-i18n="opt.align.right">右对齐</option>
     </select>
   </label>
-  <div class="sp" aria-hidden="true"></div>
-  <label data-i18n="set.nameX">水平位移 <span id="valNameX">0px</span>
-    <input type="range" id="setNameX" min="-300" max="300" step="5" value="0">
-  </label>
-  <label data-i18n="set.nameY">垂直位移 <span id="valNameY">0px</span>
-    <input type="range" id="setNameY" min="-60" max="40" step="2" value="0">
+  <label class="row" data-i18n-title="set.avShowNote" title="勾选后启用角色头像，并展开下面的头像设置；取消勾选会关闭头像并隐藏这些设置">
+    <span data-i18n="set.avShow">角色头像<i class="qh" aria-hidden="true">?</i></span>
+    <input type="checkbox" id="setAvShow">
   </label>
 
-  <h4 data-i18n="sect.text">文本节奏</h4>
+  <div id="avSettings" class="av-settings" hidden>
+    <!-- 分组标题：以前是 CSS 的 ::before content:'角色头像设置'，切语言时翻不了；
+         现在是一行真元素，走 ui.json（data-i18n="sect.avatar"）。 -->
+    <div class="av-title" data-i18n="sect.avatar">角色头像设置</div>
+    <label data-i18n="set.avX" data-i18n-title="set.avXNote" title="头像相对默认位置的左右微调">头像水平位移 <span id="valAvX">0px</span>
+      <input type="range" id="setAvX" min="-200" max="200" step="4" value="0">
+    </label>
+    <label data-i18n="set.avY" data-i18n-title="set.avYNote" title="头像相对默认位置的上下微调">头像垂直位移 <span id="valAvY">0px</span>
+      <input type="range" id="setAvY" min="-80" max="80" step="2" value="0">
+    </label>
+    <label class="ctlrow" data-i18n-title="set.avPosNote" data-i18n="set.avPos" title="左/右跟随名条一起移动；框角模式把头像钉在对话框的角上">位置
+      <select id="setAvPos">
+        <option value="left" data-i18n="opt.avPos.left">名条左侧</option>
+        <option value="right" data-i18n="opt.avPos.right">名条右侧</option>
+        <option value="box-tl" data-i18n="opt.avPos.box-tl">对话框左上角</option>
+        <option value="box-tr" data-i18n="opt.avPos.box-tr">对话框右上角</option>
+        <option value="box-bl" data-i18n="opt.avPos.box-bl">对话框左下角</option>
+        <option value="box-br" data-i18n="opt.avPos.box-br">对话框右下角</option>
+      </select>
+    </label>
+    <label class="ctlrow" data-i18n="set.avShape">形状
+      <select id="setAvShape">
+        <option value="circle" data-i18n="opt.avShape.circle">圆形</option>
+        <option value="rounded" data-i18n="opt.avShape.rounded">圆角方形</option>
+        <option value="square" data-i18n="opt.avShape.square">方形</option>
+      </select>
+    </label>
+    <label class="ctlrow" data-i18n-title="set.avRingNote" data-i18n="set.avRing" title="金色描边取自名条同一套香槟金，默认细环 + 暗色外圈">画框
+      <select id="setAvRing">
+        <option value="gold" data-i18n="opt.avRing.gold">金环（细）</option>
+        <option value="goldwide" data-i18n="opt.avRing.goldwide">金环（宽）</option>
+        <option value="dark" data-i18n="opt.avRing.dark">暗色环</option>
+        <option value="none" data-i18n="opt.avRing.none">无描边</option>
+      </select>
+    </label>
+    <!-- 自定义渐变的两个色块**并入这一行**，不单独占一行：
+         设置面板高度是按最高页（话者页展开头像）锁定的，多一行 46px 会让矮屏
+         直接冒出滚动条（用户明确要求面板不能滚动）。 -->
+    <label id="avToneRow" class="ctlrow" data-i18n-title="set.avToneNote" title="头像后面的底板渐变；选「原图背景（默认）」还原成原图。选「自定义」后右边会出现两个色块调渐变">
+      <span data-i18n="set.avTone">背景颜色</span>
+      <span class="avtone-pick">
+        <select id="setAvTone">
+          <option value="dialog" data-i18n="opt.avTone.dialog">原图背景（默认）</option>
+          <option value="sky" data-i18n="opt.avTone.sky">晴空</option>
+          <option value="aurora" data-i18n="opt.avTone.aurora">极光</option>
+          <option value="pearl" data-i18n="opt.avTone.pearl">珍珠白</option>
+          <option value="blush" data-i18n="opt.avTone.blush">樱粉</option>
+          <option value="jade" data-i18n="opt.avTone.jade">湖青</option>
+          <option value="emerald" data-i18n="opt.avTone.emerald">翡翠</option>
+          <option value="danxia" data-i18n="opt.avTone.danxia">落日橙</option>
+          <option value="custom" data-i18n="opt.avTone.custom">自定义</option>
+        </select>
+        <span id="avColorRow" class="avsw2" hidden data-i18n-title="set.avColorPickNote" title="自定义渐变：左边起始色、右边结束色，两色之间自动过渡">
+          <input type="color" id="setAvColor" value="#2f6fd0" aria-label="起始色">
+          <input type="color" id="setAvColor2" value="#8fd3f4" aria-label="结束色">
+        </span>
+      </span>
+    </label>
+    <label data-i18n="set.avSize">头像大小 <span id="valAvSize">54px</span>
+      <input type="range" id="setAvSize" min="28" max="110" step="2" value="54">
+    </label>
+    <label data-i18n="set.avGap">与名字间距 <span id="valAvGap">2px</span>
+      <input type="range" id="setAvGap" min="-30" max="60" step="2" value="2">
+    </label>
+  </div>
+
+  </section>
+  <!-- 文本节奏 -->
+  <section class="set-page" data-page="text" hidden>
   <label class="ctlrow" data-i18n="set.textMode">显示方式
     <select id="setTextMode">
       <option value="type" data-i18n="opt.textMode.type">打字机逐字</option>
@@ -147,7 +234,9 @@
     <input type="range" id="setPav" min="0" max="1200" step="50" value="250">
   </label>
 
-  <h4 data-i18n="sect.audio">音量</h4>
+  </section>
+  <!-- 音量 -->
+  <section class="set-page" data-page="audio" hidden>
   <label data-i18n="set.bgm">BGM 音量 <span id="valBgm">70%</span>
     <input type="range" id="setBgm" min="0" max="100" value="70">
   </label>
@@ -157,8 +246,12 @@
   <label data-i18n="set.voice">语音音量 <span id="valVoice">100%</span>
     <input type="range" id="setVoice" min="0" max="100" value="100">
   </label>
-  <div class="reset-row"><button id="btnReset" data-i18n="ctrl.reset">恢复默认</button></div>
+  </section>
+  <!-- 恢复本页默认独立于页签栏：它跟"切分类"无关，混在一起容易被当成第 6 个分类误点。 -->
+  <div class="set-foot">
+    <button type="button" id="btnReset" data-i18n="ctrl.resetPage">恢复本页默认设置</button>
   </div>
+</div>
 <div class="layout">
   <aside id="sidebar">
     <div id="sHead"><span data-i18n="sidebar.title">剧情列表</span>
@@ -193,7 +286,9 @@
       </div>
     </div>
     <div id="hit"></div>
-    <div id="charList"></div>
+    <!-- data-tip-off：这一栏每行本来就有详情浮窗（player.js 的 #bnrTip），
+         别让 assets/js/tip.js 再叠一个 14px 气泡（同一份信息显示两遍） -->
+    <div id="charList" data-tip-off></div>
   </aside>
   <main>
     <div id="tabs"><div id="meta"></div><div id="tabStrip"></div><button id="tabPrev" class="tabPg" data-d="-1" title="上一组段">◀</button><button id="tabNext" class="tabPg" data-d="1" title="下一组段">▶</button></div>
@@ -216,6 +311,11 @@
         <div id="placeLayer"><span></span></div>
         <div id="flashLayer"></div>
         <div id="msgWindow">
+          <div id="msgAvatar" aria-hidden="true">
+            <div class="avBox">
+              <img class="avImg" alt="" draggable="false">
+            </div>
+          </div>
           <div id="msgName"></div>
           <div id="msgText"></div>
         </div>
@@ -279,6 +379,11 @@
 <div id="sTab" data-i18n="sidebar.tab">剧情列表</div>
 <div id="toast"></div>
 <script src="data/names.js"></script>
+<!-- 话者名 → 立绘编号：由 gen_avnames.py 扫描所有剧情的 ShowStand
+     GroupId 和 ShowMessageWindow.Name 自动生成；不再加载手工维护的
+     spk2av.js / gidmap.js。 -->
+<script src="data/avnames.js?v=11170567"
+        onerror="window.__AVNAMES=window.__AVNAMES||null"></script>
 <script src="data/charmeta.js"></script>
 <script src="data/index.js"></script>
 <script src="data/advindex.js"></script>
@@ -286,17 +391,21 @@
      导出图片后重写）。前端只请求清单里有的图 —— 官方刚上新、素材还没装的角色
      不会再对不存在的文件发请求（以前启动时 cmd 窗口会刷一片 404）。
      缺这个文件只是退回"按约定拼路径"的老逻辑，不影响使用。 -->
-<script src="data/mediaindex.js?v=1115a"
+<script src="data/mediaindex.js?v=11170540"
         onerror="window.__MEDIA=window.__MEDIA||null"></script>
+<!-- 官方头像映射（server/cdn/stages.py 的 regen_avatarmap 生成）：
+     立绘原始编号 -> 日常/战斗头像；纯爱/凌辱只改变优先取哪一边 -->
+<script src="data/avatarmap.js?v=11170540"
+        onerror="window.__AVATARMAP=window.__AVATARMAP||null"></script>
 <!-- 数据映射表。必须带版本号：imgmap.js 由 gen_imgmap.py 在装完剧情后重新生成，
      不带版本号会被浏览器一直用旧缓存（表现为头像/立绘明明有了却找不到） -->
-<script src="data/imgmap.js?v=1029a"></script>
+<script src="data/imgmap.js?v=1117c"></script>
 <!-- 立绘画布落点（资源包 base_info 的 AlphaCutRect + 站位锚点）：
      有它立绘才按游戏的原尺寸/原位置摆；缺文件时播放器退回「贴底居中」老布局 -->
 <script src="data/stand_box.js?v=1113a"
         onerror="window.__STANDBOX=window.__STANDBOX||{}"></script>
 <!-- 这两个是**可选覆盖层**（超分记录 / WebP 覆盖），不存在属正常，仅静默失败 -->
-<script src="data/imgmap.x2.js?v=1029a"
+<script src="data/imgmap.x2.js?v=11170540"
         onerror="window.__IMGX2=window.__IMGX2||{}"></script>
 <!-- 演出特效逐帧数据（可选覆盖层：没装「剧情演出特效」时文件不存在，静默失败，
      播放器会自动退回 emoji 版表情符号） -->
@@ -307,22 +416,24 @@
   <!-- 音频映射是运行时产物：没装公共素材时不存在，属正常，静默失败 -->
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
+<script src="assets/js/tip.js?v=1116c"></script>
 <script src="assets/js/common.js?v=1116a"></script>
-<script src="assets/js/dialog.js?v=1130d"></script>
-<script src="assets/js/mediaui.js?v=1123b"></script>
-<script src="assets/js/header.js?v=1130b"></script>
+<script src="assets/js/dialog.js?v=1117a"></script>
+<script src="assets/js/mediaui.js?v=1117b1"></script>
 <script src="assets/js/i18n.js?v=1102a"></script>
+<script src="assets/js/header.js?v=1130f"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1115g"></script>
-<script src="assets/js/player.js?v=1130h"></script>
+<script src="data/cgmap.js?v=1117d"></script>
+<script src="assets/js/player.js?v=1117da"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136b"></script>
 <script src="assets/js/tour.js?v=1130a"></script>
 <script src="assets/js/miniplayer.js?v=1130a"></script>
-<script src="assets/js/disclaimer.js?v=1102a"></script>
+<script src="assets/js/disclaimer.js?v=1117c"></script>
 <script src="assets/js/health.js?v=1130a"></script>
-<script src="assets/js/mobile.js?v=1115b"></script>
+<script src="assets/js/mobile.js?v=1117c"></script>
 <script>
 /* 本页的新手引导步骤（tour.js 是通用引擎，步骤由页面自己定义） */
 const TOUR_STEPS = [

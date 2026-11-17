@@ -61,6 +61,24 @@
     '.dlg-field.check > span{color:#c7d0e0}',
     '.dlg-field.check input{accent-color:#e0b566;width:15px;height:15px;flex:none}',
     '.dlg-field select{margin:0;cursor:pointer}',
+    /* 手机上「贴按钮的浮窗」必然出事：⚙ 在控制条最下面一行，浮窗往下展开就出屏；
+       300px 宽的表单在 390px 屏上也只剩一条。所以窄屏把它改成**贴底的整宽弹层**：
+       inset:0 铺满 + 半透明底 + 内容底对齐，点空白处仍然关闭。
+       place() 会写 inline 的 left/top/width，这里必须 !important 才压得住。 */
+    '@media (max-width:860px){',
+    '#dlgMask{padding:10px}',
+    '#dlgMask .dlg-box{width:100%;max-height:86vh}',
+    '#dlgPop{inset:0 !important;width:auto !important;left:0 !important;',
+    '  top:0 !important;bottom:0 !important;right:0 !important;',
+    '  display:flex;align-items:flex-end;justify-content:center;padding:8px;',
+    '  background:rgba(6,9,14,.62);backdrop-filter:blur(2px)}',
+    '#dlgPop .dlg-box{width:100%;max-width:560px;max-height:78vh;',
+    '  padding:16px 16px 14px;border-radius:14px}',
+    '.dlg-btns{margin-top:14px}',
+    '.dlg-btns button{padding:10px 18px;font-size:15px}',
+    '.dlg-field.check input{width:20px;height:20px}',
+    '.dlg-field select,.dlg-input{font-size:15px;padding:9px 10px}',
+    '}',
   ].join('');
 
   var active = null;

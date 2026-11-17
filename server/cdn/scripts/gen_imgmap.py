@@ -64,7 +64,8 @@ miss_list = {"stand": [], "back": [], "cg": []}
 # 前端 avatarCands() 就会优先用它，不再靠试扩展名。
 for fn in sorted(have["avatar"], key=lambda f: (not f.lower().endswith(".png"), f)):
     stem, ext = os.path.splitext(fn)
-    if stem.isdigit() and ext.lower() in (".png", ".webp", ".jpg", ".jpeg"):
+    if (stem.isdigit() or re.fullmatch(r"[dbne]\d+", stem, re.I)) \
+            and ext.lower() in (".png", ".webp", ".jpg", ".jpeg"):
         out["avatar"].setdefault(stem, rel_p("avatar", fn))
 
 for s in ids["stand"]:
