@@ -162,6 +162,64 @@ def note_run_version() -> dict | None:
     return {"from": prev, "to": cur} if prev else None
 
 
+#: 本机立绘成品是用哪一版合成逻辑做出来的（compose_stand_all.py 跑完就写这个）
+STAND_COMPOSE_VER_FILE = os.path.join(USERDATA, "_archive", "stand_compose_ver.txt")
+#: 「升级后要不要体检立绘」的一次性标记，见 server/__main__.py
+STAND_PROMPT_FILE = os.path.join(USERDATA, "_archive", "stand_repair_prompt.json")
+
+
+def _gen_ver() -> int | None:
+    """当前程序里 compose_stand_all.py 的 ``GEN_VER``。
+
+    从脚本里读而不是再写一个常量：两处手改必然有一天不同步，读错的后果是
+    「明明修过了还每次升级都问一遍」。
+    """
+    p = os.path.join(SERVER, "cdn", "scripts", "compose_stand_all.py")
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("GEN_VER"):
+                    return int(line.split("=", 1)[1].strip())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def stand_compose_ver() -> int | None:
+    """本机立绘成品的合成逻辑版本；没装过立绘／旧版没记 → None。"""
+    try:
+        with open(STAND_COMPOSE_VER_FILE, encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def stand_repair_needed() -> bool:
+    """已经合成好的立绘是不是旧合成逻辑做的 —— 决定升级后要不要提示体检。
+
+    为什么不用「程序版本 < 1.1.6」判：立绘是本机合成的产物，跟程序版本不是一回事。
+    合成逻辑 1.1.6 才修好，但 1.1.6 用户完全可能当时点「以后再说」而仍是旧图；
+    反过来「1.1.6 → 1.1.7」这种本身没改合成的升级不该再打扰（2026-11-18 反馈）。
+    唯一准确的判据是成品自己的合成逻辑版本：与当前 ``GEN_VER`` 一致 = 不用查。
+
+    另外：用户点过「以后再说」就**永久不再问**（``state.json`` 的 ``standPromptOff``）——
+    他要修的时候资源管理页里那个按钮一直在，不需要靠弹窗提醒。
+    """
+    if load_state().get("standPromptOff"):
+        return False
+    d = os.path.join(IMG, "stand")
+    try:
+        with os.scandir(d) as it:
+            if not any(e.name.endswith(".webp") for e in it):
+                return False            # 一张成品都没有：还没装过立绘，没事可修
+    except OSError:
+        return False
+    gen = _gen_ver()
+    if gen is None:
+        return True                     # 读不到当前逻辑版本：宁可问一句（点一下无害）
+    return stand_compose_ver() != gen
+
+
 def rel(path: str) -> str:
     """绝对路径 → 站点相对路径（正斜杠），给前端用。"""
     p = os.path.abspath(path)

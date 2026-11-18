@@ -114,6 +114,15 @@ def run_script(name: str, *args, cwd: str = WS, quiet: bool = False):
         # 这些脚本打出来的正是"用了哪个包 / 缺哪一层 / 落点来源 / Wiki 对不上的名字"
         # 之类的关键决策，全部落进 app.log；窗口里只留启动横幅。
         lines = (p.stdout or "").strip().splitlines()
+        # 这些行走两边：app.log 存档 + 挂到"正在跑的那个任务"上，
+        # 用户在页面里点「查看更多」就能读全文 —— 不用回启动窗口翻。
+        try:
+            from .. import jobs as _jobs
+            _j = _jobs.current()
+            if _j is not None and lines:
+                _j.log_lines(lines)
+        except Exception:                                      # noqa: BLE001
+            pass
         try:
             from .. import log as applog
             tag = "stand" if name.startswith("compose") else name.replace(".py", "")[:10]
@@ -1725,23 +1734,27 @@ def regen_avatarmap() -> dict:
 
 
 def _say(msg: str, tag: str = "stand") -> None:
-    """既打到控制台也写进 app.log。
+    """写进 app.log，并挂到「当前那个任务」的记录上（页面「详情」里能看到）。
 
-    装剧情是后台任务（GUI 用户看不到控制台），出问题时只有 app.log 可查，
-    所以「关键决策 / 异常」必须落盘，不能只 print。
+    **不再打到启动窗口**（2026-11-18 用户要求：窗口只是启动说明，看完就关；
+    要看过程就去页面的操作记录 / 任务详情）。以前这些「立绘尺寸一致 ✓」
+    「⚠ 落点可疑」既 print 又落盘，结果用户在 CMD 里看到一堆看不懂的日志，
+    还得在窗口和页面之间来回切。
 
-    print 单独兜一层 UnicodeEncodeError：这里会打「立绘尺寸一致 ✓」「⚠ 落点可疑」
-    这类非 GBK 字符，控制台/管道编码是 GBK 时 print 会抛异常，而这个异常会
-    顺着 compose_stands() 冒到 install_unit()，把**整部剧情判成安装失败**
-    （2026-11-02 74 部全灭）。控制台打不出来不该拖垮业务，日志里一条不少。
+    历史上 print 还惹过一次大祸：GBK 管道打不出 ✓ / ⚠ 会抛 UnicodeEncodeError，
+    顺着 compose_stands() 冒到 install_unit()，把 74 部剧情全判成安装失败
+    （2026-11-02）。现在不 print 了，这条路径彻底不会再影响业务。
     """
-    try:
-        print(msg)
-    except (UnicodeEncodeError, OSError):
-        pass
     try:
         from .. import log as applog
         applog.log(msg, tag=tag)
+    except Exception:                                          # noqa: BLE001
+        pass
+    try:
+        from .. import jobs as _jobs
+        _j = _jobs.current()
+        if _j is not None:
+            _j.log_lines([msg])
     except Exception:                                          # noqa: BLE001
         pass
 
@@ -1961,7 +1974,11 @@ def _run_repair_script(job=None) -> int:
                 _apply_progress(job, ln)
                 continue
             lines.append(ln)
-            print("      " + ln)
+            if job is not None:                # 页面「查看更多」里也要能看到
+                try:
+                    job.log_lines([ln])
+                except Exception:                              # noqa: BLE001
+                    pass
     finally:
         try:
             p.stdout.close()
@@ -2292,6 +2309,11 @@ def regen_charmeta() -> None:
     有一点偏差（见 :func:`regen_names` 的说明），角色就会从 charmeta.js 里消失，
     界面上稀有度/实装日期/职业全空、按 R/SSR 筛选也筛不到。所以这里把上一版里
     有、这一版里没有的条目**原样贴回去**。
+
+    另外再**按 id 补一轮**（2026-11-18 修）：``gen_charmeta.py`` 只认"名字完全
+    相同"，而新角色的 Wiki 名和剧本名经常不是一种写法（Wiki「魔女チィコ」/ 剧本
+    「チィコ・リョウ」），于是稀有度/类型永远空着、按 SSR 筛选也筛不到。补法见
+    :func:`_bind_meta_by_id`。
     """
     if not os.path.exists(os.path.join(WS, "char_meta.json")):
         print("  跳过 gen_charmeta.py：缺少 char_meta.json")
@@ -2300,16 +2322,53 @@ def regen_charmeta() -> None:
     prev = _read_js_obj(out)
     run_script("gen_charmeta.py", quiet=True)
     new = _read_js_obj(out)
-    if not prev or not new:
-        return
-    kept = [c for c in prev if c not in new]
-    if kept:
-        merged = dict(new)
-        for c in kept:
-            merged[c] = prev[c]
-        _write_js_obj(out, "__CHARMETA", merged)
-        _note(f"⚠ 元数据：{len(kept)} 个角色新表里查不到，沿用上一版"
-              f"（{', '.join(sorted(kept, key=int)[:8])}）", tag="charmeta")
+    if new:
+        kept = [c for c in (prev or {}) if c not in new]
+        if kept:
+            merged = dict(new)
+            for c in kept:
+                merged[c] = prev[c]
+            new = merged
+            _note(f"⚠ 元数据：{len(kept)} 个角色新表里查不到，沿用上一版"
+                  f"（{', '.join(sorted(kept, key=int)[:8])}）", tag="charmeta")
+        filled = _bind_meta_by_id(new)
+        if filled:
+            _write_js_obj(out, "__CHARMETA", new)
+            _note(f"元数据：{filled} 个角色按 id 补上了稀有度 / 实装日"
+                  f"（Wiki 名与剧本名写法不同）", tag="charmeta")
+
+
+def _bind_meta_by_id(entries: dict) -> int:
+    """按 id 把「名字键」元信息补进 ``charmeta`` 条目，返回补到的个数（原地改）。
+
+    只填**空着的**字段（稀有度 / 类型）；实装日以 Wiki 为准直接覆盖（推定值
+    ``dEst`` 本来就该被它顶掉）。已经在表里的不动。
+    """
+    from . import wiki as wiki_mod
+    names = _load_names()
+    meta = _read_char_meta()
+    if not names or not meta:
+        return 0
+    index = wiki_mod.meta_index(meta)
+    filled = 0
+    for cid, nm in names.items():
+        cur = entries.get(str(cid))
+        if not isinstance(cur, dict):
+            continue
+        if cur.get("r") and cur.get("d") and cur.get("t"):
+            continue
+        m = wiki_mod.meta_for_name(nm, index)
+        if not m:
+            continue
+        before = dict(cur)
+        for k in ("r", "t"):
+            if not cur.get(k) and m.get(k):
+                cur[k] = m[k]
+        if m.get("d"):
+            cur["d"] = m["d"]
+        if cur != before:
+            filled += 1
+    return filled
 
 
 def _pack_birth(path: str) -> str:
@@ -2492,6 +2551,16 @@ def adopt_new_names() -> list:
                   len(new_ids), ", ".join("ID %d" % i for i in new_ids[:5]),
                   len(fresh), ", ".join(n for n, _d in fresh[:5])))
         return []
+    # 同一天实装好几个时，「日期升序」这一条就失去区分度了（谁先谁后只能靠 id，
+    # 而 id 正是我们要推的东西）。2026-11-18 实测：4 个新角色全是 2026/11/18，
+    # 按名字顺序硬配会把名字贴错人，而 names.js **只补不删** —— 一旦写错就永久
+    # 错下去（装剧情后 extract_names 也只认新增 id）。宁可先显示 ID。
+    dates = [d for _n, d in fresh]
+    if len(set(dates)) != len(dates):
+        _note("名字：Wiki 上 {} 个新角色是同一天（{}）实装的，无法可靠判断谁对应哪个"
+              " ID → 先显示 ID，装过一次剧情后名字会自动补上".format(
+                  len(fresh), "、".join(n for n, _d in fresh[:5])))
+        return []
     fresh.sort(key=lambda t: (t[1], t[0]))          # 实装日升序（同日按名字）
     pairs = list(zip(sorted(new_ids), fresh))
     merged = dict(names)
@@ -2517,29 +2586,35 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
     并重建成 ``charmeta.js``。
 
     数据来源优先级：
-    1. 每日 CI 产出的**成品** ``web/data/charmeta.js``（约 17KB，只含
-       ``{id: {r,d,t}}``），用 ``mirrors.fetch()`` 的线路表回退拉取
-       （与「检查程序更新」共用同一张表），**不需要代理**；
-    2. 直连 Wiki（只抓 2 个页面）——需要代理，失败抛 ``WikiUnreachable``。
+    1. GitHub 上每日 CI 产出的**名字键**表 ``server/cdn/data/char_meta.json``
+       （约 43KB），用 ``mirrors.fetch()`` 的线路表回退拉取（与「检查程序更新」
+       共用同一张表），**不需要代理**；
+    2. 直连 Wiki（只抓 1 个页面）——需要代理，失败抛 ``WikiUnreachable``。
 
-    ``proxy_needed`` 只在上面的第 2 步也失败时才可能为 True。
+    为什么必须拉名字键的那张，而不是 ``web/data/charmeta.js``
+    -------------------------------------------------------
+    ``charmeta.js`` 是「id 键」的成品，由 CI 用自己的 ``names.js`` 换算出 id；CI 里
+    没有解包剧本、不知道新角色叫什么，**新角色在成品里整条缺失**（2026-11-18 实测：
+    ``char_meta.json`` 已收录 4 个新角色，``charmeta.js`` 一个都没有）。旧实现只拉
+    成品、再按本机 ``names.js`` 反查名字 → 新角色全被丢掉，界面永远是「ID 400 /
+    实装日期未收录」，稀有度也刷不到。
+
+    对不上 id 的名字**不丢**：存进 ``userdata/char_meta.json``，等装过一次剧情、
+    剧本里的名字进了 ``names.js``，:func:`_bind_meta_by_id` 会自动挂上去。
     """
     from . import wiki as wiki_mod
     scraped: dict = {}
+    unmatched: dict = {}
     source = ""
-    data, route = wiki_mod.fetch_remote_charmeta()
+    data, route = wiki_mod.fetch_remote_char_meta()
     if data:
-        names = _load_names()
-        for cid, m in data.items():
-            nm = names.get(str(cid))
-            if nm:
-                scraped[nm] = {"r": m.get("r", ""), "d": m.get("d", ""),
-                               "t": m.get("t", "")}
-        if scraped:
-            source = "github:" + route
-            if job is not None:
-                job.log(f"已从 GitHub（{route}）取到 {len(scraped)} 个角色")
-    if not scraped:
+        scraped, unmatched = wiki_mod.match_meta_by_names(data, _load_names())
+        source = "github:" + route
+        if job is not None:
+            job.log(f"已从 GitHub（{route}）取到 {len(scraped)} 个角色"
+                    + (f"，另有 {len(unmatched)} 个新角色名字对不上本机 id"
+                       "（装过剧情后自动挂上）" if unmatched else ""))
+    else:
         source = "wiki"
         if job is not None:
             job.log(f"GitHub 各线路均失败（{route}），改直连 Wiki（需代理）")
@@ -2548,6 +2623,10 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
     # 出厂表（CI 每天从 Wiki 抓）**也参与合并**：新角色先出现在出厂表里，
     # 只读工作区表的话它永远进不来（工作区表是"从 Wiki 按 id 映射"落下的）。
     existing = _read_char_meta()
+    # 名字还没对上 id 的（新角色）先落进表里，别让它随这次合并丢掉 ——
+    # 装完剧情名字一进 names.js，_bind_meta_by_id 就能按 id 挂上。
+    for nm, m in (unmatched or {}).items():
+        existing.setdefault(nm, m)
     merged = wiki_mod.merge_meta(existing, scraped)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -2555,12 +2634,17 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
     if job is not None:
         n_r = sum(1 for v in scraped.values() if v.get("r"))
         job.log(f"角色信息（来源 {source}）：合并 {len(scraped)} 条（含稀有度 {n_r}）")
+        # 说清楚"落到哪个文件"：这条更新**不碰** server/cdn/data/char_meta.json，
+        # 那是随程序分发的出厂表（每日 CI 在仓库里更新，升级程序时才换本机那份）。
+        # 2026-11-18 用户点完更新去翻出厂表，发现没变，以为没生效。
+        job.log("已写入本机资料表 userdata/char_meta.json，并重建索引 data/charmeta.js")
     adopted = adopt_new_names()
     if adopted and job is not None:
         job.log("新角色名字已补上：" + "、".join(
             "{} {}".format(c, n) for c, n in adopted))
     regen_charmeta()
     return {"merged": len(merged), "scraped": len(scraped),
+            "unmatched": len(unmatched),
             "with_rarity": sum(1 for v in merged.values() if v.get("r")),
             "source": source}
 

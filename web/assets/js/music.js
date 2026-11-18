@@ -1555,6 +1555,7 @@
       var v = m.v;
       switch (m.a) {
         case 'state': break;
+
         case 'toggle':
           if (AU.paused) AU.play().catch(function () {}); else AU.pause();
           break;
@@ -1626,6 +1627,21 @@
           break;
       }
       pushShell();
+    });
+  }
+
+  /* 数据表被别处更新：曲目 / 音声是靠 GAL / VMAP 在加载时派生成 TRACKS / VUNITS 的，
+     原地换会两套索引错位（正在播的那首会跳到别的曲子），所以这里只重画现有列表
+     （名字能立刻更到最新），新增内容提示刷新。
+     另外外壳切回本页时会发 'metacheck'，见 shell.html / 下面的消息处理。 */
+  if (window.ESC && ESC.watchData) {
+    ESC.watchData({
+      hot: { 'names.js': '__NAMES' },
+      cold: ['gallery.js', 'voicemap.js'],
+      onReload: function () { renderLists(); },
+      onStale: function () {
+        if (ESC.askReload) ESC.askReload('原声集有新增内容，刷新后即可看到');
+      },
     });
   }
 

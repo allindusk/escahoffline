@@ -26,12 +26,43 @@ DEFAULT_WORKERS = 48
 DEFAULT_TIMEOUT = 180
 MAX_RETRY = 3
 
+#: 单次 ``read`` 的空闲超时（秒）：连接建立后多久收不到数据就认为它挂了。
+#: **不能**再按"整包超时按体积放大"来给（老实现小包 180 s、大包 400 s+）：
+#: 一条被 CDN 挂住、既不吐数据也不 RST 的连接，会让那一路线程干等 3~7 分钟，
+#: 期间任务条一个字节都不涨 —— 用户看到的就是"有速度但进度不动"（2026-11-17）。
+#: 正常传输时每收到一块都会重置这个计时，所以慢速连接也不会被误杀。
+IDLE_TIMEOUT = 60
+
+#: 单次读取块大小。128 KB 在"进度够细"与"syscall 不过多"之间折中。
+CHUNK = 128 * 1024
+
 _print_lock = threading.Lock()
 
 
 def _log(msg: str) -> None:
-    with _print_lock:
-        print(msg, flush=True)
+    """下载进度只写 app.log，**绝不再 print 到启动窗口**。
+
+    以前的实现是 ``print(msg, flush=True)``。Windows 控制台有个特性：一旦进入
+    "选择 / 标记"模式（用户随手在窗口里点了一下、框选了文字，甚至只是按住鼠标），
+    conhost 会**冻结**所有往 stdout 写的程序 —— ``print`` 阻塞在管道里不返回。
+    而 ``fetch_many`` 每 50 个包就在主线程里 _log 一次，于是：
+
+        22:43:22 [job] DONE install「安装 3 部剧情」193s
+        22:49:42 [job] [base] 下载音效 505 个包 / 31 MB      ← 空白 6 分 20 秒
+
+    BGM 早就下完了（包数/字节都停在 818 / 736 MB），主线程却卡在这一行 print 上，
+    下载线程全空闲（实测只有 3 条无关连接）。用户看到的是"有速度但进度不动"，
+    因为当时的速度还是整段平均值（2026-11-17 实测复现）。
+
+    这与 ``stages.run_script(quiet=True)`` 的口径一致：启动窗口里只留横幅，
+    运行日志一律进 ``userdata/logs/app.log``。
+    """
+    try:
+        from .. import log as applog
+        applog.log(msg, tag="cdn")
+    except Exception:                                        # noqa: BLE001
+        # 日志系统本身不可用时也不能让下载停摆：静默丢弃这行即可。
+        pass
 
 
 def head(url: str) -> dict:
@@ -95,37 +126,103 @@ def need_download(path: str, size: int) -> bool:
 
 
 def fetch_bundle(name: str, size: int, dest: str | None = None,
-                 workers_safe: bool = True) -> tuple[str, bool, int]:
+                 workers_safe: bool = True,
+                 on_progress=None) -> tuple[str, bool, int]:
     """下载单个资源包。返回 ``(name, 是否为本次新下载, 字节数)``。
 
     ``workers_safe`` 仅用于语义标注，实际重试/退避逻辑始终生效。
 
-    **超时按体积放大**：CDN 单连接实测只有 60–100 KB/s，固定 180 s 超时意味着
-    超过 ~16 MB 的包必然 `IncompleteRead`/超时失败（全量下载时正好卡住 11 个
-    10–27 MB 的语音包，日志表现为"速度掉到 0、失败数不再增加"）。
+    ``on_progress(已收字节)``：**逐块**回调，让任务条能看到单个包内部的进展。
+    以前是 ``http_get`` 一次 ``read()`` 把整包读进内存、成功了才写盘 ——
+    一个 20 MB 的包在 60 KB/s 的连接上要传 5 分钟，这 5 分钟里界面一个字节都不
+    涨（2026-11-17 用户："有速度但是一直卡进度"，实测卡了 6 分钟）。
+    回调给的是**该包累计已收字节**（不是增量）：断线重连后数字会回退再涨，
+    调用方直接覆盖即可，不用担心重复累加。
+
+    三处为此改动：
+    * **分块流式落盘**：边收边写 ``.part``，进度可观测；
+    * **空闲超时** ``IDLE_TIMEOUT``：以前是"整包超时按体积放大"（小包 180 s），
+      一条被 CDN 挂住、既不吐数据也不断开的连接要干等 180 s×3 次重试才继续，
+      这就是"卡在 818/3258 不动"的直接原因；
+    * **Range 续传**：断了从 ``.part`` 的大小接着传，不再整包重来
+      （老实现重试 3 次 = 同一个 27 MB 包从头下三次）。
     """
     path = dest or bundle_path(name)
     if not need_download(path, size):
         return name, False, 0
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     url = bundle_url(name)
-    # 60 KB/s 估算 + 120 s 余量，且不低于默认 180 s
-    timeout = int(max(DEFAULT_TIMEOUT, 120 + size / 60000))
-    last = None
-    for attempt in range(MAX_RETRY):
+    part = path + ".part"
+    have = 0
+    try:
+        if os.path.exists(part):
+            have = os.path.getsize(part)
+            if have > size:                # 比清单还大 → 脏文件（旧版本的包）
+                os.remove(part)
+                have = 0
+    except OSError:
+        have = 0
+    if have and have == size:
+        # 上次已经把字节收齐、只是没来得及改名
         try:
-            blob = http_get(url, timeout=timeout)
-            if len(blob) != size:
-                raise ValueError(f"size {len(blob)} != {size}")
-            tmp = path + ".part"
-            with open(tmp, "wb") as f:
-                f.write(blob)
-            os.replace(tmp, path)          # 原子替换，避免半截文件被当成已完成
+            os.replace(part, path)
             return name, True, size
-        except Exception as e:
+        except OSError:
+            have = 0
+    last = None
+    for attempt in range(MAX_RETRY + 1):
+        try:
+            if on_progress is not None:
+                on_progress(have)
+            have = _download_stream(url, part, size, have, on_progress)
+            if have != size:
+                raise ValueError(f"size {have} != {size}")
+            os.replace(part, path)         # 原子替换，避免半截文件被当成已完成
+            return name, True, size
+        except Exception as e:             # noqa: BLE001
             last = e
-            time.sleep(1 + attempt * 2)
+            try:
+                have = os.path.getsize(part) if os.path.exists(part) else 0
+            except OSError:
+                have = 0
+            if have > size:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                have = 0
+            if attempt < MAX_RETRY:
+                time.sleep(1 + attempt * 2)    # 退避；下一轮尽量带着 Range 续传
     raise IOError(f"下载失败 {name}: {last}")
+
+
+def _download_stream(url: str, part: str, size: int, have: int = 0,
+                     on_progress=None) -> int:
+    """把 ``url`` 流式写进 ``part``（从 ``have`` 字节处续传），返回最终字节数。
+
+    服务器不认 ``Range``（回 200 而不是 206）时自动退回"从头写"：宁可多传一遍，
+    也不能把两段内容拼成一个坏包。
+    """
+    headers = {"User-Agent": UA}
+    if have:
+        headers["Range"] = f"bytes={have}-"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=IDLE_TIMEOUT) as r:
+        status = getattr(r, "status", 200)
+        if have and status != 206:
+            have = 0
+        with open(part, "r+b" if have else "wb") as f:
+            if have:
+                f.seek(have)
+            while True:
+                buf = r.read(CHUNK)
+                if not buf:
+                    break
+                f.write(buf)
+                have += len(buf)
+                if on_progress is not None:
+                    on_progress(have)
+    return have
 
 
 def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
@@ -179,49 +276,109 @@ def fetch_many(items, workers: int = DEFAULT_WORKERS, desc: str = "bundle",
             # 否则会出现 "done 28 / total 2" 这种分母比分子还小的进度。
             if job.total < need_total:
                 job.set_total(need_total, "个")
-            job.progress(done=done_offset + stat["skip"])
+            # 任务条那句必须跟着批次走：以前只在 install 里 ``job.log`` 一次，
+            # 于是换到下一类（BGM → 音效 → 头像）时 message 还停在上一类，
+            # 用户看到「下载BGM」却已经在传音效，只会更困惑（2026-11-17）。
+            job.progress(done=done_offset + stat["skip"],
+                         message=(f"下载{desc}：{len(left)} 个包 / "
+                                  f"{total / 1048576:.0f} MB…") if left else None)
 
     if not left:
         return stat
 
     t0 = time.time()
     done = 0
+    # 字节口径拆成两半：
+    #   · 已完成的包 → 按**清单 size** 记账（与分母同口径，不会自相矛盾）；
+    #   · 正在传的包 → 逐块覆盖的"已收字节"（大包也有真实进展）。
+    # 以前只在整包结束时 ``job.bytes_done += sz``：一个 20 MB 的包传 5 分钟，
+    # 这 5 分钟里进度条一格不动，用户只能看到历史平均速度在跳（2026-11-17 反馈）。
+    base_bytes = float(getattr(job, "bytes_done", 0.0) or 0.0) if job is not None else 0.0
+    finished_bytes = 0
+    inflight: dict = {}
+    ilock = threading.Lock()
+    last_done_at = time.time()
+    last_note_at = 0.0
+
+    def _sync_bytes() -> None:
+        if job is None:
+            return
+        with ilock:
+            live = sum(inflight.values())
+        writer = getattr(job, "bytes_progress", None)
+        target = base_bytes + finished_bytes + live
+        if writer is not None:
+            writer(target)
+        elif target > job.bytes_done:          # 兼容没有该方法的旧 Job
+            job.bytes_done = target
+
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         # 暂停检查放在 worker 里：暂停后不再领新包，已经在传的会传完
         # （几 MB、几秒内结束，不会留下半个文件）
         def _worker(nm, sz, ds):
             while pause_event is not None and pause_event.is_set():
                 time.sleep(0.25)
-            return fetch_bundle(nm, sz, ds)
+
+            def _rep(nbytes: int) -> None:
+                with ilock:
+                    inflight[nm] = int(nbytes)
+
+            try:
+                return fetch_bundle(nm, sz, ds,
+                                    on_progress=_rep if job is not None else None)
+            finally:
+                with ilock:
+                    inflight.pop(nm, None)
 
         futs = {ex.submit(_worker, n, s, d): (n, s) for n, s, d in left}
-        # 逐包上报：不报的话前端进度条永远 0%，用户只能看网卡猜
-        for fut in cf.as_completed(futs):
-            n, sz = futs[fut]
-            done += 1
-            if job is not None:
-                if sub:
-                    job.sub_progress(done_offset + stat["skip"] + done, need_total)
-                else:
-                    job.progress(done=done_offset + stat["skip"] + done)
-            try:
-                _, is_new, nbytes = fut.result()
+        # 逐包上报：不报的话前端进度条永远 0%，用户只能看网卡猜。
+        # 用 wait(timeout) 轮询而不是 as_completed：中途要把"在传字节"刷进任务条。
+        pending = set(futs)
+        while pending:
+            finished, pending = cf.wait(pending, timeout=0.5)
+            _sync_bytes()
+            for fut in finished:
+                n, sz = futs[fut]
+                done += 1
                 if job is not None:
+                    if sub:
+                        job.sub_progress(done_offset + stat["skip"] + done, need_total)
+                    else:
+                        job.progress(done=done_offset + stat["skip"] + done)
+                try:
+                    _, is_new, nbytes = fut.result()
                     # 用清单里的包大小累加，而不是 nbytes（本次新下的字节）。
                     # nbytes 在"包已存在、跳过"时是 0，会出现
                     # "601/1323 个但 0.0/771 MB" 这种自相矛盾的进度。
-                    job.bytes_done += sz
-                stat["ok"] += 1
-                stat["bytes"] += nbytes
-                if is_new:
-                    stat["new"] += 1
-            except Exception as e:
-                stat["fail"].append((n, str(e)))
-            if done % 50 == 0 or done == len(left):
-                el = max(time.time() - t0, 1e-6)
-                sp = stat["bytes"] / el / 1048576
-                _log(f"  [{done}/{len(left)}] {stat['bytes'] / 1048576:.0f} MB "
-                     f"{sp:.1f} MB/s  失败 {len(stat['fail'])}")
+                    finished_bytes += sz
+                    stat["ok"] += 1
+                    stat["bytes"] += nbytes
+                    if is_new:
+                        stat["new"] += 1
+                except Exception as e:         # noqa: BLE001
+                    stat["fail"].append((n, str(e)))
+                last_done_at = time.time()
+                if done % 50 == 0 or done == len(left):
+                    el = max(time.time() - t0, 1e-6)
+                    sp = stat["bytes"] / el / 1048576
+                    _log(f"  [{done}/{len(left)}] {stat['bytes'] / 1048576:.0f} MB "
+                         f"{sp:.1f} MB/s  失败 {len(stat['fail'])}")
+            # 刚完成的包要从"在传字节"转进"已完成字节"：不在这里再同步一次，
+            # 最后一个包（尤其是最后一批）的 size 就永远不会进任务条
+            # （测试实测：bytes_done 停在 0）。
+            _sync_bytes()
+            if not pending:
+                break
+            # 卡住要说清"在等什么"：某些包会挂在一条既不吐数据也不断开的连接上，
+            # 这时百分比与包数都不动，界面只剩历史平均速度 —— 必须自己说明白。
+            idle = time.time() - last_done_at
+            if job is not None and idle >= 20 and time.time() - last_note_at >= 10:
+                last_note_at = time.time()
+                with ilock:
+                    live_n = len(inflight)
+                job.progress(message=(
+                    f"{desc}：{live_n} 个包在传，已 {int(idle)} 秒没有新包完成"
+                    "（网络慢，或连接被挂住正在重试）…"))
 
     el = max(time.time() - t0, 1e-6)
     _log(f"[{desc}] 完成：新下 {stat['new']}，跳过 {stat['skip']}，"

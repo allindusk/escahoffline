@@ -216,14 +216,20 @@
   const apDCode = $('#apDetailCode');
   let ACT_DETAIL = null;                 // 当前打开的那条（复制用）
 
-  function openActDetail(i) {
-    const r = ACT.rows[i];
+  const apDTitle = $('#apDetailTitle');
+
+  /** 打开详情浮窗。r = {head, at, text, lv, sub, foot}
+   *  报错和「任务记录」共用这一层：同样的字号、可选中、可整段复制。 */
+  function openDetailRow(r) {
     if (!r || !apMask) return;
     ACT_DETAIL = r;
+    if (apDTitle) apDTitle.textContent = r.head || '报错详情';
     if (apDCode) {
       apDCode.textContent = (r.at || '') + (r.lv === 'err' ? ' · 报错' : '');
     }
     if (apDBody) {
+      // 任务记录是"正常流程"不是报错：正文别用报错红，等宽字体更像日志
+      apDBody.classList.toggle('apLogBody', r.kind === 'log');
       apDBody.innerHTML = '<div class="apDText">' + esc(r.text) + '</div>'
         + (r.sub
           ? '<div class="apDLabel">运行环境</div>'
@@ -231,11 +237,36 @@
           : '');
     }
     if (apDFoot) {
-      apDFoot.textContent = '上面是程序记录的原始错误内容，可选中文字或点「复制这段」。';
+      apDFoot.textContent = r.foot
+        || '上面是程序记录的原始错误内容，可选中文字或点「复制这段」。';
     }
     apMask.hidden = false;
     // 操作记录本身收起来，免得挡住浮窗
     if (apPanel) actCollapse();
+  }
+
+  function openActDetail(i) {
+    openDetailRow(ACT.rows[i]);
+  }
+
+  /** 任务详情：按需拉这个任务自己的记录（含它调用的脚本输出）再显示。
+   *  以前这些行只往启动窗口里刷，用户想看就得在 CMD 和页面之间来回切
+   *  —— 启动窗口只该是"启动了，地址在这"，细节都在页面上看
+   *  （2026-11-18 用户要求）。 */
+  async function openJobLog(id, title) {
+    let d = null;
+    try { d = await api('jobs/' + encodeURIComponent(id) + '/log'); }
+    catch (e) { d = null; }
+    const lines = (d && d.lines) || [];
+    openDetailRow({
+      kind: 'log',
+      head: '任务记录' + (title ? ' · ' + title : ''),
+      at: (d && d.state) || '',
+      text: lines.length ? lines.join('\n') : '这个任务没有留下额外记录。',
+      foot: '上面是这个任务的完整记录（包含它调用的脚本输出），'
+        + '可选中文字或点「复制这段」。程序还在按这些内容往下跑，'
+        + '关掉这个窗口不影响任务。',
+    });
   }
 
   function closeActDetail() {
@@ -691,9 +722,55 @@
     }
   }
 
+  /** 重新加载随包的角色数据表（names.js / charmeta.js）。
+   *
+   *  为什么需要：这两张表是文档加载时用 <script> 一次性读进内存的
+   *  （``window.__NAMES`` / ``window.__CHARMETA``），而「更新剧情目录」和
+   *  「装一部剧情」都会在后台重写它们。不重载的话，列表里刚补上的**名字 /
+   *  稀有度 / 实装日期**全是旧值 —— 2026-11-18 用户反馈：「更新后日期还是
+   *  显示未收录，名字也没有」，必须手动刷新整页才对。
+   *
+   *  走 common.js 的 ESC.reloadData：它把新内容**合并回原来的全局对象**，
+   *  已经抓住 ``window.__NAMES`` 的地方（各页顶部的 const）也能看到新数据。 */
+  function reloadStoryMeta() {
+    if (window.ESC && ESC.reloadData) {
+      return ESC.reloadData({ 'names.js': '__NAMES', 'charmeta.js': '__CHARMETA' });
+    }
+    return Promise.resolve();
+  }
+
   /** 任务结束后（renderJobs 里检测到 done）重新拉一次数据 */
   async function reloadAfterJobs() {
     ST.units.loaded = false;
+    /* 先重载名字 / 元信息表：列表行的名字、稀有度、实装日期都从这里取，
+       顺序和下面的素材清单一样 —— 必须在重画列表之前拿到新表。 */
+    try {
+      await reloadStoryMeta();
+    } catch (e) {
+      try { console.error('[reload] 角色数据表重载失败：', e); } catch (e2) { }
+    }
+    /* **先重载图片清单，再重画列表**：头像 / 剧情横幅"到底有没有"由
+       data/mediaindex.js 决定，而各页只在文档加载时读一次。装完公共素材后
+       服务端已经重写了这份清单（stages.regen_mediaindex），但页面内存里还是
+       旧的那份 —— 数字会更新、按钮会熄灭，**图却仍然画色块占位**，用户必须
+       手动刷新整个页面才对（2026-11-17 用户反馈：「要硬刷新页面，列表才显示
+       头像和横幅」）。顺序不能反：先拿到新清单，重画时查到的才是"有这张图"。
+       清单重载失败不影响后面的数字刷新，所以单独兜住。 */
+    try {
+      // 走 common.js 的统一入口：重载后还会派发 media:reloaded 事件，
+      // 让其它页面（常驻原声集等）跟着重画。
+      const ok = (window.ESC && ESC.refreshMedia)
+        ? await ESC.refreshMedia()
+        : (window.MediaUI && MediaUI.reload ? await MediaUI.reload() : true);
+      if (ok === false && ESC.askReload) {
+        ESC.askReload('公共素材有更新，刷新后显示新的头像与横幅');
+      }
+    } catch (e) {
+      try { console.error('[reload] 素材清单重载失败：', e); } catch (e2) { }
+      if (window.ESC && ESC.askReload) {
+        ESC.askReload('公共素材有更新，刷新后显示新的头像与横幅');
+      }
+    }
     try {
       await loadAll();                 // 里面已经重画过列表（含 renderPacks）
     } catch (e) {
@@ -1824,8 +1901,18 @@
       if (j.meta && j.meta.unit) {
         parts.push(esc(j.meta.unit));
       }
+      const oneUnit = !j.itemsTotal || j.itemsTotal <= 1;
+      /* 解包阶段的 sub 档装的是**子脚本自报的真实进度**（install._run_script_progress
+         写入）：「解包封面 123/165」。以前这里只有按**包**计数的「解包 8/9 个」，
+         而一个封面包里有 82 张封面 —— 8.91 被 Math.round 成 9，界面就成了
+         「解包 9/9 个」，用户当然以为自己已经 100% 了，可进度条才 99.6%
+         （2026-11-17 用户原话）。所以：有子阶段进度就报它，并且一律 floor
+         不 round —— 没做完就绝不许显示成满值。 */
+      const subStage = (extracting && oneUnit && j.subLabel) ? j.subLabel : '';
       if (j.subTotal && j.subTotal > 0) {
-        parts.push(`包 ${Math.round(j.subDone)}/${Math.round(j.subTotal)}`);
+        parts.push(subStage
+          ? `${subStage} ${Math.floor(j.subDone)}/${Math.round(j.subTotal)}`
+          : `包 ${Math.floor(j.subDone)}/${Math.round(j.subTotal)}`);
       }
       /* 单单元 / 公共素材：退回「个数 x/y」显示。
          **必须由后端明确给出单位才显示**（j.unit 非空）：以前缺单位就按"个"
@@ -1833,29 +1920,46 @@
          0.9 MB 的应用更新报出九十多万个文件，用户只会怀疑中病毒。
          计数单位现在由 set_total(n, "个"/"张"/"部"/"包") 明确声明，
          字节量只走 bytesDone/bytesTotal（就是左边那行 x MB / y MB）。 */
-      if ((!j.itemsTotal || j.itemsTotal <= 1) && j.total && j.unit) {
+      if (oneUnit && j.total && j.unit && !subStage) {
         parts.push((extracting ? j.phaseLabel + ' ' : '')
-          + `${Math.round(j.done)}/${Math.round(j.total)} ${j.unit}`);
+          + `${Math.floor(j.done)}/${Math.round(j.total)} ${j.unit}`);
       }
       if (!extracting) {
-        if (bsp) parts.push(`${human(bsp)}/s`);
+        /* 停滞说明：bytesIdle = 后端"距上次真的收到数据"的秒数（下载层逐块上报）。
+           超过 20 秒一个字节都没涨（连接被挂住、正在重试），就别再挂着一个历史
+           平均速度骗人 —— 以前速度是"已下/已用时间"，进程完全不传输时也一直显示
+           1.7 MB/s，用户看到的就是"有速度但进度不动"（2026-11-17 反馈）。 */
+        const idle = j.bytesIdle || 0;
+        if (idle >= 20) parts.push(`等响应 ${secs(idle)}`);
+        else if (bsp) parts.push(`${human(bsp)}/s`);
         if (eta) parts.push(`剩 ${secs(eta)}`);
       }
       const line2 = parts.filter(Boolean).join(' · ');
       /* 阶段分隔线：下载占前 60%、解包占后 40%（后端 phaseBase/phaseSpan 给的）。
          没有它的话，用户看到「下载 900 MB / 1 GB」而进度条才 54%，
          会以为百分比算错了（2026-11-10 反馈）。有了这条线，
-         "前一段是下载、后一段是解包"一眼能看出来。 */
-      const segBase = (j.phaseSpan > 0 && j.phaseSpan < 100) ? (j.phaseBase || 0) : 0;
-      const seg = segBase ? `<u style="left:${segBase}%"></u>` : '';
-      const segTip = segBase
-        ? `前 ${Math.round(segBase)}% 是下载，后 ${Math.round(100 - segBase)}% 是解包`
+         "前一段是下载、后一段是解包"一眼能看出来。
+
+         **边界要按"本阶段的终点/起点"算，不能一律用 phaseBase**：
+         下载阶段是 phase(0, 60) —— base 就是 0，按老写法算出的分隔位置是 0，
+         于是虚线不画、轨道也不换底色，"下载 0–60%"的样式在下载期间整个看不见
+         （2026-11-17 用户：「为什么下载公共素材没看到进度条有样式」）。
+         · base>0（解包阶段 60/40）→ 边界 = base = 60
+         · base==0（下载阶段 0/60）→ 边界 = span = 60 */
+      const segPct = (j.phaseSpan > 0 && j.phaseSpan < 100)
+        ? ((j.phaseBase || 0) > 0
+          ? j.phaseBase
+          : Math.min(100, (j.phaseBase || 0) + j.phaseSpan))
+        : 0;
+      const seg = segPct ? `<u style="left:${segPct}%"></u>` : '';
+      const segTip = segPct
+        ? `前 ${Math.round(segPct)}% 是下载，后 ${Math.round(100 - segPct)}% 是解包`
           + '（解包＝把资源包解成图片和音频，不走网络）'
         : '';
       return `<div class="job${cls ? ' ' + cls : ''}">
-        <span class="jt">${esc(j.title)}</span>
+        <span class="jt" title="${esc(j.title)}">${esc(j.title)}</span>
         <span class="jm" title="${esc(msg)}">${esc(msg)}</span>
-        <span class="jp"${segTip ? ` title="${esc(segTip)}"` : ''}${segBase ? ` style="--seg:${segBase}%"` : ''}><i style="width:${pct}%"></i>${seg}</span>
+        <span class="jp"${segTip ? ` title="${esc(segTip)}"` : ''}${segPct ? ` style="--seg:${segPct}%"` : ''}><i style="width:${pct}%"></i>${seg}</span>
         <span class="jv"><b>${line1 || '0.0%'}</b>${
           line2 ? `<i>${esc(line2)}</i>` : ''}</span>
         ${j.state === 'running' || j.state === 'queued'
@@ -1864,6 +1968,8 @@
           ? `<button class="jx jpz" data-pause="${esc(j.id)}"
              data-on="${j.paused ? '1' : ''}">${j.paused ? '继续' : '暂停'}</button>` : '')
       : ''}
+        <button class="jx jl" data-log="${esc(j.id)}"
+          title="查看这个任务做了什么（详细记录）">详情</button>
       </div>`;
     }).join('');
     bar.hidden = false;
@@ -1886,6 +1992,13 @@
     jobList.querySelectorAll('[data-cancel]').forEach(b => {
       b.onclick = () => api('jobs/' + b.dataset.cancel + '/cancel', { method: 'POST' })
         .then(() => toastMsg('已请求取消')).catch(e => toastMsg(e.message, true));
+    });
+    // 「详情」：任务条上只留一行结论，想看"到底在做什么"点这里
+    jobList.querySelectorAll('[data-log]').forEach(b => {
+      b.onclick = () => {
+        const jj = list.find(x => x.id === b.dataset.log);
+        openJobLog(b.dataset.log, jj ? jj.title : '');
+      };
     });
     /* 终态任务的刷新逻辑已移到函数开头（见那里的注释）：
        放在这里的话，列表被 slice(0,3) 裁掉的任务永远触发不了。 */
@@ -3404,8 +3517,10 @@
       + '这是旧版本合成的问题，更新程序本身改不了已经生成的图。\n'
       + '要现在检查并修复一遍吗？通常 1~3 分钟，期间可以继续用别的页面。',
       { title: '旧版立绘可能有显示问题', ok: '现在修复', cancel: '以后再说' });
-    api('stand/repair/prompt/dismiss', { method: 'POST', body: '{}' })
-      .catch(() => { });
+    // 选「以后再说」→ 服务端记一笔，之后升级都不再弹（要修随时去维护区点按钮）；
+    // 选「现在修复」只清这次标记，万一体检没跑成就还会再提醒一次。
+    api('stand/repair/prompt/dismiss', { method: 'POST',
+      body: JSON.stringify({ off: !yes }) }).catch(() => { });
     if (yes) { runStandRepair(); return; }
     Dlg.alert('想修的时候随时可以来：\n\n'
       + '左侧「设置 / 清理空间」→「维护」→ 点「检查并修复立绘」。',
@@ -3451,6 +3566,22 @@
     ST._jobDemo = true;
     setJobFold(v === 'fold', false);
   })();
+
+  /* 数据表被别处改过（别的标签页点了「更新剧情目录」/ 在播放器那边装了剧情）
+     → 原地重载名单并重画本页列表。本页自己的任务结束后走 reloadAfterJobs，
+     这条负责"人在别处操作、这一页开着"的情况。 */
+  if (window.ESC && ESC.watchData) {
+    ESC.watchData({
+      hot: {
+        'names.js': '__NAMES', 'charmeta.js': '__CHARMETA', 'advindex.js': '__ADV',
+      },
+      onReload: function () {
+        ST.units.loaded = false;
+        renderPacks();
+        loadAll().catch(function () { });
+      },
+    });
+  }
 
   // ---------------------------------------------------------------- 启动
   (async () => {

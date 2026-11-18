@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1117db">
+<link rel="stylesheet" href="assets/css/player.css?v=1118t">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
@@ -26,7 +26,8 @@
   <!-- 分类页签：一次只显示一类，避免点开就是一整屏滑块把人看花。
        文案复用现有 sect.* i18n key，日文界面自动跟着切。 -->
   <div id="setTabs" role="tablist">
-    <button type="button" class="on" data-page="view" role="tab" data-i18n="sect.view">画面/播放</button>
+    <button type="button" class="on" data-page="view" role="tab" data-i18n="sect.view">画面</button>
+    <button type="button" data-page="play" role="tab" data-i18n="sect.play">播放/手势</button>
     <button type="button" data-page="window" role="tab" data-i18n="sect.window">文本框</button>
     <button type="button" data-page="name" role="tab" data-i18n="sect.name">话者</button>
     <button type="button" data-page="text" role="tab" data-i18n="sect.text">文本节奏</button>
@@ -55,6 +56,87 @@
     <input type="checkbox" id="setUseX2" checked>
   </div>
 
+  </section>
+  <!-- 播放/手势（用户 2026-11-18 要求）：
+       手机全屏的点按/滑动/工具栏行为 + 电脑上的键位。
+       点按类都在触屏全屏里才有意义，鼠标点画面永远保持「暂停/继续」。 -->
+  <section class="set-page" data-page="play" hidden>
+  <div class="set-group" data-i18n="sect.touch">手机 / 平板（全屏时）</div>
+  <label class="ctlrow" title="全屏时手指点一下画面做什么。鼠标点画面不受影响，永远是暂停/继续。" data-i18n-title="set.tapOnceNote" data-i18n="set.tapOnce">单击画面<i class="qh" aria-hidden="true">?</i>
+    <select id="setTapOnce">
+      <option value="bar" data-i18n="opt.tap.bar">弹出工具栏（不暂停）</option>
+      <option value="next" data-i18n="opt.tap.next">下一句</option>
+      <option value="pause" data-i18n="opt.tap.pause">暂停 / 继续（同时弹出工具栏）</option>
+    </select>
+  </label>
+  <label class="ctlrow" title="两下之间间隔很短时，第二下执行这里的动作。单击的动作不会被撤销 —— 想「一点就翻句」就把单击设成下一句，这里留成暂停。选暂停/继续会同时弹出工具栏，显示多久按下面的自动隐藏走。" data-i18n-title="set.tapTwiceNote" data-i18n="set.tapTwice">连点两下<i class="qh" aria-hidden="true">?</i>
+    <select id="setTapTwice">
+      <option value="pause" data-i18n="opt.tap.pause">暂停 / 继续（同时弹出工具栏）</option>
+      <option value="next" data-i18n="opt.tap.next">下一句</option>
+      <option value="bar" data-i18n="opt.tap.bar">弹出工具栏（不暂停）</option>
+      <option value="none" data-i18n="opt.tap.none">不响应</option>
+    </select>
+  </label>
+  <label class="ctlrow" title="手指按住画面不动约半秒 = 开始快进，松手就停（和电脑上按住快捷键一样）。" data-i18n-title="set.holdNote" data-i18n="set.holdAct">长按画面<i class="qh" aria-hidden="true">?</i>
+    <select id="setHoldAct">
+      <option value="rush" data-i18n="opt.hold.rush">快进</option>
+      <option value="off" data-i18n="opt.hold.off">不响应</option>
+    </select>
+  </label>
+  <label class="ctlrow" title="横向滑动画面：左滑下一句、右滑上一句。手指竖着动（上下滑）不会误触发。" data-i18n-title="set.swipeNote" data-i18n="set.swipeX">左右滑动<i class="qh" aria-hidden="true">?</i>
+    <select id="setSwipeX">
+      <option value="off" data-i18n="opt.swipe.off">不响应</option>
+      <option value="line" data-i18n="opt.swipe.line">上一句 / 下一句</option>
+    </select>
+  </label>
+  <div class="sp" aria-hidden="true"></div>
+
+  <div class="set-group" data-i18n="sect.fsBar">全屏工具栏</div>
+  <label class="ctlrow" title="工具栏压在屏幕的哪一边。放顶部时「退出全屏」会自动让到右下角。" data-i18n-title="set.fsBarPosNote" data-i18n="set.fsBarPos">显示位置<i class="qh" aria-hidden="true">?</i>
+    <select id="setFsBarPos">
+      <option value="bottom" data-i18n="opt.barPos.bottom">屏幕底部</option>
+      <option value="top" data-i18n="opt.barPos.top">屏幕顶部</option>
+    </select>
+  </label>
+  <label class="ctlrow" title="工具栏弹出后多久自己收起。手机上选「不隐藏」就不用每次点两下。" data-i18n-title="set.fsBarHideNote" data-i18n="set.fsBarHide">自动隐藏<i class="qh" aria-hidden="true">?</i>
+    <select id="setFsBarHide">
+      <option value="2600" data-i18n="opt.barHide.2600">约 3 秒</option>
+      <option value="4000" data-i18n="opt.barHide.4000">约 5 秒</option>
+      <option value="0" data-i18n="opt.barHide.0">不自动隐藏</option>
+    </select>
+  </label>
+  <div class="row" title="勾选后工具栏弹出时对话框自动往上让，长句子的最后几行不会被按钮压住；工具栏收起后对话框回到原位。" data-i18n-title="set.fsBarLiftNote">
+    <span data-i18n="set.fsBarLift">弹出时上移对话框<i class="qh" aria-hidden="true">?</i></span>
+    <input type="checkbox" id="setFsBarLift" checked>
+  </div>
+  <div class="row" title="只影响全屏时弹出的那条工具栏。至少留一组，否则弹出来是空的。" data-i18n-title="set.fsBarShowNote">
+    <span data-i18n="set.fsBarShow">显示按钮<i class="qh" aria-hidden="true">?</i></span>
+    <span class="kchecks">
+      <label><input type="checkbox" data-bar="play" checked><span data-i18n="opt.barShow.play">播放</span></label>
+      <label><input type="checkbox" data-bar="prog" checked><span data-i18n="opt.barShow.prog">进度</span></label>
+      <label><input type="checkbox" data-bar="opt" checked><span data-i18n="opt.barShow.opt">选项</span></label>
+    </span>
+  </div>
+  <div class="sp" aria-hidden="true"></div>
+
+  <!-- 键盘那一段整块包起来：手机上（没有物理键盘）整段隐藏，页面短一半 -->
+  <div class="key-group">
+    <!-- 说明收进「?」气泡：角标紧跟标题，桌面悬停 / 手机点一下都会弹
+         （initSettingTips 认带 title 的元素，这里让整个标题 + 角标共用一条说明） -->
+    <div class="set-group" data-i18n="sect.keys" data-i18n-title="set.keysNote"
+         title="点右边的按键，再在键盘上按下新的键就行；Esc 放弃。一个功能可以有好几个键（并排显示、竖线隔开，任一都能用，不是组合键），每个框都能单独改；同一个键只能给一个功能用。">键盘快捷键（电脑）<i class="qh" aria-hidden="true">?</i></div>
+    <!-- 键位框由 player.js 的 syncKeyButtons() 按绑定表填（一个动作可能是好几个键，
+         并排显示、竖线隔开 —— 是"任一都行"，不是组合键）。 -->
+    <div class="krow"><span data-i18n="key.play">暂停 / 继续</span><span class="kkeys" data-k="play"></span></div>
+    <div class="krow"><span data-i18n="key.next">下一句</span><span class="kkeys" data-k="next"></span></div>
+    <div class="krow"><span data-i18n="key.prev">上一句</span><span class="kkeys" data-k="prev"></span></div>
+    <div class="krow"><span data-i18n="key.rush">快进（按住）</span><span class="kkeys" data-k="rush"></span></div>
+    <div class="krow"><span data-i18n="key.settings">显示设置</span><span class="kkeys" data-k="settings"></span></div>
+    <div class="krow"><span data-i18n="key.fullscreen">全屏</span><span class="kkeys" data-k="fullscreen"></span></div>
+    <div class="krow"><span data-i18n="key.lang">切换语言</span><span class="kkeys" data-k="lang"></span></div>
+    <div class="krow"><span data-i18n="key.sidebar">收起 / 展开左侧栏</span><span class="kkeys" data-k="sidebar"></span></div>
+    <div class="krow"><span data-i18n="key.hist">收起 / 展开右侧栏</span><span class="kkeys" data-k="hist"></span></div>
+  </div>
   </section>
   <!-- 文本框 -->
   <section class="set-page" data-page="window" hidden>
@@ -255,7 +337,8 @@
 <div class="layout">
   <aside id="sidebar">
     <div id="sHead"><span data-i18n="sidebar.title">剧情列表</span>
-      <button id="sToggle" title="收起/展开左侧栏（[）">收起 ◂</button></div>
+      <!-- title 里的键位由 player.js 按当前绑定实时重写，别在这里写死 -->
+      <button id="sToggle" title="收起 / 展开左侧栏">收起 ◂</button></div>
     <input id="search" placeholder="角色名 / ID…" autocomplete="off" data-i18n-ph="search.ph">
     <div id="srcRow">
       <button data-src="char" class="on" data-i18n="src.char">角色</button>
@@ -358,16 +441,17 @@
         <label class="ctl" title="开启时像视频一样连续播放；关闭后只有点「下一句 / 上一句」才切句" data-i18n-title="ctrl.autoNote"><input type="checkbox" id="auto" checked><span data-i18n="ctrl.auto">自动</span></label>
         <span class="vsep"></span>
         <button id="btnWin" data-i18n="ctrl.win" title="显示/隐藏对话框">对话框</button>
-        <button id="btnFs" title="全屏 (F)">⛶ 全屏</button>
+        <button id="btnFs" title="全屏">⛶ 全屏</button>
       </div>
       <!-- 翻译 / 设置 / 快捷键 一组：竖屏时它们是第四行，版本与免责是第五行。
            分组固定下来，按钮位置就不会随屏幕宽度飘来飘去。 -->
       <div class="grp gOpt gOptB">
         <button id="btnTrans" title="导出本剧情原文给 AI 翻译，或把译好的 txt 导回">翻译</button>
-        <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置 (S)">⚙</button>
-        <!-- 快捷键提示原来是一整句占半屏的文字，把进度条挤到了角落；改成最右边的「?」，悬停看全句 -->
+        <button id="btnSet" data-i18n-title="ctrl.settings" title="显示设置">⚙</button>
+        <!-- 快捷键提示原来是一整句占半屏的文字，把进度条挤到了角落；改成最右边的「?」，悬停看全句。
+             这里的 title 只是兜底：真实文字由 player.js 的 syncKeyHints 按绑定表重写 -->
         <button id="btnKeys" class="qbtn" data-i18n-title="ctrl.hotkeys"
-                title="空格/P/点画面 暂停 · 回车/↓→ 下一句 · ↑← 上一句 · 按住 K 快进">?</button>
+                title="暂停 · 下一句 · 上一句 · 快进">?</button>
       </div>
     </div>
     <!-- 进度条气泡：悬停/拖动时显示"第 K/T 句 · 约 mm:ss"，fixed 定位跟手 -->
@@ -417,7 +501,7 @@
   <script src="data/sfxmap.js?v=1029a"
           onerror="window.__SFX=window.__SFX||{}"></script>
 <script src="assets/js/tip.js?v=1116c"></script>
-<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/common.js?v=1118a"></script>
 <script src="assets/js/dialog.js?v=1117a"></script>
 <script src="assets/js/mediaui.js?v=1117b1"></script>
 <script src="assets/js/i18n.js?v=1117h"></script>
@@ -426,7 +510,7 @@
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1115g"></script>
 <script src="data/cgmap.js?v=1117d"></script>
-<script src="assets/js/player.js?v=1117da"></script>
+<script src="assets/js/player.js?v=1118v"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136b"></script>
 <script src="assets/js/tour.js?v=1130a"></script>
@@ -451,7 +535,8 @@ const TOUR_STEPS = [
       + '「其他」里已经按游戏里的入口分好组（打 BOSS、愚人节、周年庆那些），'
       + '点组名展开就能看到每一话。' },
   { el: '#sHead', title: '④ 列表能收起来',
-    text: '想看得宽敞点，点这个「收起」（或按键盘上的 <b>[</b>），左边列表就收起来了，'
+    text: '想看得宽敞点，点这个「收起」（或按键盘上的 <b>'
+      + (window.PLAYER_HOTKEYS ? PLAYER_HOTKEYS.label('sidebar') : '[') + '</b>），左边列表就收起来了，'
       + '再点一次放回来。' },
   { el: '#charList', title: '⑤ 点一下就播',
     text: '左边点角色、或者「其他」里点具体某一话，立刻开始播，不用再找播放键。'
@@ -460,14 +545,17 @@ const TOUR_STEPS = [
     text: '一部剧情分好几段，点这里换段。段太多一行放不下时，右边会出现 <b>◀ ▶</b> 让你翻；'
       + '左边写着「第几段、共几句」。' },
   { el: '#stage', title: '⑦ 剧情就演在这块',
-    text: '画面、说话的人、台词都在这块。最常用的三个键：<b>空格</b>暂停、'
-      + '<b>回车</b>下一句、按住 <b>K</b> 快进。' },
+    text: '画面、说话的人、台词都在这块。最常用的三个键：<b>'
+      + (window.PLAYER_HOTKEYS ? PLAYER_HOTKEYS.label('play') : '空格') + '</b>暂停、<b>'
+      + (window.PLAYER_HOTKEYS ? PLAYER_HOTKEYS.label('next') : '回车') + '</b>下一句、按住 <b>'
+      + (window.PLAYER_HOTKEYS ? PLAYER_HOTKEYS.label('rush') : 'K') + '</b>快进。' },
   { el: '#controls', title: '⑧ 底下一排按钮',
     text: '左边三个是重播、播放/暂停、下一段；中间那条是进度，'
       + '<b>想往后看就直接点进度条</b>，会跳到那个位置（暂停时只跳过去、不会自己播）；'
       + '右边是倍速、自动、对话框、全屏、翻译和设置；'
       + '「自动」开着就像视频一样自己往下播，关掉就只能用「下一句 / 上一句」切句，'
-      + '这时点画面、按空格或点「▶ 下一句」都是走下一句。' },
+      + '这时点画面、按 ' + (window.PLAYER_HOTKEYS ? PLAYER_HOTKEYS.label('play') : '空格')
+      + ' 或点「▶ 下一句」都是走下一句。' },
   { el: '#btnKeys', title: '⑨ 快捷键记不住就看这里',
     text: '最右边这个「<b>?</b>」点一下，会把所有快捷键列出来，看一眼就会。'
       + '点别处、或者按 <b>Esc</b> 就关掉。' },
@@ -475,8 +563,9 @@ const TOUR_STEPS = [
     text: '点「翻译」先导出这部剧的日文原文，把文件交给 AI（比如让我翻），'
       + '翻好之后再导回来，播放器里就显示中文了。' },
   { el: '#btnSet', title: '⑪ 字太小、界面不合适',
-    text: '点 ⚙ 可以调字号、行距、对话框的样子、立绘大小、音量和说话速度。'
-      + '改完立刻生效，下次打开还记得。' },
+    text: '点 ⚙ 可以调字号、行距、对话框的样子、音量和说话速度。'
+      + '里面的「<b>播放/手势</b>」还能改手机全屏时点一下做什么、工具栏放哪、'
+      + '以及电脑上的快捷键。改完立刻生效，下次打开还记得。' },
   { el: '#btnLan', title: '⑫ 手机上也想看',
     text: '点右上角「局域网二维码」会出一个<b>二维码</b>，手机连同一个 WiFi 扫一下，'
       + '就能在手机上看。扫不开的话，按启动窗口里的提示放行一次就行。' },

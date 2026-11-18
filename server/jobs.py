@@ -38,6 +38,16 @@ _SEQ = itertools.count(1)
 _UNITS_LOCK = threading.Lock()
 _UNIT_HOLDERS: dict[str, str] = {}
 
+#: 每个工作线程当前跑的是哪个任务。用途：``stages.run_script`` 把子脚本的输出
+#: 挂到「正在跑的那个任务」上，用户在页面上点「查看更多」就能看到
+#: （以前这些行只往启动窗口里刷，用户得在 CMD 和页面之间来回看）。
+_CUR = threading.local()
+
+
+def current() -> "Job | None":
+    """当前线程正在跑的任务（不在任务线程里 → None）。"""
+    return getattr(_CUR, "job", None)
+
 
 class Job:
     """一个可观测的耗时任务。"""
@@ -57,7 +67,9 @@ class Job:
         self.total = 0.0
         self.done = 0.0
         self.bytes_total = 0.0
-        self.bytes_done = 0.0
+        self._bytes_done = 0.0
+        #: 最后一次"字节真的涨了"的时刻：界面据此判断"是慢还是彻底没在传"。
+        self._bytes_t = time.time()
         #: 字节速度的起点：进度条一开头就"预扫本地已有"的字节不算这次下载的量
         #: （点「补全」时 99% 的包早就在盘上，不扣掉会算出 400 MB/s 这种假网速）。
         self.bytes_base = 0.0
@@ -87,6 +99,11 @@ class Job:
         # 不设高水位就会在界面上看到 33% → 66% → 33% 的来回跳。
         self._pct_hi = 0.0
         self.detail: dict = {}
+        #: 这次任务自己的记录（每句 ``log`` + 子脚本的原始输出）。
+        #: 给页面上的「查看更多」用 —— 以前这些行只出现在**启动窗口**里，
+        #: 用户想看清楚就得在 CMD 和页面之间来回切（2026-11-18 反馈）。
+        #: 只在内存里留最近 400 行，不动 app.log（那边本来就落盘了）。
+        self.logs: deque = deque(maxlen=400)
         self.created = time.time()
         self.started = 0.0
         self.ended = 0.0
@@ -96,6 +113,36 @@ class Job:
         # 置位 = 暂停。下载线程每次领新包前检查它（见 net.fetch_many）。
         # 这是"软暂停"：已经在传的包会传完，不会留下半个文件。
         self.pause_event = threading.Event()
+
+    # ---------------------------------------------------------------- 字节口径
+    @property
+    def bytes_done(self) -> float:
+        return self._bytes_done
+
+    @bytes_done.setter
+    def bytes_done(self, v) -> None:
+        """赋值时顺便记下"最后一次字节变化的时刻"（见 snapshot 的 bytesIdle）。
+
+        用 property 而不是让调用方各自维护：写 ``job.bytes_done`` 的地方有七八处
+        （预扫已有、跳过的包、下载层逐块上报），漏一处就会把"卡住多久"算错。
+        """
+        v = float(v or 0)
+        if v != self._bytes_done:
+            self._bytes_done = v
+            self._bytes_t = time.time()
+
+    def bytes_progress(self, n: float) -> None:
+        """写入"当前已收字节"（下载层逐块上报）：**只增**，并记一个采样点。
+
+        逐块上报是为了让大包也能看到进展：以前整个包下完才 ``+= size``，
+        一个 20 MB 的包传五分钟，这五分钟进度条一格都不动（2026-11-17 反馈
+        "有速度但是一直卡进度"）。采样点同时给 :meth:`byte_speed` 提供窗口。
+        """
+        n = float(n or 0)
+        if n <= self._bytes_done:
+            return
+        self.bytes_done = n
+        self._sample()
 
     # ---------------------------------------------------------------- 写入
     def start(self) -> "Job":
@@ -216,6 +263,7 @@ class Job:
         self.message = message
         self._set_stage(message)
         self._sample()
+        self.logs.append(str(message)[:400])
         # 同时落盘：用户反馈"出问题时日志里什么都没有"，只记 DONE/FAIL 不够，
         # 安装/导出的每一步都得留痕，否则事后没法复盘。
         try:
@@ -223,6 +271,18 @@ class Job:
             applog.log(f"[{self.kind}] {message}"[:400], "job")
         except Exception as e:                                 # noqa: BLE001
             print(f"[log] 写日志失败：{e}", file=sys.stderr)
+
+    def log_lines(self, lines) -> None:
+        """追加一段**原始输出**（子进程 stdout 之类）到本任务的记录里。
+
+        与 :meth:`log` 的区别：不改 message / stage、也不再写 app.log
+        （调用方那边已经落过盘了）。目的只是让这些行在页面的「查看更多」里
+        看得到，而不是只往启动窗口里刷。
+        """
+        for ln in lines or ():
+            s = str(ln).rstrip()
+            if s:
+                self.logs.append(s[:400])
 
     def _audit(self, tag: str, detail: str = "") -> None:
         """任务收尾的统一审计日志（不吞异常，写不进去要吭声）。"""
@@ -378,11 +438,18 @@ class Job:
         return sp if 0 < sp < 1e10 else 0.0
 
     def byte_speed(self) -> float:
-        """字节速度（B/s）：已下字节 / 已用时间。
+        """字节速度（B/s）：**最近一段时间**的真实速率。
 
-        不用"最近两个采样点的差"：BGM 这类几 MB 的包要下 30 秒才完成一个，
-        采样点之间隔太久，区间速度会剧烈抖动甚至算出 0。
-        整段平均更贴近用户看到的网卡速率，ETA 也才准。
+        以前是"已下字节 / 任务已用时间"的整段平均：下载层只在整包完成时记字节，
+        于是某几个包在慢连接上挂了几分钟时，这个数字一动不动地挂着 1.7 MB/s，
+        ETA 也永远显示"剩 1 分 42 秒" —— 用户看到的就是"有速度但进度卡住"
+        （2026-11-17 反馈）。
+
+        现在下载层逐块上报（:meth:`bytes_progress`），采样点每 0.5 秒一个，
+        取窗口里最早的那个点算差值：
+          · 真在传 → 速度跟随当前网速；
+          · 卡住了 → 减到 0，界面就能说"没有在传"而不是骗人。
+        窗口至少 3 秒，避免本地回环几十毫秒下完时除以一个极小的 dt 炸出 1e15。
         """
         if self.state in ("done", "failed", "cancelled") or self.paused:
             return 0.0
@@ -396,10 +463,21 @@ class Job:
         # 旁边还挂着 390 KB/s 在跳，用户会以为程序在偷跑流量（2026-11-04 反馈）。
         if self.bytes_done >= self.bytes_total:
             return 0.0
-        # 只算**这次真下的**字节：点「补全」时本地已有几百 MB 会被预扫进
-        # bytes_done，不扣掉的话开头两秒会算出 400 MB/s 这种假网速。
-        delta = self.bytes_done - self.bytes_base
-        dt = (self.ended or time.time()) - (self.started or self.created)
+        now = self.ended or time.time()
+        # 一个字节都没进来超过 5 秒 → 没有在传。再拿旧采样点算出来的只是"历史平均"，
+        # 挂得越久数字越小，但永远不为 0，界面会一直挂着几百 KB/s 骗人。
+        if now - self._bytes_t >= 5.0:
+            return 0.0
+        ref_t = ref_b = None
+        for t, _d, b in self._samples:        # 从最早的点往后找第一个"够久"的
+            if now - t >= 3.0:
+                ref_t, ref_b = t, b
+                break
+        if ref_t is None:
+            # 采样还不够长（本地回环几十毫秒就下完）：退回整段平均
+            ref_t, ref_b = (self.started or self.created), self.bytes_base
+        dt = now - ref_t
+        delta = self.bytes_done - ref_b
         if dt < 1 or delta <= 0:
             return 0.0
         sp = delta / dt
@@ -478,6 +556,10 @@ class Job:
             # 进度条的字节维度：已下大小 / 总大小 / 字节速度
             "bytesDone": bd, "bytesTotal": bt,
             "bytesSpeed": self.byte_speed(),
+            # 距上次"字节真的涨了"过去多少秒：>0 且在增长 = 一个字节都没在传
+            # （连接挂着等响应 / 正在重试）。界面用它在速度旁边说清是"慢"还是"停"。
+            "bytesIdle": (round(time.time() - self._bytes_t, 1)
+                          if self.state == "running" and bt and bd < bt else 0.0),
             "itemsTotal": self.items_total, "itemsDone": self.items_done,
             "subTotal": self.sub_total, "subDone": self.sub_done,
             "subLabel": self.sub_label,
@@ -535,6 +617,7 @@ def submit(kind: str, title: str, fn, unit: str = "", holds=(), **meta) -> Job:
     _hold(job, holds)
 
     def runner():
+        _CUR.job = job                 # 让 stages.run_script 等把细节挂到本任务上
         job.start()
         try:
             fn(job)
@@ -551,6 +634,7 @@ def submit(kind: str, title: str, fn, unit: str = "", holds=(), **meta) -> Job:
                 f.write(f"\n[{time.strftime('%F %T')}] {job.id} {job.title}\n")
                 f.write(traceback.format_exc())
         finally:
+            _CUR.job = None
             _release(job)
             job.ended = job.ended or time.time()
 

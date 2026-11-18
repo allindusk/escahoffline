@@ -99,7 +99,10 @@ body.hide-bar #gBar{display:none !important}
 </head>
 <body>
 <iframe id="fMusic" title="原声集播放器"></iframe>
-<iframe id="fPage" src="about:blank" title="页面内容"></iframe>
+<!-- allow="fullscreen"：播放器在 iframe 里请求原生全屏，没有这个权限就只能退化成
+     CSS 伪全屏（手机上系统状态栏/地址栏还在，观感差一截）。
+     allowfullscreen 是老浏览器认的写法，两个都留着。 -->
+<iframe id="fPage" src="about:blank" title="页面内容" allow="fullscreen" allowfullscreen></iframe>
 
 <div id="gBar" aria-label="全站播放控制">
   <div class="rail"><i></i></div>
@@ -164,6 +167,16 @@ body.hide-bar #gBar{display:none !important}
     } catch (e) { /* 跨域 / 还没加载完，忽略 */ }
   }
 
+  /* 提醒某个 iframe「去看看数据表有没有变」（names / charmeta / index / cgmap…）。
+     两个 iframe 都是常驻文档：收不到 visibilitychange，也不会因为切页重新执行脚本，
+     所以"更新剧情目录 / 装完剧情"之后必须由外壳点名，否则它们一直显示旧名单
+     （2026-11-18 用户反馈："别的页面的列表没刷新"）。 */
+  function metaCheck(fr) {
+    try {
+      fr.contentWindow.postMessage({ t: 'esc:metacheck' }, location.origin);
+    } catch (e) { /* 还没加载完 / 脚本还没绑监听：下次切页会再发 */ }
+  }
+
   function nav(href, replace) {
     href = String(href || 'index.html');
     var u = new URL(href, location.href);
@@ -191,6 +204,8 @@ body.hide-bar #gBar{display:none !important}
       current = rel;
       fPcur = rel;
     }
+    // 常驻文档不会因为切页重新执行脚本：点名让它比对一次数据表（见 metaCheck）
+    metaCheck(isMusic ? fM : fP);
     try {
       history[replace === true ? 'replaceState' : 'pushState'](
         null, '', 'shell.html?p=' + encodeURIComponent(rel));
@@ -275,8 +290,9 @@ body.hide-bar #gBar{display:none !important}
     mReady = true;
     pending.splice(0).forEach(function (c) { post(c[0], c[1]); });
     post('state');
+    metaCheck(fM);
   });
-  fP.addEventListener('load', function () { hook(fP); syncFromFrame(); });
+  fP.addEventListener('load', function () { hook(fP); syncFromFrame(); metaCheck(fP); });
 
   /* ------------------------------------------------- 与常驻播放器的消息通道 */
   // 播放器 iframe 还没 load 完时（比如刚启动就带 ?play=）先把命令排队

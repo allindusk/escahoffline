@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>资源管理 · 超昂大战 角色剧情离线阅读器</title>
-<link rel="stylesheet" href="assets/css/setup.css?v=1117e">
+<link rel="stylesheet" href="assets/css/setup.css?v=1117f">
 <link rel="stylesheet" href="assets/css/extras.css?v=1101a">
 <!-- 剧情列表（②剧情安装 / ③提高CG画质 / ⑤翻译 三页共用），与播放器侧栏同一套观感 -->
 <link rel="stylesheet" href="assets/css/storylist.css?v=1124a">
@@ -91,10 +91,17 @@
         <details class="explain">
           <summary>这个选项是什么意思？一般不用改</summary>
           <p>
-            一部剧情不是一个大文件，而是<b>几十个小文件</b>（剧本、语音、图片分开打包）。程序可以同时下好几个，所以这里选的是<b>同时下几个</b>。
+            一部剧情不是一个大文件，而是<b>几十个小文件</b>（剧本、语音、图片分开打包）。
           </p>
           <p>
-            <b>数字越大越快</b>：默认 32 最快最省时间。如果经常看到失败、或者网络本来就慢，就往小调（16 → 8），稳一点。
+            <b>从国内直连官方服务器，单独下一个文件通常只有几十 KB 每秒</b> ——
+            慢的不是你家宽带，而是每一条连接本身就这点速度。
+            所以这里选的是<b>同时下几个文件</b>：同时下几十个，几十 KB 乘几十，加起来才是 MB 级的总速度。
+            提速靠的是"多开几路"，不是把单路变快。
+          </p>
+          <p>
+            <b>数字越大越快</b>，默认 <b>32</b> 就够用。如果经常看到失败、或者网络本来就不稳，
+            就往小调（16 → 8），稳一点、慢一点；选 64 只有在网络特别好时才看得出差别，否则更容易失败。
           </p>
         </details>
 
@@ -711,8 +718,10 @@
         <details class="explain"><summary>想跳到剧情中间某一段</summary>
           <p>播放器底下那条<b>进度条可以直接点</b>，点哪儿就跳到哪儿。正在播就接着播；
             <b>已经暂停的话只跳过去、不会自己播</b>（等你看清楚再点播放）。</p></details>
-        <details class="explain"><summary>快捷键记不住</summary>
-          <p>播放器底下<b>最右边那个「?」</b>点一下，所有快捷键就列出来了（空格暂停、回车下一句、按住 K 快进、F 全屏…），点别处或按 Esc 收起。</p></details>
+        <details class="explain"><summary>快捷键记不住 / 想换一个键</summary>
+          <p>播放器底下<b>最右边那个「?」</b>点一下，当前所有快捷键就列出来了，点别处或按 Esc 收起。
+            想换键位就打开播放器的「设置 → <b>播放/手势</b>」，点右边的按键再按新的键即可
+            （手机上没有物理键盘，那一段在手机上会自动隐藏）。</p></details>
         <details class="explain"><summary>左边列表太占地方</summary>
           <p>列表顶上点「收起」，或者按键盘上的 <b>[</b>，只留画面；再点一次就展开。</p></details>
         <details class="explain"><summary>「其他」里的剧情怎么是一组一组的</summary>
@@ -883,7 +892,7 @@
 <!-- 本机媒体清单：磁盘上到底有哪些头像 / 剧情横幅（见 web/index.html 的说明） -->
 <script src="data/mediaindex.js?v=11170540"
         onerror="window.__MEDIA=window.__MEDIA||null"></script>
-<script src="assets/js/common.js?v=1116a"></script>
+<script src="assets/js/common.js?v=1118a"></script>
 <script src="assets/js/dialog.js?v=1117a"></script>
 <script src="assets/js/mediaui.js?v=1117b1"></script>
 <!-- 剧情列表组件：②③④⑤ 四页共用，排序口径走 common.js 的 ESC.sortItems -->
@@ -900,7 +909,7 @@
      setup.js 里拼的提示文案直接用 FACT.t(...) -->
 <script src="assets/js/facts.js?v=1131a"></script>
 <script src="assets/js/tip.js?v=1116c"></script>
-<script src="assets/js/setup.js?v=1117b"></script>
+<script src="assets/js/setup.js?v=1118y"></script>
 <script src="assets/js/mobile.js?v=1117c"></script>
 </body>
 </html>

@@ -416,6 +416,213 @@
     document.head.appendChild(st);
   }
 
+  /* --------------------------------------------- 随包数据表的自动同步（全站共用）
+   * 问题：names.js / charmeta.js / index.js / cgmap.js / standmap.js 这些都是
+   * <script> 在文档加载时**一次性读进内存**的（window.__NAMES / __CHARMETA /
+   * __INDEX / __CGMAP …）。而「更新剧情目录」「装一部剧情」会在后台重写它们 ——
+   * 页面不重新加载就永远用旧的一份。2026-11-18 用户反馈：剧情播放页刷新出来了，
+   * CG / 立绘 / 原声集的列表还是老名字，还得自己一页一页 F5。
+   *
+   * 做法（和 mediaindex 的 /api/mediaver 同一思路）：
+   *   · 服务端 /api/dataver 给出这组数据表「改没改」的指纹（只 stat，3 秒缓存）；
+   *   · 页面注册自己关心的文件，页面重新可见 / 从后退缓存恢复 / 窗口获得焦点时
+   *     比对一次（≥15 秒一次，隐藏的标签页不比）；
+   *   · 变了就**原地重载**并通知页面重画 ——"原地"是关键，见 mergeInPlace。
+   *
+   * 用法（各页 init 里调一次）：
+   *   ESC.watchData({
+   *     hot: { 'names.js': '__NAMES', 'charmeta.js': '__CHARMETA' },
+   *     cold: ['index.js'],            // 结构变了、内存里换不掉的 → 提示刷新
+   *     onReload: () => renderList(),  // hot 变更后重画
+   *     onStale: () => toast('有新内容，刷新页面即可看到'),
+   *   });
+   */
+  const DATA_STAMP_URL = 'api/dataver';
+  //: base = 数据表指纹基准，media = 素材指纹基准（/api/mediaver），at = 上次比对时间
+  const _watch = { groups: [], base: null, media: null, at: 0 };
+
+  /** 递归合并：把新值塞回**同一个对象**。
+   *
+   *  为什么必须这样：重新执行 data/*.js 会 `window.__NAMES = {...}` 整体换成一个
+   *  **新对象**，而各页在文件顶部写的是 `const NAMES = window.__NAMES` —— 换完全局，
+   *  页面手里那份引用还指着旧对象，重画出来照样是旧名字（"重载了却没变"就是这么来的）。
+   *  这里把新内容灌回旧对象（数组也一样，原地 push），老引用自然就看到了。 */
+  function mergeInPlace(oldV, newV, depth) {
+    if (oldV === newV || newV == null) return oldV;
+    if (depth > 6) return newV;
+    if (Array.isArray(oldV) && Array.isArray(newV)) {
+      oldV.length = 0;
+      for (let i = 0; i < newV.length; i++) oldV.push(newV[i]);
+      return oldV;
+    }
+    if (typeof oldV === 'object' && typeof newV === 'object') {
+      Object.keys(oldV).forEach(k => { if (!(k in newV)) delete oldV[k]; });
+      Object.keys(newV).forEach(k => {
+        oldV[k] = (k in oldV) ? mergeInPlace(oldV[k], newV[k], depth + 1) : newV[k];
+      });
+      return oldV;
+    }
+    return newV;
+  }
+
+  /** 重新执行 data/ 下的数据表，并把新数据合并回原来的全局对象。
+   *  @param {Object} map  ``{ 'names.js': '__NAMES', … }``（文件名 → 全局变量名） */
+  ESC.reloadData = function (map) {
+    return Promise.all(Object.keys(map || {}).map(function (f) {
+      const g = map[f];
+      const prev = g ? window[g] : null;
+      return new Promise(function (resolve) {
+        const s = document.createElement('script');
+        s.src = 'data/' + f + '?_r=' + Date.now();
+        s.onload = function () {
+          s.remove();
+          if (g && prev && window[g] && window[g] !== prev) {
+            window[g] = mergeInPlace(prev, window[g], 0);
+          }
+          resolve();
+        };
+        s.onerror = function () { s.remove(); resolve(); };   // 少一个文件不该卡住整页
+        document.head.appendChild(s);
+      });
+    }));
+  };
+
+  /** 重新拉一次素材清单（mediaindex.js）并通知各页重画。
+   *
+   *  为什么单独一个入口：装完公共素材 / 提高 CG 画质之后，**文件名没变、内容变了**
+   *  或者**多了几张新图** —— 数据表（names/charmeta）一个字节都没动，只看
+   *  /api/dataver 是发现不了的。素材自己有自己的指纹：/api/mediaver 和
+   *  mediaindex.js 里的 ``__MEDIA_VER``。 */
+  ESC.refreshMedia = function () {
+    if (!window.MediaUI || !MediaUI.reload) return Promise.resolve(false);
+    return MediaUI.reload().then(function (ok) {
+      if (ok) {
+        try { window.dispatchEvent(new CustomEvent('media:reloaded')); } catch (e) { }
+      }
+      return ok;
+    });
+  };
+
+  /** 显式比对一次（外壳切回常驻原声集时也会调它）。
+   *
+   *  一次查两样东西：
+   *    · 数据表指纹（names / charmeta / index / cgmap / standmap …）；
+   *    · 素材指纹（/api/mediaver）——「公共素材补全 / 提高 CG 画质」改的是图片
+   *      文件本身，数据表可能一个字都没变。2026-11-18 用户反馈：补全跑完，别的
+   *      页面 F5 之后横幅和头像还是出不来，要 Ctrl+F5 才行。
+   */
+  ESC.checkData = function (force) {
+    if (!_watch.groups.length) return Promise.resolve(false);
+    if (!force && document.hidden) return Promise.resolve(false);
+    const now = Date.now();
+    if (!force && now - _watch.at < 15000) return Promise.resolve(false);
+    _watch.at = now;
+    const getJson = url => fetch(url, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null)).catch(() => null);
+    return Promise.all([getJson(DATA_STAMP_URL), getJson('api/mediaver')])
+      .then(function (res) {
+        const v = res[0] && res[0].ver;
+        const mv = res[1] && res[1].ver;
+        const base = _watch.base;
+        const mbase = _watch.media;
+        _watch.base = v || base;
+        _watch.media = mv || mbase;
+        // 第一次只记基准（页面刚加载，本来拿到的就是最新的）
+        const mediaChanged = !!(mbase && mv && mbase !== mv);
+        if (!base || !v) {
+          if (mediaChanged) return ESC.refreshMedia().then(() => false);
+          return false;
+        }
+        const hot = {};
+        let stale = false;
+        _watch.groups.forEach(function (g) {
+          Object.keys(g.hot || {}).forEach(function (f) {
+            if (base[f] !== v[f]) hot[f] = g.hot[f];
+          });
+          (g.cold || []).forEach(function (f) { if (base[f] !== v[f]) stale = true; });
+        });
+        const fire = () => _watch.groups.forEach(function (g) {
+          try { if (g.onReload) g.onReload(); } catch (e) { /* 单页重画失败别拖累别人 */ }
+        });
+        const fireStale = () => _watch.groups.forEach(function (g) {
+          try { if (g.onStale) g.onStale(); } catch (e) { }
+        });
+        const changedData = Object.keys(hot).length > 0;
+        if (!changedData && !stale && !mediaChanged) return false;
+        // 数据表变了先合并数据表；素材变了再重下清单 —— 两步都做完再重画，
+        // 否则重画时拿到的还是旧图片地址（旧 ?v=），画出来照样是占位。
+        const p1 = changedData ? ESC.reloadData(hot) : Promise.resolve();
+        return p1.then(function () {
+          return mediaChanged ? ESC.refreshMedia() : false;
+        }).then(function () {
+          fire();
+          if (stale) fireStale();
+          return true;
+        });
+      })
+      .catch(() => false);              // 纯静态托管 / 服务没起来：静默跳过
+  };
+
+  /** 告诉用户"有更新，刷新一下"，并给一个**能点的刷新按钮**。
+   *
+   *  为什么不用各页的 toast：这句话的重点是"让用户动手刷新"，纯文字还得让他自己按
+   *  F5（2026-11-18 用户："更新完还得手动 F5，那你得提示用户刷新啊"）。这条自带
+   *  样式、不依赖任何页面，同一时刻只留一条；用户点「刷新」= location.reload()。 */
+  ESC.askReload = function (msg) {
+    const old = document.getElementById('escReloadBar');
+    if (old) {
+      const t = old.querySelector('.t');
+      if (t) t.textContent = msg || t.textContent;
+      return;
+    }
+    const bar = document.createElement('div');
+    bar.id = 'escReloadBar';
+    bar.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);'
+      + 'z-index:10600;display:flex;align-items:center;gap:10px;max-width:92vw;'
+      + 'padding:9px 12px;border-radius:10px;background:rgba(20,24,34,.97);'
+      + 'border:1px solid #33445c;color:#e6e9f0;'
+      + 'font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;'
+      + 'box-shadow:0 8px 26px rgba(0,0,0,.55)';
+    bar.innerHTML = '<span class="t" style="min-width:0"></span>'
+      + '<span class="h" style="flex:none;max-width:150px;color:#8b93a6;font-size:14px">'
+      + '还看不到就按 Ctrl+F5</span>'
+      + '<button type="button" class="go" style="flex:none;height:28px;padding:0 12px;'
+      + 'border-radius:7px;border:1px solid #e0b566;background:#e0b566;color:#141822;'
+      + 'font:inherit;font-weight:600;cursor:pointer">刷新</button>'
+      + '<button type="button" class="x" title="先不刷新" style="flex:none;height:28px;'
+      + 'width:28px;border-radius:7px;border:1px solid #3a4a60;background:#1c2230;'
+      + 'color:#c7d0e0;font:inherit;cursor:pointer">✕</button>';
+    bar.querySelector('.t').textContent = msg || '有新内容，刷新后即可看到';
+    bar.querySelector('.go').onclick = function () { location.reload(); };
+    bar.querySelector('.x').onclick = function () { bar.remove(); };
+    document.body.appendChild(bar);
+  };
+
+  /** 注册本页依赖的数据表（各页 init 里调一次即可）。 */
+  ESC.watchData = function (opt) {
+    opt = opt || {};
+    _watch.groups.push({
+      hot: opt.hot || {}, cold: opt.cold || [],
+      onReload: opt.onReload, onStale: opt.onStale,
+    });
+    if (_watch.groups.length > 1) return;
+    const poke = function () { ESC.checkData(); };
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) poke();
+    });
+    window.addEventListener('pageshow', function (e) { if (e.persisted) poke(); });
+    window.addEventListener('focus', poke);
+    /* 外壳（shell.html）切页/切回常驻原声集时发这条：iframe 里的文档永远是"可见"
+       状态，收不到 visibilitychange，只能由外壳点名提醒。 */
+    window.addEventListener('message', function (ev) {
+      if (ev.origin !== location.origin) return;
+      if (!ev.data || ev.data.t !== 'esc:metacheck') return;
+      _watch.at = 0;                     // 外壳点名 = 强制比对一次（跳过节流）
+      ESC.checkData(true);
+    });
+    poke();                              // 记一次基准
+  };
+
   /**
    * 给一个搜索输入框加上"清除 ✕"。
    * @param {Element} input 搜索用的 input

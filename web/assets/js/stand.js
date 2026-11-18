@@ -114,6 +114,15 @@
 
   const ALL = buildCards();
 
+  /** 重建卡片（数据表被别处更新后调用，见文件末尾的 ESC.watchData）。
+   *  ALL 是 const，必须**原地换内容**：scopeCards / filtered / 灯箱都抓着它。 */
+  function rebuildData() {
+    Object.keys(STAND_BY_KEY).forEach(k => delete STAND_BY_KEY[k]);
+    const fresh = buildCards();
+    ALL.length = 0;
+    fresh.forEach(c => ALL.push(c));
+  }
+
   // ---------------------------------------------------------------- 状态
   const ST = {
     scope: 'char-stand',
@@ -579,6 +588,16 @@
     ST.filter = pref('stand', 'filter', '');
     ST.q = String(pref('stand', 'q', '') || '');
     ST.cur = pref('stand', 'cur', null);
+    /* 上次选中的角色可能已经一张立绘都没有了（换机器 / 清理过空间 / 卸载过剧情）：
+       照原样恢复会让整面墙空着、还写着"这里还没有素材"，看起来像列表坏了。
+       校验一下，没有卡就退回「全部」。 */
+    if (ST.cur != null && !scopeCards().some(c => {
+      const key = (curScope().char && c.cid != null) ? 'c' + c.cid : 'n' + c.num;
+      return key === ST.cur;
+    })) {
+      ST.cur = null;
+      setPref('stand', 'cur', null);
+    }
     if (['', 'have', 'miss', 'fav'].indexOf(ST.filter) < 0) ST.filter = '';
     // 选项统一由 common.js 提供，和 CG 页共用一份（含"按实装日期"）
     ST.sort = ESC.fillSort($('#sortBy'), 'role', ST.sort);
@@ -690,6 +709,15 @@
     renderSidebar();
     renderGrid();
 
+    /* 素材清单被重载（装完公共素材后 MediaUI 在"页面重新可见"时自查并触发，
+       见 mediaui.js 的 checkFresh）→ 受影响的是侧栏头像，只重画侧栏。
+       卡片墙不动：重画会丢滚动位置，而立绘有没有跟 mediaindex 无关
+       （那是 imgmap 的事）。2026-11-17 用户：立绘页列表装完素材后要硬刷新
+       才看得到头像。 */
+    window.addEventListener('media:reloaded', () => {
+      try { renderSidebar(); } catch (e) { /* 重画失败不影响已显示内容 */ }
+    });
+
     const at = +(qs.get('at') || 0);
     if (at > 0) openLB(at - 1, +(qs.get('i') || 0));
   }
@@ -720,6 +748,30 @@
     cards: () => ST.list.length,
     setScope,
   };
+
+  /* 数据表被别处更新（装完角色立绘 / 更新剧情目录补了名字与实装日）→ 重建并重画。
+     灯箱开着时不打扰（卡片序号会整体位移，翻到一半突然换图很难受），改成提示刷新。 */
+  if (window.ESC && ESC.watchData) {
+    ESC.watchData({
+      hot: {
+        'names.js': '__NAMES', 'charmeta.js': '__CHARMETA',
+        'standmap.js': '__STANDMAP', 'imgmap.js': '__IMGMAP',
+        'imgmap.x2.js': '__IMGX2', 'imgmap.base.js': '__IMGBASE',
+      },
+      onReload: function () {
+        const lb = $('#lb');
+        if (lb && lb.classList.contains('on')) {
+          if (ESC.askReload) ESC.askReload('立绘数据有更新，刷新后显示最新的列表');
+          return;
+        }
+        const top = $('#grid').scrollTop;
+        rebuildData();
+        renderSidebar();
+        renderGrid();
+        $('#grid').scrollTop = top;
+      },
+    });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

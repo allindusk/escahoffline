@@ -229,6 +229,9 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   z-index:61}
 #stage{width:1280px;height:720px;position:relative;transform-origin:center center;
   background:#05060a;overflow:hidden;flex-shrink:0;
+  /* 横向拖动归播放器（左右滑动 = 上一句/下一句），别让浏览器当成翻页手势
+     在中途发 pointercancel 把整串事件掐掉；纵向仍交给浏览器（文本框里要能滚）。 */
+  touch-action:pan-y;
   /* isolation:isolate 把 mix-blend-mode 的"混合组"关在舞台内部。
      不设的话，特效里 plus-lighter 的粒子（冷気/邪気 一层 300 多颗）
      会和**页面根层**一起参与混合，Chromium 一重绘（比如鼠标悬停控件）
@@ -450,7 +453,11 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   background:rgba(var(--msgBg,10,14,22),var(--msgA,.90));
   border:1px solid var(--msgBorder,rgba(224,181,102,.42));
   border-radius:var(--msgRadius,10px);
-  padding:20px 26px 18px;opacity:0;transition:opacity .22s ease;
+  padding:20px 26px 18px;opacity:0;
+  /* --fsLift：全屏工具栏弹出时把对话框顶上去的高度（1280×720 舞台坐标，
+     由 player.js 的 syncFsLift 按实际重叠量算），避免工具栏压住字幕。 */
+  transform:translateY(calc(-1 * var(--fsLift,0px)));
+  transition:opacity .22s ease,transform .24s ease;
   box-shadow:0 8px 36px rgba(0,0,0,.75)}
 #msgWindow.on{opacity:1}
 #msgName{position:absolute;top:calc(-15px + var(--nameY,0px));padding:2px 16px;font-size:16.8px;
@@ -614,13 +621,51 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 「名称 + 下拉框」压在同一行（一行一列），下拉框不占满宽度。
    上限 68% 是为了长选项（「原始 1x（最清晰）」「无框 + 柔和底衬」）在半列里也放得下。 */
 #settings label.ctlrow{display:flex;align-items:center;gap:8px;
-  justify-content:space-between}
+  justify-content:space-between;
+  /* 选项文案变长（「弹出工具栏（不暂停）」）时别把左边的名字挤成两行 ——
+     宁可让下拉框自己省略号截断，点开还是完整文案。 */
+  white-space:nowrap}
 #settings label.ctlrow select{width:auto;flex:0 1 auto;min-width:0;max-width:68%;
   margin-top:0;text-overflow:ellipsis}
 /* 占位格：某一类控件剩下单数时（「话者」只有一个下拉框等），单独那项
    仍旧只占**一列**，用一个 0 高度的空格把下一类顶到新的一行。
    不要改成给它 grid-column:1/-1 —— 单行独项被拉成半屏宽很难看（用户明确反对）。 */
 .set-page>.sp{height:0}
+/* ---------- 「播放/手势」页 ---------- */
+/* 分组标题 / 说明整行跨两列：一眼分清「触屏操作」和「键盘快捷键」。
+   选择器不带 `>`：键盘那段被包进 .key-group 里，标题/说明同样要跨列。 */
+#settings .set-group{grid-column:1/-1;font-size:14px;font-weight:600;color:var(--gold);
+  padding:2px 0 5px;margin:8px 0 2px;border-bottom:1px solid rgba(224,181,102,.16)}
+#settings .set-page>.set-group:first-child,
+#settings .key-group>.set-group{margin-top:0}
+#settings .set-note{grid-column:1/-1;color:var(--fg3);font-size:14px;line-height:1.5;
+  margin:0 0 6px}
+/* 工具栏按钮组：三个复选框挤在一行，别各自占一格 */
+#settings .kchecks{display:inline-flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0}
+#settings .kchecks label{display:inline-flex;align-items:center;gap:4px;margin:0;
+  color:var(--fg2);white-space:nowrap}
+/* 覆盖通用规则 `#settings label span{float:right;…}`，否则文字会被推到右边变金色 */
+#settings .kchecks label span{float:none;color:inherit;font-family:inherit}
+#settings .kchecks input{accent-color:var(--purple)}
+/* 键盘那一整段：两列排；手机（没有物理键盘）整段不显示，省得滚半天 */
+.set-page>.key-group{grid-column:1/-1;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 22px;align-content:start}
+.set-page>.key-group>.set-group{margin-top:0}
+@media (hover:none) and (pointer:coarse){#settings .key-group{display:none}}
+/* 改键行：左名右键，键位做成一个小胶囊按钮（在 .key-group 里，不能只写成 .set-page>） */
+#settings .krow{display:flex;align-items:center;justify-content:space-between;
+  gap:8px;padding:2px 0;margin:0 0 6px;color:var(--fg2)}
+#settings .kbind{flex:0 0 auto;min-width:44px;padding:4px 8px;border-radius:6px;
+  border:1px solid var(--line2);background:var(--bg3);color:var(--fg);
+  font-size:14px;font-family:inherit;line-height:1.3;cursor:pointer;text-align:center}
+/* 一个动作绑了好几个键：并排的框 + 中间的竖线（= "任一可用"，别看成组合键） */
+#settings .kkeys{display:inline-flex;align-items:center;justify-content:flex-end;
+  flex-wrap:wrap;gap:6px;flex:0 1 auto;min-width:0}
+#settings .ksep{flex:0 0 auto;width:1px;height:16px;background:var(--line2);opacity:.75}
+#settings .kbind:hover{border-color:var(--gold);color:var(--gold)}
+#settings .kbind.wait{border-color:var(--gold);color:var(--gold);
+  background:rgba(224,181,102,.12);animation:kbindPulse 1s ease-in-out infinite}
+@keyframes kbindPulse{50%{opacity:.5}}
 /* 角色头像展开区：在「话者」页内，内部继续两列排；默认隐藏，
    由 #setAvShow 勾选/取消控制。
    整块用淡金底 + 虚线框 + 左侧金色强调条圈成一个视觉分组，并在顶部放小标题；
@@ -719,6 +764,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   #settings{width:calc(100vw - 96px)}
   .set-page{grid-template-columns:minmax(0,1fr);gap:0}
   .set-page>.av-settings{grid-template-columns:minmax(0,1fr);gap:0}
+  .set-page>.key-group{grid-template-columns:minmax(0,1fr);gap:0}
 }
 #msgText.narr{font-style:normal}
 /* 台词行内图标：<sprite=0> 是那颗粉色小爱心（素材由 export_adv_effects.py 从
@@ -773,6 +819,8 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* 快捷键帮助卡片（点控制条最右边的 ? 弹出）。
    用 grid + .kt-r{display:contents} 让按键列宽度自动对齐到最宽的那个。 */
 #keyTip{position:fixed;z-index:400;min-width:216px;padding:11px 13px;
+  /* 卡片会随绑定表变长：限宽让底部说明换行，限高让手机上也不出屏 */
+  max-width:min(360px,calc(100vw - 16px));max-height:calc(100vh - 24px);overflow-y:auto;
   background:#12161e;border:1px solid #3a4a5e;border-radius:10px;
   box-shadow:0 16px 44px rgba(0,0,0,.6);font-size:14px;color:var(--fg2);
   display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:5px;
@@ -781,6 +829,9 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #keyTip .kt-r{display:contents}
 #keyTip kbd{white-space:nowrap;text-align:center}
 #keyTip .kt-r span{color:var(--fg3)}
+/* 卡片底部小字：告诉用户键位在哪改（改键入口不写出来没人找得到） */
+#keyTip .kt-n{grid-column:1/-1;margin-top:5px;padding-top:6px;
+  border-top:1px solid #2a3448;color:var(--fg3);font-size:14px;line-height:1.45}
 /* 段信息：**不参与收缩**（否则窄窗口先被砍掉的是「46 句」），右对齐；
    进度条自己会让位。上限 260px 兜住异常长的文本。 */
 #pinfo{flex:0 0 auto;max-width:260px;text-align:right;font-size:14px;
@@ -1098,6 +1149,33 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 #controls.in-fs #btnSet,
 #controls.in-fs #btnKeys,
 #controls.in-fs #dlBar { display: none; }
+/* 全屏工具栏**压成单行**：手机上原来的竖屏规则会把它拆成 3~4 行，
+   一百多像素高，正好盖住对话框的字。这里用更高的特异性压回去，
+   工具组放不下就横向滑动（和原生视频播放器的做法一致）。 */
+#stageWrap.fs #controls.in-fs { flex-wrap: nowrap; gap: 8px; padding: 6px 10px; }
+#stageWrap.fs #controls.in-fs .gPlay { flex: 0 0 auto; }
+#stageWrap.fs #controls.in-fs .gProgress { flex: 1 1 90px; order: 0; min-width: 80px; }
+#stageWrap.fs #controls.in-fs .gOpt {
+  flex: 0 1 auto; order: 0; min-width: 0;
+  overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none;
+}
+#stageWrap.fs #controls.in-fs .gOpt::-webkit-scrollbar { display: none; }
+#stageWrap.fs #controls.in-fs .gOpt > * { flex: none; }
+#stageWrap.fs #controls.in-fs .vsep { display: none; }
+#stageWrap.fs #controls.in-fs .ctl { white-space: nowrap; }
+/* 工具栏显示哪几组由「设置 → 播放/手势」决定（player.js 的 syncFsBarUi 挂 class） */
+#stageWrap.fs #controls.in-fs.hidePlay .gPlay,
+#stageWrap.fs #controls.in-fs.hideProg .gProgress,
+#stageWrap.fs #controls.in-fs.hideOpt .gOptA { display: none; }
+
+/* 工具栏放在顶部（设置里可选）：贴顶、分隔线换到下面，退出按钮让到下角 */
+#stageWrap.fs.barTop #controls.in-fs {
+  top: 0; bottom: auto;
+  border-top: 0; border-bottom: 1px solid #2a3040;
+}
+/* 工具栏在上：退出按钮留在右上角但往下让开工具栏。
+   不要挪到底部 —— 那里正好是对话框的位置，会压住右边的字。 */
+#stageWrap.fs.barTop #fsExit { top: 56px; bottom: auto; }
 
 /* 全屏观看时右上角不该有「1.00x 全屏」这种缩放指示文字 */
 #stageWrap.fs #dbgFit { display: none; }
@@ -1114,3 +1192,6 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 }
 #stageWrap.fs #fsExit.show { opacity: 1; pointer-events: auto; }
 #fsExit:hover { filter: brightness(1.12); }
+/* 工具栏里已经有「⛶ 退出」了：右上角这个就不显示（由 syncFsExitBtn 控制）。
+   选择器要跟上面 `#stageWrap.fs #fsExit` 同级才压得住它。 */
+#stageWrap.fs #fsExit.redundant { display: none; }

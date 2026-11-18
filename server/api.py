@@ -77,6 +77,38 @@ def _file_hash(fs_path: str) -> str:
     return v
 
 
+#: 「随包数据表」清单：这些文件会被「更新剧情目录 / 装一部剧情」在后台重写，而页面
+#: 里的它们是 <script> **一次性读进内存**的（window.__NAMES / __CHARMETA / __INDEX…），
+#: 不重新加载就永远用旧的一份 —— 2026-11-18 用户反馈「剧情页刷新出来了，CG / 立绘 /
+#: 原声集的列表还是老名字，还得自己一个个 F5」。
+#:
+#: 前端 assets/js/common.js 的 ESC.watchData 在页面重新可见 / 从后退缓存恢复时比对
+#: 这里给出的指纹，变了就原地重载对应文件并重画（或提示刷新）。
+#: **新增这类「会变的重写型数据表」时，记得加进来**，否则那个页面又会掉队。
+_DATA_TABLES = (
+    "names.js", "charmeta.js", "index.js", "advindex.js", "cgmap.js",
+    "standmap.js", "imgmap.js", "imgmap.x2.js", "othereps.js",
+    "gallery.js", "voicemap.js", "mediaindex.js",
+)
+_data_stamp_cache = {"at": 0.0, "ver": {}}
+
+
+def data_ver() -> dict:
+    """数据表的「改没改」指纹：文件名 → ``修改时间-大小``（只 stat，3 秒缓存）。"""
+    now = time.time()
+    if _data_stamp_cache["ver"] and now - _data_stamp_cache["at"] < 3:
+        return _data_stamp_cache["ver"]
+    out: dict = {}
+    for fn in _DATA_TABLES:
+        try:
+            st = os.stat(os.path.join(paths.DATA, fn))
+            out[fn] = "%d-%d" % (int(st.st_mtime), st.st_size)
+        except OSError:
+            out[fn] = ""
+    _data_stamp_cache.update({"at": now, "ver": out})
+    return out
+
+
 def _html_with_versions(fs_path: str, raw: bytes) -> bytes:
     """把 HTML 里引用的 .js / .css 改写成 ``?v=<内容指纹>``。"""
     base = os.path.dirname(fs_path)
@@ -586,7 +618,7 @@ def _refresh_manifest_and_wiki(job) -> dict:
     job.log("接着更新角色信息（类型 / 稀有度 / 实装日）…")
     try:
         meta = _sync_wiki(job, None)
-        for k in ("merged", "scraped", "with_rarity", "source"):
+        for k in ("merged", "scraped", "unmatched", "with_rarity", "source"):
             if k in meta:
                 res[k] = meta[k]
     except Exception as e:                                     # noqa: BLE001
@@ -652,9 +684,13 @@ def _auto_fill_public(job) -> dict:
        侧栏头像与剧情横幅整批 404 而程序毫无反应（用户 2026-11-04 反馈）。
 
     优先级：缺口小（新角色通常就 2 个包）先走**精确补**（只下那几个包 + 只导出
-    那几张图，秒级）；缺口大说明用户压根没下过公共素材，才退回按类别整批补
-    （那条会把 385 个头像 force 重导，慢），并且只在有 stamp 时才自动下 ——
-    否则等于替用户静默下 800 MB。
+    那几张图，秒级）；缺口大到占这两类包数 20% 以上，说明用户压根没下过公共素材，
+    才退回按类别整批补（那条会把全部头像 force 重导，慢），并且只在有 stamp 时
+    才自动下 —— 否则等于替用户静默下 800 MB。
+
+    「缺口大小」必须按**占比**判断，不能只看绝对个数：头像类一共 1500+ 个包，
+    缺 16 个只是本次新增的角色，绝对阈值会把它误判成"缺口很大"（2026-11-18 实测：
+    白下 1554 个头像包 + 394 个横幅包）。
     """
     try:
         add = cdn_install.new_public()
@@ -667,6 +703,16 @@ def _auto_fill_public(job) -> dict:
         job.log(f"（公共素材缺图检查跳过：{e}）")
         deficit = {}
     n_def = sum(len(v) for v in deficit.values())
+    n_av_def = len(deficit.get("avatar") or [])
+    n_bn_def = len(deficit.get("banner") or [])
+    # 「缺几个包」算大还是算小，要和这类**总包数**比，不能只看绝对个数：
+    # 头像一共 1500+ 个包，缺 16 个（新角色）是正常增量；判定成"缺口很大"就会
+    # 整类重做，白下白导几分钟（2026-11-18 用户实测）。
+    totals = cdn_install.public_totals()
+    total_packs = sum(int(totals.get(k) or 0) for k in ("avatar", "banner"))
+    delta_cap = max(int(cdn_install.PUBLIC_AUTO_LIMIT),
+                    int(total_packs * cdn_install.PUBLIC_DELTA_RATIO))
+    n_bulk_arr = {k: add[k] for k, v in add.items() if k in ("avatar", "banner")}
 
     if job.cancelled:
         if add or n_def:
@@ -682,9 +728,9 @@ def _auto_fill_public(job) -> dict:
         desc = "、".join(f"{k} +{v} 个" for k, v in bulk.items())
         job.log(f"公共素材有新增：{desc}，开始自动补下（已有的会跳过）…")
 
-    if n_def and n_def <= cdn_install.PUBLIC_AUTO_LIMIT:
-        job.log(f"公共素材缺 {n_def} 个包（头像 {len(deficit.get('avatar') or [])}"
-                f" / 横幅 {len(deficit.get('banner') or [])}），只补这几个…")
+    if n_def and n_def <= delta_cap:
+        job.log(f"公共素材缺 {n_def} 个包（头像 {n_av_def} / 横幅 {n_bn_def}），"
+                "只补这几个…")
         try:
             got = cdn_install.install_public_delta(job, deficit)
             job.log(f"公共素材已补齐（{got.get('packs')} 个包，"
@@ -692,21 +738,25 @@ def _auto_fill_public(job) -> dict:
         except Exception as e:                                 # noqa: BLE001
             job.log(f"公共素材补下失败（不影响剧情列表）：{e}")
     elif n_def:
-        # 大缺口：只有当用户确实"补全过"（有 stamp，add 里带着 avatar/banner）
-        # 才按类别整批补；否则只提示，不替他下 800 MB。
-        big = [k for k in ("avatar", "banner") if add.get(k)]
-        if big:
-            bulk.update({k: add[k] for k in big})
-            job.log(f"公共素材缺 {n_def} 个包，按类别整批补齐"
-                    f"（这里会重做一个头像批，需要几分钟）…")
+        # 缺口大到"基本没装过"（超过这类包数的 20%）：只有当用户确实"补全过"
+        # （有 stamp，add 里带着 avatar/banner）才按类别整批补；
+        # 否则只提示，不替他下 800 MB。
+        if n_bulk_arr:
+            bulk.update(n_bulk_arr)
+            job.log(f"公共素材缺 {n_def} 个包（头像 {n_av_def} / 横幅 {n_bn_def}），"
+                    f"占这两类总数 {total_packs} 个包的两成以上 → 按类别整类重做一遍"
+                    f"（头像 {totals.get('avatar')} 个包 / 横幅 {totals.get('banner')} 个包；"
+                    "一个包会出多张图，已导出的图也会重新导出，需要几分钟）…")
         else:
-            job.log(f"公共素材缺 {n_def} 个包（头像 {len(deficit.get('avatar') or [])}"
-                    f" / 横幅 {len(deficit.get('banner') or [])}），"
+            job.log(f"公共素材缺 {n_def} 个包（头像 {n_av_def} / 横幅 {n_bn_def}），"
                     "去「资源管理 → 公共素材」点「补全」即可")
 
     if bulk:
         try:
-            cdn_install.install_base(job, parts=tuple(bulk))
+            # force_export=False：这是"刷新清单顺手补"，不是用户点「补全」——
+            # 官方只多了几个包，没理由把已导出的 1086 张头像全部重裁一遍
+            # （那是"几分钟"的直接来源，2026-11-18 用户实测）。
+            cdn_install.install_base(job, parts=tuple(bulk), force_export=False)
             job.log("公共素材已补齐")
         except Exception as e:                                 # noqa: BLE001
             job.log(f"公共素材补下失败（不影响剧情列表）：{e}")
@@ -1031,38 +1081,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _serve_html(self, fs_path: str):
         """发 HTML，并把里面 .js / .css 的 ?v= 改写成文件内容指纹。
 
-        HTML 自己永远 ``no-cache``：它是"清单"，必须最新；正文只有几十 KB，
-        没变时用 ``If-Modified-Since`` 回 304，代价是几十字节。
+        HTML 永远 ``no-cache``：它是"清单"，必须最新。
         改写失败的极端情况（编码异常等）直接退回原样发送，不能因为版本号发不出页面。
+
+        **304 的判据必须是"改写后的正文"，不能是 HTML 文件自己的 mtime**（2026-11-18 修）。
+        正文里的 ``?v=<指纹>`` 取决于**别的文件**（脚本、数据表）的内容；那些文件变了、
+        HTML 自己没变时，按 mtime 回 304 等于让浏览器继续用**旧正文里的旧指纹**：
+          · 旧指纹的 .js 地址在浏览器里是 ``immutable`` 缓存的（一年不复验）；
+          · 于是「更新剧情目录 / 补全公共素材」之后，普通 F5 拿到的还是旧脚本、旧
+            mediaindex（→ 横幅和头像查不到，画成占位），**只有 Ctrl+F5 才恢复**。
+        实测就是这么一回事（2026-11-18 用户："F5 刷新不出来，Ctrl+F5 才出来"）。
+        现在用正文的 md5 当 ETag：脚本一改，正文就变，ETag 就变，浏览器必然拿到新指纹。
         """
         try:
             with open(fs_path, "rb") as f:
                 raw = f.read()
             body = _html_with_versions(fs_path, raw)
-            mtime = int(os.path.getmtime(fs_path))
         except OSError:
             return super().do_GET()
 
-        ims = (self.headers.get("If-Modified-Since") or "").strip()
-        if ims:
-            try:
-                from email.utils import parsedate_to_datetime
-                if mtime <= int(parsedate_to_datetime(ims).timestamp()):
-                    self._status = 304
-                    self._cache_hint = "no-cache"
-                    self.send_response(304)
-                    self.send_header("Last-Modified", self.date_time_string(mtime))
-                    self.end_headers()
-                    return
-            except Exception:                              # noqa: BLE001
-                pass
+        import hashlib
+        etag = '"%s"' % hashlib.md5(body).hexdigest()[:20]
+        inm = (self.headers.get("If-None-Match") or "").strip()
+        if inm and inm == etag:
+            self._status = 304
+            self._cache_hint = "no-cache"
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
 
         self._status = 200
         self._cache_hint = "no-cache"
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Last-Modified", self.date_time_string(mtime))
+        self.send_header("ETag", etag)
+        # 兼容老的 If-Modified-Since（只在 ETag 对不上时才走到 200，所以不写 LM 更安全）
         self.end_headers()
         if self.command == "HEAD":
             return
@@ -1221,6 +1276,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 容量 / 耗时的唯一来源（server/facts.py）。页面里不写死数字，
             # 一律用 data-fact 占位 + assets/js/facts.js 拉这份成品文案。
             return self._json(facts.payload())
+        if path == "/api/mediaver":
+            # 素材清单指纹（data/mediaindex.js 里的 __MEDIA_VER）。
+            # 页面可见时前端拿它跟自己内存里那份比，不一致就重载清单并重画列表。
+            # 为什么不靠 URL 的 ?v 自动失效：清单文件是按内容指纹 immutable 缓存的，
+            # **页面不重新加载就永远用旧的那份** —— 装完公共素材后（哪怕重启过程序）
+            # 停在原标签页的立绘/播放器列表还是没头像，非得硬刷新
+            # （2026-11-17 用户反馈）。只 stat 一个文件，有缓存，很便宜。
+            return self._json({"ver": media.published_ver()})
+        if path == "/api/dataver":
+            # 随包数据表（names / charmeta / index / cgmap / standmap …）的指纹。
+            # 页面重新可见时比对一次，变了就原地重载并重画（见 common.js ESC.watchData）。
+            # 只 stat 十来个文件 + 3 秒缓存，随便轮询都不心疼。
+            return self._json({"ver": data_ver()})
         if path == "/api/manifest":
             return self._json(packs.manifest())
         if path == "/api/links":
@@ -1239,6 +1307,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"jobs": jobs.all_jobs(),
                                "boot": BOOT_ID,
                                "version": paths.app_version()})
+        if path.startswith("/api/jobs/") and path.endswith("/log"):
+            # 单个任务的详细记录（页面「查看更多」按需拉一次）。
+            # 不塞进 /api/jobs 的轮询里：每条几百行，1.2 秒一次轮询撑不住。
+            jid = path.split("/")[3]
+            j = jobs.get(jid)
+            return self._json({
+                "id": jid,
+                "title": (j.title if j else ""),
+                "state": (j.state if j else ""),
+                "lines": (list(j.logs)[-300:] if j else []),
+            })
         if path == "/api/diag":
             # 「操作记录 → 复制错误信息」的数据源：一段可直接复制的纯文本。
             # 定位用途：用户不想翻日志文件时，也能把当时的运行信息留档/核对。
@@ -1300,11 +1379,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/cglist":
             return self._json(exports.cg_list())
         if path == "/api/stand/repair/prompt":
-            # 「从旧版本升级上来」的一次性提示（标记由 server/__main__.py 启动时写）。
+            # 「立绘还是旧合成逻辑做的」一次性提示（标记由 server/__main__.py 启动时写，
+            # 只有升级 + 成品确实需要重做才会写）。
             # 只读不删：用户没处理完（比如关了页面）下次打开还会看到。
-            p = os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json")
             try:
-                with open(p, encoding="utf-8") as f:
+                with open(paths.STAND_PROMPT_FILE, encoding="utf-8") as f:
                     d = json.load(f)
                 return self._json({"need": True, "from": d.get("from", ""),
                                    "to": d.get("to", "")})
@@ -1469,12 +1548,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                               holds=_installed_char_units())
             return self._json({"job": job.snapshot()})
         if path == "/api/stand/repair/prompt/dismiss":
-            p = os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json")
+            b = self._body()
+            # off=true = 用户点了「以后再说」→ 记进 state.json，以后升级都不再弹
+            # （光删标记文件不够：下次版本变化会重新写一份，等于又打扰一次）。
+            off = bool(b.get("off")) if isinstance(b, dict) else False
             try:
-                os.remove(p)
+                os.remove(paths.STAND_PROMPT_FILE)
             except OSError:
                 pass
-            return self._json({"ok": True})
+            if off:
+                st = paths.load_state()
+                st["standPromptOff"] = True
+                try:
+                    paths.save_state(st)
+                except OSError:
+                    pass
+            return self._json({"ok": True, "off": off})
         if path == "/api/stand/repair":
             # 全库体检 + 修复立绘。判定完全靠图像特征（半透明 / 脸与身体亮暗比），
             # 代码里没有任何"哪几个编号有问题"的名单 —— 谁装了素材谁自己就能找出来。
@@ -2063,6 +2152,11 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     # 标题框由 tools/msg/banner.txt 打印，这里不再画第二条横线，避免看起来像起了两个服务。
     # 宿主地址不写 0.0.0.0（那是"监听所有网卡"的内部说法，写出来只会让人以为地址打不开）。
     print(f"  版本     v{paths.app_version()}")
+    # 这两行是给「报错时想说明自己装在哪 / 用的是哪个解释器」用的（2026-11-18 要求）：
+    # 便携版 python 可能是自带的 python\python.exe，也可能是系统装的，光看版本号分不清。
+    print(f"  根目录   {paths.ROOT}")
+    _pyver = sys.version.split()[0]
+    print(f"  Python   {sys.executable}（{_pyver}）")
     print(f"  播放器   http://127.0.0.1:{port}/index.html")
     print(f"  控制台   http://127.0.0.1:{port}/setup.html")
     _lan = LAN_INFO.get("ip") or ""
@@ -2070,6 +2164,11 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
         print(f"  手机访问 http://{_lan}:{port}/setup.html")
     print(f"  运行日志 userdata\\logs\\app-{time.strftime('%Y%m%d')}.log")
     print("  关闭此窗口即停止服务（Ctrl+C）", flush=True)
+    # 从这一行之后，窗口里不再出现任何运行日志（2026-11-17 用户要求）。
+    # 这不是"顺手": Windows 控制台被选中/标记时会冻结所有 print，把下载与解包的
+    # 主线程一起卡死 —— 实测「下载公共素材」因此卡在 818/3258 长达 6 分 20 秒，
+    # 界面上还挂着历史平均速度。详见 log.capture_stdio 的注释。
+    applog.capture_stdio()
     # 启动后按设置查一次更新（默认开；控制台「更新」页可关）。只查不装 ——
     # 结果只用于页面上挂提示条，装不装由用户点。关掉后这里零网络请求。
     # 这件事不进窗口：用户看到"后台查一次"只会以为程序在偷偷联网。

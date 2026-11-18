@@ -260,11 +260,72 @@
     'justify-content:center;font-size:14px;color:#6b7488;background:#141a26}';
   document.head.appendChild(st);
 
+  /** 重新拉一次 data/mediaindex.js（新内容会整体覆盖 window.__MEDIA）。
+   *
+   *  为什么需要：各页只在**文档加载时**读一次清单，"这张头像 / 横幅有没有"
+   *  全靠它。装完公共素材后服务端会重写 mediaindex.js（stages.regen_mediaindex），
+   *  但页面内存里还是旧的那份 —— banner() / avatar() 查不到新图，列表就一直画
+   *  色块占位，用户必须手动刷新整个页面才看得到（2026-11-17 用户反馈：
+   *  「下载完公共素材要硬刷新页面，列表才显示头像和横幅」）。
+   *
+   *  地址用时间戳而不是 ?v=<指纹>：服务端只对"v 与当前文件指纹一致"的地址回
+   *  immutable，其余一律 no-cache，所以时间戳地址一定能拿到最新内容，
+   *  前端也不必先知道指纹。重复调用会复用同一次加载。
+   */
+  var _reloading = null;
+  function reload() {
+    if (_reloading) return _reloading;
+    _reloading = new Promise(function (resolve) {
+      var s = document.createElement('script');
+      s.src = 'data/mediaindex.js?t=' + Date.now();
+      s.onload = function () { _sets = {}; _reloading = null; resolve(true); };
+      s.onerror = function () { _reloading = null; resolve(false); };
+      document.head.appendChild(s);
+    });
+    return _reloading;
+  }
+
+  /** 页面重新可见时比对一次清单指纹，变了就重载并通知各页重画。
+   *
+   *  为什么需要：mediaindex.js 是按"内容指纹"immutable 缓存的静态文件，**页面
+   *  不重新加载就永远用内存里那份旧的**。实测场景：装完公共素材 →（哪怕重启
+   *  过程序）停在原来的标签页、或从后台切回来，立绘页 / 播放器列表还是没头像，
+   *  必须硬刷新才出来（2026-11-17 用户反馈）。
+   *
+   *  服务端只 stat 一个文件，20 秒内重复触发会跳过，所以代价可以忽略。
+   */
+  var _chkAt = 0;
+  function checkFresh() {
+    if (document.hidden) return;
+    var now = Date.now();
+    if (now - _chkAt < 20000) return;
+    _chkAt = now;
+    fetch('api/mediaver', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.ver || d.ver === window.__MEDIA_VER) return;
+        reload().then(function (ok) {
+          if (!ok) return;
+          try {
+            window.dispatchEvent(new CustomEvent('media:reloaded'));
+          } catch (e) { /* 极老浏览器：没有 CustomEvent 就不通知 */ }
+        });
+      })
+      .catch(function () { /* 服务没起来 / 纯静态托管：静默跳过 */ });
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) checkFresh();
+  });
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) checkFresh();          // 从"后退缓存"恢复的页面
+  });
+
   window.MediaUI = {
     BANNER_H: BANNER_H,
     has: has, banner: banner, bannerKeep: bannerKeep,
     avatar: avatar, bannerHTML: bannerHTML,
     lazyImgs: lazyImgs, lazyRun: lazyRun,
+    reload: reload, checkFresh: checkFresh,
   };
   // 和后续 DOM 变化都接上，各页不需要自己调用。
   if (document.body) lazyImgs();

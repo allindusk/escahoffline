@@ -225,26 +225,36 @@ def main(argv=None) -> int:
         print(f"需要 Python 3.8+，当前 {ver}")
         return 2
 
-    # 「正在使用的 Python」不打印到窗口：普通用户看到某个解释器路径只会困惑
-    # （2026-11-17 用户要求窗口里不要再出现这类信息）。路径记进下面那行 boot 日志。
+    # 「根目录 / 正在使用的 Python」由 api.serve() 的启动横幅打印（2026-11-18 用户要求：
+    # 报错时得知道装在哪、跑的是哪个解释器）。这里那行 boot 日志仍然记一份，便于事后查。
 
     # 子进程统一管理：不弹黑窗；Ctrl+C / 关窗口时杀掉所有子进程，避免残留
     from . import log as applog, proc
     proc.install_signal_handlers()
     applog.log(f"boot v{paths.app_version()} python={ver} exe={sys.executable}", "boot")
 
-    # 这次是**从旧版本升级上来**吗？是就留一个标记，资源管理页打开时弹一次
-    # 「旧版立绘可能有问题，要不要现在修」——立绘是本机合成的产物，更新器不碰它，
-    # 用户不点这个修复就永远不会好。新装用户（没有旧版记录）不打扰。
+    # 这次是**从旧版本升级上来**吗？是、并且本机立绘确实是旧合成逻辑做的，就留一个
+    # 标记，资源管理页打开时弹一次「旧版立绘可能有问题，要不要现在修」——立绘是本机
+    # 合成的产物，更新器不碰它，用户不点这个修复就永远不会好。新装用户（没有旧版
+    # 记录）不打扰；已经修过的也不再问（旧写法只看「版本号变了」就弹，于是
+    # 1.1.6 -> 1.1.7 这种合成逻辑没动过的升级也会白问一次，2026-11-18 反馈）。
     try:
         _up = paths.note_run_version()
         if _up:
-            paths.save_json(
-                os.path.join(paths.USERDATA, "_archive", "stand_repair_prompt.json"),
-                {"from": _up["from"], "to": _up["to"],
-                 "at": time.strftime("%Y-%m-%d %H:%M:%S")})
-            applog.log(f"版本升级 {_up['from']} -> {_up['to']}：已登记立绘修复提示",
-                       "boot")
+            if paths.stand_repair_needed():
+                paths.save_json(paths.STAND_PROMPT_FILE,
+                                {"from": _up["from"], "to": _up["to"],
+                                 "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+                applog.log(f"版本升级 {_up['from']} -> {_up['to']}："
+                           "立绘是旧合成逻辑做的，已登记修复提示", "boot")
+            else:
+                # 版本变了但这个不用修：顺手清掉上次没点掉的旧标记（否则会接着弹）
+                try:
+                    os.remove(paths.STAND_PROMPT_FILE)
+                except OSError:
+                    pass
+                applog.log(f"版本升级 {_up['from']} -> {_up['to']}："
+                           "立绘已是当前合成逻辑，不提示", "boot")
     except Exception:                                          # noqa: BLE001
         pass
 
@@ -286,9 +296,10 @@ def main(argv=None) -> int:
                       applog.log_path()), "boot")
     except Exception:                                          # noqa: BLE001
         pass
+    # 路径含中文这类**警告**不进启动窗口（2026-11-18 用户：窗口里出现警告会让用户
+    # 以为程序坏了）：只落 app.log，页面上由 /api/state 的 warn 字段挂提示条。
     _warn = paths.path_warning()
     if _warn:
-        print("[!] " + _warn.replace("\n", "\n    "))
         applog.log(_warn.replace("\n", " "), "boot")
 
     port = a.port or int(paths.load_config().get("port") or 8000)

@@ -168,7 +168,11 @@ function toggleFullscreen() {
     || el.msRequestFullscreen;
   if (req) {
     try {
-      const p = req.call(el);
+      /* Android Chrome 认 navigationUI:'hide'：进入全屏后不显示它自己的导航栏/提示条，
+         省得系统那条"若要退出全屏…"压住我们自己的工具栏。其它浏览器忽略这个参数。 */
+      let p;
+      try { p = req.call(el, { navigationUI: 'hide' }); }
+      catch (e) { p = req.call(el); }
       // 被浏览器拒绝（没有用户手势等）时退化成伪全屏，别什么都不发生
       if (p && p.catch) p.catch(() => { el.classList.add('fsp'); onFsChange(); });
       return;
@@ -178,7 +182,8 @@ function toggleFullscreen() {
   onFsChange();
 }
 
-/* 显示控制条 + 退出按钮，并重置自动淡出计时 */
+/* 显示控制条 + 退出按钮，并重置自动淡出计时。
+   隐藏时长与「弹出时把对话框顶上去」都在设置 → 播放/手势里。 */
 function showFsChrome() {
   const el = document.getElementById('stageWrap');
   if (!el || !el.classList.contains('fs')) return;
@@ -187,21 +192,87 @@ function showFsChrome() {
   if (ctl) ctl.classList.add('show');
   if (ex) ex.classList.add('show');
   el.classList.remove('hidecur');
-  if (_fsChromeTimer) clearTimeout(_fsChromeTimer);
-  _fsChromeTimer = setTimeout(() => {
-    const w = document.getElementById('stageWrap');
-    if (!w || !w.classList.contains('fs')) return;
-    const c = document.getElementById('controls');
-    const e = document.getElementById('fsExit');
-    if (c) c.classList.remove('show');
-    if (e) e.classList.remove('show');
-    // 控制条淡出了，气泡不能还悬在画面上（拖动中的除外，那是手指/鼠标正在上面）
-    if (!seekDrag.on) hideSeekTip();
-    w.classList.add('hidecur');
-  }, 2600);
+  // 控制条这一帧才摆到位：先量一次，下一帧再量一次（旋转屏幕/换行时高度会变）
+  syncFsLift();
+  requestAnimationFrame(syncFsLift);
+  if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
+  const ms = Number(SET.fsBarHide);
+  if (ms > 0) _fsChromeTimer = setTimeout(hideFsChrome, ms);
 }
 
-function _fsShowCursor() {
+/* 收起控制条（自动淡出 / 再点一下画面 / 退出全屏都走这里） */
+function hideFsChrome() {
+  if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
+  const w = document.getElementById('stageWrap');
+  if (!w) return;
+  const c = document.getElementById('controls');
+  const e = document.getElementById('fsExit');
+  if (c) c.classList.remove('show');
+  if (e) e.classList.remove('show');
+  if (w.classList.contains('fs')) w.classList.add('hidecur');
+  // 控制条淡出了，气泡不能还悬在画面上（拖动中的除外，那是手指/鼠标正在上面）
+  if (!seekDrag.on) hideSeekTip();
+  syncFsLift();
+}
+
+/* 全屏工具栏：位置（上/下）与显示哪几组 —— 由设置决定，改完立刻生效 */
+function syncFsBarUi() {
+  const wrap = document.getElementById('stageWrap');
+  const ctl = document.getElementById('controls');
+  if (wrap) wrap.classList.toggle('barTop', (SET.fsBarPos || 'bottom') === 'top');
+  if (!ctl) return;
+  const on = String(SET.fsBarShow || 'play,prog,opt').split(',');
+  ctl.classList.toggle('hidePlay', on.indexOf('play') < 0);
+  ctl.classList.toggle('hideProg', on.indexOf('prog') < 0);
+  ctl.classList.toggle('hideOpt', on.indexOf('opt') < 0);
+  syncFsExitBtn();
+}
+
+/* 右上角那个「✕ 退出全屏」：工具栏里已经有「⛶ 退出」时就是多余的（2026-11-18 反馈），
+   只在用户把「选项」那一组藏掉（工具栏里没退出按钮了）时才露出来兜底。 */
+function syncFsExitBtn() {
+  const ex = document.getElementById('fsExit');
+  const ctl = document.getElementById('controls');
+  if (!ex || !ctl) return;
+  ex.classList.toggle('redundant', !ctl.classList.contains('hideOpt'));
+}
+
+/* 工具栏弹出时把对话框顶上去，别糊住字幕。
+   工具栏压在屏幕底部，对话框也贴着画面底部 —— 这里按**两者实际重叠多少**算位移，
+   再换算回 1280×720 的舞台坐标（#stage 整体被 scale 过，直接给屏幕像素会顶过头）。 */
+function syncFsLift() {
+  const st = document.getElementById('stage');
+  if (!st) return;
+  const wrap = document.getElementById('stageWrap');
+  const ctl = document.getElementById('controls');
+  let lift = 0;
+  if (wrap && ctl && wrap.classList.contains('fs')
+      && ctl.classList.contains('show')
+      && SET.fsBarLift !== false
+      && (SET.fsBarPos || 'bottom') === 'bottom') {
+    const sr = st.getBoundingClientRect();
+    const cr = ctl.getBoundingClientRect();
+    if (sr.height > 0 && cr.height > 0) {
+      const scale = sr.width / 1280 || 1;
+      const msgBottom = sr.bottom - (Number(SET.msgY) || 0) * scale;
+      const overlap = msgBottom - cr.top + 8;      // 留 8px 缝，别贴死
+      if (overlap > 0) lift = overlap / scale;
+      // 别把对话框顶出画面：最多留 12px 上边距
+      const maxLift = Math.max(0, 720 - (Number(SET.msgH) || 150) - 12);
+      lift = Math.min(lift, maxLift);
+    }
+  }
+  st.style.setProperty('--fsLift', (lift > 0 ? Math.round(lift) : 0) + 'px');
+}
+
+function _fsShowCursor(e) {
+  /* 触屏也会合成鼠标事件（点一下 → mousemove/mousedown/click），
+     以前这里无差别弹工具栏 —— 手机上"点一下画面就冒出工具栏"就是这么来的
+     （2026-11-18 反馈）。只认真正的鼠标移动。 */
+  if (e) {
+    if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+    if (e.mozInputSource === 1) return;          // Firefox：1 = 触摸
+  }
   showFsChrome();
 }
 
@@ -250,6 +321,7 @@ function _ensureFsExit() {
     b.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
     wrap.appendChild(b);
   }
+  syncFsExitBtn();
 }
 
 function onFsChange() {
@@ -267,20 +339,39 @@ function onFsChange() {
   _fsMoveControls(fs);
   if (fs && el) {
     _ensureFsExit();
-    el.addEventListener('mousemove', _fsShowCursor);
-    el.addEventListener('touchstart', _fsShowCursor, { passive: true });
-    showFsChrome();
+    /* 纯触屏（手机/平板）没鼠标可动，别绑 mousemove：绑了反而会被合成的
+       鼠标事件触发，一点画面就弹工具栏。这里直接查媒体查询（CAN_HOVER 定义在文件靠后）。 */
+    const hasHover = !!(window.matchMedia
+      && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+    if (hasHover) el.addEventListener('mousemove', _fsShowCursor);
+    /* 触屏**不在** touchstart / 进入全屏时自动弹工具栏：
+       单击要不要弹由「设置 → 播放/手势」决定。用户把单击设成「下一句」就是
+       不想被工具栏打断（2026-11-18 反馈），那进来时也别弹。 */
+    if ((SET.tapOnce || 'bar') === 'bar') showFsChrome();
   } else if (el) {
     el.removeEventListener('mousemove', _fsShowCursor);
-    el.removeEventListener('touchstart', _fsShowCursor);
     el.classList.remove('hidecur');
     if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
+    syncFsLift();                    // 退出全屏：对话框位置归零
   }
 }
 document.addEventListener('fullscreenchange', onFsChange);
 document.addEventListener('webkitfullscreenchange', onFsChange);
 const _btnFs = document.getElementById('btnFs');
 if (_btnFs) _btnFs.onclick = toggleFullscreen;
+/* 在全屏工具栏上点按钮时重置自动隐藏计时：
+   否则手机上"点开工具栏→看两秒→刚要点"就淡没了。 */
+(function bindFsBarKeepAlive() {
+  const ctl = document.getElementById('controls');
+  if (!ctl) return;
+  ctl.addEventListener('click', e => {
+    /* togglePlay() 内部是 $('#btnPlay').click() 这种**程序化点击**：
+       它也会冒泡到这里，导致"双击=暂停"刚收起的工具栏又被弹出来。
+       只有真人在工具栏上点的才算"正在用工具栏"。 */
+    if (!e.isTrusted) return;
+    if (_fsActive()) showFsChrome();
+  }, true);
+})();
 
 /* ================= 画面 ================= */
 /* 背景/CG 层「台上现在是哪张图」的状态。
@@ -4975,6 +5066,37 @@ function setRush(on) {
 /* 立绘相关（尺寸 / 纵向位置 / 水平偏移）已全部从设置页移除：
    游戏演出里立绘就是满高 720、落在官方落点上，任何缩放或位移都只会偏离原作，
    所以这几个键不再存在，CSS 里 var(--standY,0px) / var(--standOX,0px) 兜底即可。 */
+/* ---- 全屏 / 手机的操作手势 ---- */
+const TAP_ONCE_VALS = ['bar', 'next', 'pause'];
+const TAP_TWICE_VALS = ['pause', 'next', 'bar', 'none'];
+const SWIPE_VALS = ['off', 'line'];
+const HOLD_VALS = ['rush', 'off'];
+const BAR_SHOW_ALL = 'play,prog,opt';
+/* 键盘快捷键默认绑定。存的是 e.code 而不是 e.key：
+   这样换输入法、大小写、Shift 组合都不影响，"回车"永远是 Enter。
+   每个动作存成 SET 里的**一个标量字段**（kPlay / kNext…）而不是嵌套对象：
+   userdata/prefs.json 只接受标量（server/prefs.py 的 _clean_value），
+   放对象会整块丢掉 → 换设备/清缓存后键位就回默认了。
+
+   一个动作可以绑**多个键**，用逗号拼在同一个字段里（如 'Enter,ArrowDown'）：
+   设置页里会显示成几个并排的键位框，中间用竖线隔开 —— 它们是"任一都能用"，
+   不是组合键。 */
+const KEY_FIELDS = {
+  play: 'kPlay', next: 'kNext', prev: 'kPrev', rush: 'kRush',
+  settings: 'kSettings', fullscreen: 'kFullscreen', lang: 'kLang',
+  sidebar: 'kSidebar', hist: 'kHist',
+};
+const DEFAULT_KEYS = {
+  play: 'Space,KeyP',
+  next: 'Enter,ArrowDown,ArrowRight',
+  prev: 'ArrowUp,ArrowLeft',
+  rush: 'KeyK',
+  settings: 'KeyS',
+  fullscreen: 'KeyF',
+  lang: 'KeyL',
+  sidebar: 'BracketLeft',
+  hist: 'BracketRight',
+};
 const DEFAULTS = { alpha: 90, fs: 21, typeRate: 1, showWin: true,
               bgmVol: 0.5, seVol: 0.5, voiceVol: 0.5, fit: '1x',
               instantText: false, pausePerChar: 90, pauseBase: 400,
@@ -4996,7 +5118,19 @@ const DEFAULTS = { alpha: 90, fs: 21, typeRate: 1, showWin: true,
               // avColor / avColor2 = 「自定义」渐变的两端色
               avRing: 'gold', avTone: 'dialog',
               avColor: '#2f6fd0', avColor2: '#8fd3f4',
-              avSize: 54, avGap: 2, avX: 0, avY: 0 };
+              avSize: 54, avGap: 2, avX: 0, avY: 0,
+              /* 全屏 / 手机点按与手势（桌面鼠标不受影响）。
+                 默认单击「下一句」：一点就翻页，工具栏交给双击（暂停/继续时一起弹）。 */
+              tapOnce: 'next', tapTwice: 'pause', holdAct: 'rush', swipeX: 'line',
+              /* 全屏工具栏：位置 / 显示哪几组 / 弹出时是否顶起对话框 / 自动隐藏毫秒（0=不隐藏） */
+              fsBarPos: 'bottom', fsBarShow: BAR_SHOW_ALL,
+              fsBarLift: true, fsBarHide: 4000,
+              /* 键盘快捷键：一个动作一个字段（标量，才能跨设备同步）；
+                 一个动作多个键就用逗号拼在一起（见 DEFAULT_KEYS） */
+              kPlay: 'Space,KeyP', kNext: 'Enter,ArrowDown,ArrowRight',
+              kPrev: 'ArrowUp,ArrowLeft', kRush: 'KeyK',
+              kSettings: 'KeyS', kFullscreen: 'KeyF', kLang: 'KeyL',
+              kSidebar: 'BracketLeft', kHist: 'BracketRight' };
 /* 工作副本：所有改动作用在 SET 上，恢复默认时 Object.assign(SET, DEFAULTS) 即可 */
 const SET = { ...DEFAULTS };
 
@@ -5081,6 +5215,11 @@ function applySettings() {
   if (bgmAudio) bgmAudio.volume = Math.min(1, SET.bgmVol);
   if (loopSe) loopSe.volume = Math.min(1, SET.seVol);
   if (ST.voice) ST.voice.volume = Math.min(1, SET.voiceVol);
+  /* 全屏工具栏 / 快捷键提示：改完设置立刻反映到控制条与各处 title 上
+     （「?」的悬停说明、设置/全屏按钮的括号里的键都从绑定表实时算）。 */
+  syncFsBarUi();
+  syncFsLift();
+  syncKeyHints();
   localStorage.setItem('escah_set', JSON.stringify(SET));
   /* 同步层：SET 里哪些键变了就给哪个打时间戳，推给 userdata/prefs.json。
      换设备/换浏览器登录同一台机器时，这些设置会跟着回来（用户 2026-11-03 要求）。
@@ -5116,6 +5255,21 @@ function syncSettingControls() {
   $('#setPb').value = SET.pauseBase ?? 400;
   $('#setPav').value = SET.pauseAfterVoice ?? 250;
   $('#setPartial').checked = !!SET.showPartial;
+  /* 播放/手势页：下拉框 + 工具栏按钮组 + 改键按钮 */
+  const selVal = (sel, v) => { const el = $(sel); if (el) el.value = v; };
+  selVal('#setTapOnce', SET.tapOnce || 'bar');
+  selVal('#setTapTwice', SET.tapTwice || 'pause');
+  selVal('#setHoldAct', SET.holdAct || 'rush');
+  selVal('#setSwipeX', SET.swipeX || 'line');
+  selVal('#setFsBarPos', SET.fsBarPos || 'bottom');
+  selVal('#setFsBarHide', String(SET.fsBarHide == null ? 4000 : SET.fsBarHide));
+  const barOn = String(SET.fsBarShow || BAR_SHOW_ALL).split(',');
+  document.querySelectorAll('#settings .kchecks input[data-bar]').forEach(inp => {
+    inp.checked = barOn.indexOf(inp.dataset.bar) >= 0;
+  });
+  const lift = $('#setFsBarLift');
+  if (lift) lift.checked = SET.fsBarLift !== false;
+  syncKeyButtons();
   const hp = $('#setHoldPart5');
   if (hp) hp.checked = SET.holdLastPart !== false;
   const ux = $('#setUseX2');
@@ -5232,6 +5386,10 @@ function watchSettingsHeight() {
    不在任何设置页的字段（showWin 在控制栏、sortBy/rarSel 在侧栏）不列入。 */
 const SET_PAGE_FIELDS = {
   view:   ['fit', 'holdLastPart', 'showPartial', 'useX2'],
+  play:   ['tapOnce', 'tapTwice', 'holdAct', 'swipeX',
+           'fsBarPos', 'fsBarShow', 'fsBarLift', 'fsBarHide',
+           'kPlay', 'kNext', 'kPrev', 'kRush',
+           'kSettings', 'kFullscreen', 'kLang', 'kSidebar'],
   window: ['msgBox', 'msgBg', 'msgColor', 'msgFont', 'msgAlign',
            'alpha', 'fs', 'msgLH', 'msgH', 'msgY', 'msgStroke', 'msgX'],
   name:   ['nameX', 'nameY', 'nameAlign',
@@ -5314,6 +5472,34 @@ function loadSettings() {
   if (!AV_TONE_LIST.includes(SET.avTone)) SET.avTone = 'dialog';
   SET.avColor = avHex(SET.avColor, '#2f6fd0');
   SET.avColor2 = avHex(SET.avColor2, '#8fd3f4');
+  /* 播放/手势：枚举值兜底（旧配置没这些键 / 手改过 localStorage 都不会炸） */
+  if (TAP_ONCE_VALS.indexOf(SET.tapOnce) < 0) SET.tapOnce = 'next';
+  if (TAP_TWICE_VALS.indexOf(SET.tapTwice) < 0) SET.tapTwice = 'pause';
+  /* 兜底：「弹出工具栏」和「暂停/继续」都会把工具栏叫出来；只有单击、双击都不管
+     工具栏（双击=不响应）时才没有出口，这时把双击补成弹出工具栏。 */
+  if (SET.tapOnce !== 'bar' && SET.tapTwice === 'none') SET.tapTwice = 'bar';
+  if (HOLD_VALS.indexOf(SET.holdAct) < 0) SET.holdAct = 'rush';
+  if (SWIPE_VALS.indexOf(SET.swipeX) < 0) SET.swipeX = 'line';
+  if (SET.fsBarPos !== 'top') SET.fsBarPos = 'bottom';
+  SET.fsBarShow = String(SET.fsBarShow || BAR_SHOW_ALL)
+    .split(',').filter(v => v === 'play' || v === 'prog' || v === 'opt').join(',')
+    || BAR_SHOW_ALL;
+  SET.fsBarLift = SET.fsBarLift !== false;
+  SET.fsBarHide = [0, 2600, 4000].indexOf(+SET.fsBarHide) >= 0 ? +SET.fsBarHide : 4000;
+  /* 兼容开发期的嵌套写法（SET.keys 对象）：搬进扁平字段后删掉，别再往 prefs 推对象 */
+  if (SET.keys && typeof SET.keys === 'object') {
+    for (const a in KEY_FIELDS) {
+      if (typeof SET.keys[a] === 'string') SET[KEY_FIELDS[a]] = SET.keys[a];
+    }
+    delete SET.keys;
+  }
+  /* 升级：以前一个动作只存一个键（Space/Enter/ArrowUp），值还等于旧默认的说明用户
+     没改过 → 换成"多键"新默认（空格+P / 回车+↓+→ / ↑+←）。改过的（比如已绑成 N）不动。 */
+  const LEGACY_KEYS = { play: 'Space', next: 'Enter', prev: 'ArrowUp' };
+  for (const a in LEGACY_KEYS) {
+    if (SET[KEY_FIELDS[a]] === LEGACY_KEYS[a]) SET[KEY_FIELDS[a]] = DEFAULT_KEYS[a];
+  }
+  sanitizeKeys();
   syncSettingControls();
   applySettings();
   /* 老用户第一次升级到「设置也同步」的版本：本机设置还没登记进偏好层，
@@ -5543,20 +5729,277 @@ function clearSeekPreview() {
   });
 })();
 
+/* ================= 键盘快捷键 =================
+ * 绑定存在 SET 的 kXxx 字段里（可在「设置 → 播放/手势」里改），所有显示都从这里算：
+ *   · 控制条最右边「?」的悬停文字与弹出的快捷键卡片
+ *   · 「⚙ / ⛶ 全屏 / 收起侧栏」按钮括号里的键位
+ *   · 手动模式提示、新手引导文案
+ * 这样改键之后不会出现"卡片写着空格、实际却是 N"这种自相矛盾。 */
+const KEY_ACTION_NAME = {
+  play: ['key.play', '暂停 / 继续'],
+  next: ['key.next', '下一句'],
+  prev: ['key.prev', '上一句'],
+  rush: ['key.rush', '快进'],
+  settings: ['key.settings', '显示设置'],
+  fullscreen: ['key.fullscreen', '全屏'],
+  lang: ['key.lang', '切换语言'],
+  sidebar: ['key.sidebar', '收起 / 展开左侧栏'],
+  hist: ['key.hist', '收起 / 展开右侧栏'],
+};
+/* 改键时要挡住的键：浏览器自己的功能（刷新/全屏/切标签）不该被抢 */
+const KEY_BLOCKED = ['Tab', 'F5', 'F11', 'F12', 'PrintScreen'];
+
+/** 某个动作绑的键（数组，第一个是主键）；缺字段就退回默认 */
+function keySlots(action) {
+  const v = SET ? SET[KEY_FIELDS[action]] : '';
+  const raw = (typeof v === 'string' && v) ? v : (DEFAULT_KEYS[action] || '');
+  const out = [];
+  for (const c of String(raw).split(',')) {
+    const s = c.trim();
+    if (s && out.indexOf(s) < 0) out.push(s);
+  }
+  return out;
+}
+
+/** 某个动作的键位写回 SET（逗号拼成标量：prefs 只收标量，见 server/prefs.py） */
+function setKeySlots(action, codes) {
+  const seen = {};
+  const out = [];
+  for (const c of codes) {
+    if (!c || seen[c]) continue;
+    seen[c] = 1;
+    out.push(c);
+  }
+  SET[KEY_FIELDS[action]] = out.join(',');
+}
+
+/** 清洗绑定：一个键只能属于一个动作（重复的只留先出现的），空动作补默认 */
+function sanitizeKeys() {
+  const used = {};
+  for (const a in KEY_FIELDS) {
+    const keep = [];
+    for (const c of keySlots(a)) {
+      if (used[c]) continue;
+      used[c] = 1;
+      keep.push(c);
+    }
+    setKeySlots(a, keep);
+  }
+  // 空了的动作（脏数据/手改 localStorage）补默认里还没被占用的键
+  for (const a in KEY_FIELDS) {
+    if (keySlots(a).length) continue;
+    const keep = [];
+    for (const c of String(DEFAULT_KEYS[a] || '').split(',')) {
+      if (!c || used[c]) continue;
+      used[c] = 1;
+      keep.push(c);
+    }
+    setKeySlots(a, keep);
+  }
+}
+
+/** code → 动作名 */
+function keyMap() {
+  const map = {};
+  for (const a in KEY_FIELDS) {
+    for (const c of keySlots(a)) {
+      if (!map[c]) map[c] = a;
+    }
+  }
+  // 小键盘回车跟主键盘回车同义：不占一个键位框，但照样能用
+  if (map.Enter && !map.NumpadEnter) map.NumpadEnter = map.Enter;
+  return map;
+}
+const keyActionOf = code => keyMap()[code] || null;
+
+/** 某个动作当前可用的所有键，主键在前 */
+function activeKeyCodes(action) {
+  return keySlots(action);
+}
+
+/** e.code → 给人看的键名（中文/日文都走 ui.json，符号类直接给字符） */
+function keyLabelOf(code) {
+  if (!code) return '—';
+  const fixed = {
+    Space: L10N.t('key.space', '空格'),
+    Enter: L10N.t('key.enter', '回车'),
+    NumpadEnter: L10N.t('key.enter', '回车'),
+    Backspace: L10N.t('key.backspace', '退格'),
+  };
+  if (fixed[code]) return fixed[code];
+  const sym = {
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'",
+    Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+    Minus: '-', Equal: '=', Backquote: '`', Escape: 'Esc', Tab: 'Tab',
+  };
+  if (sym[code]) return sym[code];
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return L10N.t('key.numpad', '小键盘 ') + code.slice(6);
+  if (/^F\d{1,2}$/.test(code)) return code;
+  return code;
+}
+
+/** 一个动作的键位说明，如「空格 / P」「回车 / ↓ / →」 */
+function keyLabelsOf(action, sep) {
+  const seen = {};
+  const out = [];
+  for (const c of activeKeyCodes(action)) {
+    if (c === 'NumpadEnter') continue;          // 和回车重复，不占字数
+    const l = keyLabelOf(c);
+    if (seen[l]) continue;
+    seen[l] = 1; out.push(l);
+  }
+  return out.join(sep || ' / ');
+}
+
+const keyActionName = a => (KEY_ACTION_NAME[a]
+  ? L10N.t(KEY_ACTION_NAME[a][0], KEY_ACTION_NAME[a][1]) : a);
+
+/** 把所有"按键提示"文字按当前绑定重写一遍（切语言也要重跑一遍） */
+function syncKeyHints() {
+  const btnKeys = document.getElementById('btnKeys');
+  if (btnKeys) {
+    btnKeys.title = L10N.t('ctrl.hotkeys',
+      '{play} 暂停 · {next} 下一句 · {prev} 上一句 · 按住 {rush} 快进',
+      { play: keyLabelsOf('play'), next: keyLabelsOf('next'),
+        prev: keyLabelsOf('prev'), rush: keyLabelsOf('rush') });
+  }
+  const btnSet = document.getElementById('btnSet');
+  if (btnSet) {
+    btnSet.title = L10N.t('ctrl.settings', '显示设置（{key}）',
+      { key: keyLabelsOf('settings') });
+  }
+  const btnFs = document.getElementById('btnFs');
+  if (btnFs) {
+    btnFs.title = L10N.t('ctrl.fs', '全屏（{key}）', { key: keyLabelsOf('fullscreen') });
+  }
+  const sToggle = document.getElementById('sToggle');
+  if (sToggle) {
+    sToggle.title = L10N.t('ctrl.sidebar', '收起 / 展开左侧栏（{key}）',
+      { key: keyLabelsOf('sidebar') });
+  }
+  const hToggle = document.getElementById('hToggle');
+  if (hToggle) {
+    hToggle.title = L10N.t('ctrl.hist', '收起 / 展开右侧栏（{key}）',
+      { key: keyLabelsOf('hist') });
+  }
+  syncKeyButtons();
+}
+
+/** 设置页里「改键」按钮上的键名：一个动作一个框，几个键就几个框（竖线分隔） */
+function syncKeyButtons() {
+  document.querySelectorAll('#settings .kkeys').forEach(host => {
+    const a = host.dataset.k;
+    if (!a) return;
+    // 正在等按键的那个框别动，否则"请按键…"会被立刻覆盖掉
+    const waiting = host.querySelector('.kbind.wait');
+    if (waiting) return;
+    const slots = keySlots(a);
+    host.innerHTML = slots.map((c, i) =>
+      `<button type="button" class="kbind" data-k="${a}" data-i="${i}">`
+      + `${esc(keyLabelOf(c))}</button>`).join('<i class="ksep" aria-hidden="true"></i>');
+  });
+}
+
+/* ---- 改键：点按钮 → 下一个按键即生效 ---- */
+let _keyCapBtn = null, _keyCapHandler = null;
+function endKeyCapture() {
+  if (_keyCapHandler) {
+    window.removeEventListener('keydown', _keyCapHandler, true);
+    _keyCapHandler = null;
+  }
+  const btn = _keyCapBtn;
+  _keyCapBtn = null;
+  if (btn) { btn.classList.remove('wait'); syncKeyButtons(); }
+}
+
+function startKeyCapture(btn) {
+  const act = btn.dataset.k;
+  const idx = Math.max(0, parseInt(btn.dataset.i, 10) || 0);
+  endKeyCapture();                 // 可能重画过整行，下面按 动作+序号 重新取一次元素
+  const live = document.querySelector(
+    `#settings .kbind[data-k="${act}"][data-i="${idx}"]`) || btn;
+  _keyCapBtn = live;
+  live.classList.add('wait');
+  live.textContent = L10N.t('set.keyWait', '请按键…');
+  _keyCapHandler = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    const code = e.code;
+    // Esc = 放弃；单独按修饰键不算按键
+    if (code === 'Escape') { endKeyCapture(); return; }
+    if (/^(Shift|Control|Alt|Meta|OS)(Left|Right)?$/.test(code)) return;
+    if (KEY_BLOCKED.indexOf(code) >= 0) {
+      toast(L10N.t('toast.keyReserved', '这个键浏览器要用，换一个吧'));
+      return;
+    }
+    /* 同一个键只能属于一个动作：
+       别的动作还有别的键可用时，直接"挪"过来（顺手、符合直觉）；
+       那动作只剩这一个键时不动它，让用户自己去改，免得把功能弄没。 */
+    let moved = null;
+    for (const a in KEY_FIELDS) {
+      if (a === act) continue;
+      const slots = keySlots(a);
+      if (slots.indexOf(code) < 0) continue;
+      if (slots.length < 2) {
+        toast(L10N.t('toast.keyConflict', '「{k}」已经分配给「{a}」，请先改那一个',
+          { k: keyLabelOf(code), a: keyActionName(a) }));
+        return;
+      }
+      setKeySlots(a, slots.filter(c => c !== code));
+      moved = a;
+      break;
+    }
+    const mine = keySlots(act).filter(c => c !== code);
+    mine[idx] = code;                       // 覆盖被点的那个框；越界时自动追加
+    setKeySlots(act, mine.filter(Boolean));
+    endKeyCapture();
+    applySettings();
+    toast(moved
+      ? L10N.t('toast.keyMoved', '「{k}」已从「{a}」改到这里（原处不再响应）',
+        { k: keyLabelOf(code), a: keyActionName(moved) })
+      : L10N.t('toast.keySaved', '快捷键已改为 {k}', { k: keyLabelOf(code) }));
+  };
+  window.addEventListener('keydown', _keyCapHandler, true);
+}
+/* 键位框是 syncKeyButtons() 动态重画的，所以用事件代理，别逐个 bind */
+const _setPanel = $('#settings');
+if (_setPanel) {
+  _setPanel.addEventListener('click', e => {
+    const b = e.target && e.target.closest && e.target.closest('.kbind');
+    if (!b) return;
+    e.preventDefault();
+    startKeyCapture(b);
+  });
+}
+/* 改键过程中点了别处 = 放弃（不然下一次随便打字就被绑走） */
+document.addEventListener('click', e => {
+  if (!_keyCapBtn) return;
+  if (e.target && e.target.closest && e.target.closest('.kbind')) return;
+  endKeyCapture();
+}, true);
+
 /* ================= 快捷键帮助（最右边的 ? 按钮） ================= */
 /* 原来这个按钮只有 title，**没有 onclick**，用户点了没反应。
-   现在点一下弹一张小卡片，把播放器实际绑定的快捷键列清楚。 */
-const KEY_HELP = [
-  ['空格 / P', 'keys.play', '暂停 · 继续'],
-  ['回车 / ↓ / →', 'keys.next', '下一句'],
-  ['↑ / ←', 'keys.prev', '上一句'],
-  ['按住 K', 'keys.rush', '快进'],
-  ['点画面', 'keys.click', '暂停 · 继续'],
-  ['S', 'keys.set', '显示设置'],
-  ['F', 'keys.fs', '全屏'],
-  ['L', 'keys.lang', '切换语言'],
-  ['Esc', 'keys.esc', '关闭浮层'],
-];
+   现在点一下弹一张小卡片，把播放器实际绑定的快捷键列清楚（内容按绑定表实时生成）。 */
+function keyHelpRows() {
+  const rows = [];
+  ['play', 'next', 'prev', 'rush', 'settings', 'fullscreen', 'lang', 'sidebar', 'hist']
+    .forEach(a => rows.push([keyLabelsOf(a), KEY_ACTION_NAME[a][0], KEY_ACTION_NAME[a][1]]));
+  /* 触屏全屏的点按/滑动：文案跟着设置走，别写死"点画面=暂停" */
+  const tapName = v => ({
+    bar: L10N.t('opt.tap.bar', '弹出工具栏（不暂停）'),
+    next: L10N.t('opt.tap.next', '下一句'),
+    pause: L10N.t('opt.tap.pause', '暂停 / 继续（同时弹出工具栏）'),
+  })[v] || '';
+  rows.push(['点画面', 'keys._tapOnce', tapName(SET.tapOnce)]);
+  if (SET.tapTwice !== 'none') rows.push(['连点两下', 'keys._tapTwice', tapName(SET.tapTwice)]);
+  if (SET.swipeX === 'line') rows.push(['左右滑动', 'keys._swipe', L10N.t('keys.swipe', '上一句 / 下一句')]);
+  rows.push(['Esc', 'keys.esc', '关闭浮层']);
+  return rows;
+}
 
 function closeKeyHelp() {
   const t = $('#keyTip');
@@ -5569,8 +6012,9 @@ function toggleKeyHelp() {
   const tip = document.createElement('div');
   tip.id = 'keyTip';
   tip.innerHTML = `<div class="kt-h">${L10N.t('keys.title', '快捷键')}</div>`
-    + KEY_HELP.map(([k, key, def]) =>
-      `<div class="kt-r"><kbd>${esc(k)}</kbd><span>${esc(L10N.t(key, def))}</span></div>`).join('');
+    + keyHelpRows().map(([k, key, def]) =>
+      `<div class="kt-r"><kbd>${esc(k)}</kbd><span>${esc(L10N.t(key, def))}</span></div>`).join('')
+    + `<div class="kt-n">${esc(L10N.t('keys.editNote', '键位可以在「设置 → 播放/手势」里改'))}</div>`;
   document.body.appendChild(tip);
   const b = btn.getBoundingClientRect();
   tip.style.right = Math.max(8, Math.round(innerWidth - b.right)) + 'px';
@@ -5771,6 +6215,41 @@ $('#setTextMode').onchange = e => { SET.instantText = e.target.value === 'instan
 $('#setPpc').oninput = e => { SET.pausePerChar = +e.target.value; applySettings(); };
 $('#setPb').oninput = e => { SET.pauseBase = +e.target.value; applySettings(); };
 $('#setPav').oninput = e => { SET.pauseAfterVoice = +e.target.value; applySettings(); };
+
+/* ---- 播放/手势：点按、滑动、全屏工具栏 ---- */
+[['#setTapOnce', 'tapOnce'], ['#setTapTwice', 'tapTwice'], ['#setHoldAct', 'holdAct'],
+ ['#setSwipeX', 'swipeX'], ['#setFsBarPos', 'fsBarPos']].forEach(([sel, key]) => {
+  const el = $(sel);
+  if (el) el.onchange = e => { SET[key] = e.target.value; applySettings(); };
+});
+/* 「弹出工具栏」和「暂停/继续」都会把工具栏叫出来，单击换成「下一句」时
+   不用再自动改双击了，用户选什么就是什么（由上面那组通用 onchange 处理）。 */
+if ($('#setFsBarHide')) {
+  $('#setFsBarHide').onchange = e => {
+    SET.fsBarHide = +e.target.value || 0;
+    applySettings();
+    // 正在全屏看着：立刻按新时长重排一次，改完马上能感觉到
+    if (_fsActive()) showFsChrome();
+  };
+}
+if ($('#setFsBarLift')) {
+  $('#setFsBarLift').onchange = e => { SET.fsBarLift = e.target.checked; applySettings(); };
+}
+/* 工具栏按钮组：至少留一组，否则工具栏弹出来是空的 */
+document.querySelectorAll('#settings .kchecks input[data-bar]').forEach(inp => {
+  inp.onchange = () => {
+    const on = Array.prototype.slice
+      .call(document.querySelectorAll('#settings .kchecks input[data-bar]'))
+      .filter(x => x.checked).map(x => x.dataset.bar);
+    if (!on.length) {
+      inp.checked = true;
+      toast(L10N.t('toast.barNeedOne', '工具栏至少要留一组按钮'));
+      return;
+    }
+    SET.fsBarShow = on.join(',');
+    applySettings();
+  };
+});
 
 /* ================= 剧情来源（侧栏列表） ================= */
 /* SRC 只决定「左侧列表显示哪一类剧情」，与正在播放的内容无关；
@@ -5977,13 +6456,20 @@ function noteProgress() {
 let CLOUD_ONLY = [];        // 云端有、本地没装的**角色**（INDEX 里没有）
 let CLOUD_ADV = [];         // 同上，但主线/活动/其他（ADV 里没有）
 let _cloudLoaded = false;
+let _cloudSig = '';         // 上次画进侧栏的云端清单（变了才重画，免得白闪）
 
 function allChars() {
-  return CLOUD_ONLY.length ? INDEX.concat(CLOUD_ONLY) : INDEX;
+  if (!CLOUD_ONLY.length) return INDEX;
+  /* 索引被原地更新过（别处装完剧情，见 ESC.watchData）时，这些 id 已经在 INDEX 里，
+     再 concat 会出现两行同名角色 → 按 id 去一次重。 */
+  const have = new Set(INDEX.map(c => +c.id));
+  return INDEX.concat(CLOUD_ONLY.filter(c => !have.has(+c.id)));
 }
 
 function allAdv() {
-  return CLOUD_ADV.length ? ADV.concat(CLOUD_ADV) : ADV;
+  if (!CLOUD_ADV.length) return ADV;
+  const have = new Set(ADV.map(a => a.key));
+  return ADV.concat(CLOUD_ADV.filter(a => !have.has(a.key)));
 }
 
 /** 云端单元 key → 侧栏用的"伪 advindex 条目"（结构对齐 advindex.js） */
@@ -6008,16 +6494,34 @@ function cloudAdvRow(key) {
  *  要求报清楚**哪一类、标题叫什么**），所以这里把名字直接列出来；超过 4 条用
  *  「等 N 个」收口 —— 标题本身可能很长，全列出来 toast 会撑成一堵墙。
  *  标题一律走 ESC.storyTitle（"活动剧情 第42话" 这种自带分类名）。 */
-function cloudTip(countText, chars, advs) {
+function cloudTip(items) {
   const clean = s => String(s || '').replace('（未接入）', '');
-  const names = [];
-  advs.forEach(a => names.push(clean(a.title) || clean(storyTitle(a.key))));
-  chars.forEach(c => names.push(clean(storyTitle('char_' + c.id))));
+  const names = items.map(it => clean(it.name));
+  const chars = items.filter(it => it.kind === 'char').length;
+  const advs = items.length - chars;
+  const countText = [chars ? chars + ' 个角色' : '', advs ? advs + ' 部剧情' : '']
+    .filter(Boolean).join('、');
   const MAX = 4;
   const list = names.slice(0, MAX).map(n => '「' + n + '」').join('、')
     + (names.length > MAX ? ' 等 ' + names.length + ' 个' : '');
   return '发现 ' + countText + '还没下载：' + list
     + '。到「资源管理」装上就会出现在这里';
+}
+
+/* 这条提示**只报新东西，且只报一次**（2026-11-18 用户反馈："你在强制用户安装吗，
+   不装就持续骚扰？"）。原来的实现在每次页面加载时都对着"云端有、本地没装"全集
+   喊一遍 —— 用户故意不装的 2 部剧情于是每翻一页就弹一次。
+   现在：记住上次报过的 key（pref ``ui.cloudTipSeen``），只有**这次多出来的**才
+   提示；第一次跑（没有记录）静默记下不弹。列表里的"未下载"条目照旧显示，
+   想装的时候随时能点，不靠弹窗催。 */
+function cloudSeenKeys() {
+  const raw = (UD && UD.prefValue) ? UD.prefValue('ui', 'cloudTipSeen', '') : '';
+  return new Set(String(raw || '').split(',').filter(Boolean));
+}
+function cloudMarkSeen(keys) {
+  if (!UD || !UD.syncPref) return;
+  // 只存**当前**这批：装掉的自然从记录里消失，将来若又缺了会重新提示一次
+  UD.syncPref('ui', 'cloudTipSeen', keys.join(','));
 }
 
 async function loadCloudChars() {
@@ -6050,19 +6554,37 @@ async function loadCloudChars() {
       if (!isMissing(String(k))) return;         // 装了、只是索引没登记 → 不谎报未下载
       extraAdv.push(cloudAdvRow(String(k)));
     });
-    const msgs = [];
-    if (extra.length) {
-      CLOUD_ONLY = extra;
-      msgs.push(extra.length + ' 个角色');
-    }
-    if (extraAdv.length) {
-      CLOUD_ADV = extraAdv;
-      msgs.push(extraAdv.length + ' 部剧情');
-    }
-    if (msgs.length) {
+    /* 一律覆盖（不是"有新的才写"）：装掉的那几部必须从"云端有、本地没装"里消失，
+       否则索引更新后会出现同一部剧情两行（一行真索引、一行还挂在 cloud 上）。 */
+    CLOUD_ONLY = extra;
+    CLOUD_ADV = extraAdv;
+    const items = [];
+    extra.forEach(c => items.push({
+      kind: 'char', key: 'char_' + c.id,
+      name: storyTitle('char_' + c.id),
+    }));
+    extraAdv.forEach(a => items.push({
+      kind: 'adv', key: a.key, name: a.title || storyTitle(a.key),
+    }));
+    /* 这批有变化就重画（装掉一部之后也要重画，才能把"未下载"那几行去掉） */
+    const sig = items.map(it => it.key).join('|');
+    if (sig !== _cloudSig) {
+      _cloudSig = sig;
       renderSidebar((($('#search') || {}).value) || '');
       updateCnt();                  // 分类按钮上的总数跟着加上这些
-      toast(cloudTip(msgs.join('、'), extra, extraAdv));
+    }
+    /* 只提示**这次新出现的**，而且只提示一次（见 cloudSeenKeys 的说明）：
+       用户故意不装的那几部不该每翻一页就弹一次。 */
+    const seen = cloudSeenKeys();
+    const firstRun = !seen.size;     // 头一次跑：静默记下，别拿全集骚扰老用户
+    if (items.length) {
+      if (!firstRun) {
+        const fresh = items.filter(it => !seen.has(it.key));
+        if (fresh.length) toast(cloudTip(fresh));
+      }
+      cloudMarkSeen(items.map(it => it.key));
+    } else if (seen.size) {
+      cloudMarkSeen([]);             // 全装完了：清掉记录，下次有新的还会提示
     }
   } catch (e) { /* 纯静态打开时没有服务端，忽略 */ }
 }
@@ -7425,6 +7947,7 @@ function updateLangBtn() {
 
 function refreshForLang() {
   updateLangBtn();
+  syncKeyHints();            // 键名（空格/スペース）与各处悬停说明跟着语言重画
   if (!S.data) return;
   const keep = ST.curLine;              // 保住文本列表的高亮位置
   buildLineIndex();
@@ -8405,28 +8928,126 @@ $('#btnNext').onclick = () => {
   const n = ((ST.part || 0) + 1) % (S.data?.parts.length || 1);
   playPart(n, { noResume: true });
 };
-// 点击舞台 = 暂停/播放（与 P 键一致）
-let _lastStageTap = 0;
-$('#stage').onclick = () => {
-  const wrap = document.getElementById('stageWrap');
-  const inFs = !!(wrap && wrap.classList.contains('fs'));
-  /* 触屏 + 全屏：单击只呼出控制条，双击才暂停/继续。
-     否则每次想看一眼按钮都会顺手把播放暂停掉（用户 2026-11-02 反馈）。
-     桌面仍保持单击暂停 —— 鼠标用户已经习惯那样。 */
-  if (inFs && !CAN_HOVER) {
+/* ================= 舞台点按 / 手势 =================
+ * 桌面（有鼠标）：点画面还是暂停/继续，和以前一样 —— 鼠标用户已经习惯了。
+ * 触屏 + 全屏：单击 / 双击 / 长按 / 左右滑动 全部可在「设置 → 播放/手势」改。
+ *   默认单击 = 下一句（galgame 习惯，一点就翻页）；想先看工具栏再翻句的用户
+ *   可以改成「弹出工具栏」，双击的「暂停/继续」也会把工具栏一起弹出来。
+ * 单击是**立刻执行**、不延迟等双击：galgame 是连点推进，等 200ms 会明显发涩；
+ * 双击只决定"第二下做什么"（第一下的动作不撤销）。
+ */
+let _lastStageTap = 0, _gestureGuard = 0;
+let _holdTimer = 0, _holdFired = false, _swipe = null;
+
+function _fsTouchMode() {
+  const w = document.getElementById('stageWrap');
+  return !!(w && w.classList.contains('fs')) && !CAN_HOVER;
+}
+function _fsBarShown() {
+  const c = document.getElementById('controls');
+  return !!(c && c.classList.contains('show'));
+}
+function fsTapAction(kind) {
+  const act = (kind === 'twice') ? SET.tapTwice : SET.tapOnce;
+  if (act === 'next') {
+    nextLine();
+    // 工具栏开着的时候点画面继续读：顺手收起来，别让它一直杵在字幕上
+    if (_fsBarShown()) hideFsChrome();
+    return;
+  }
+  if (act === 'pause') {
+    togglePlay();
+    /* 暂停/继续也把工具栏一起弹出来，显示多久交给「自动隐藏」（showFsChrome
+       内部每次都按 SET.fsBarHide 重排计时）。不弹的话用户暂停后找不到按钮。 */
+    showFsChrome();
+    return;
+  }
+  if (act === 'bar') {
+    // 单击「弹出工具栏」再点一下 = 收起（视频播放器通用交互）
+    if (kind === 'once' && _fsBarShown()) hideFsChrome();
+    else showFsChrome();
+  }
+}
+
+(function bindStageGestures() {
+  const stage = document.getElementById('stage');
+  if (!stage) return;
+  const HOLD_MS = 460;
+
+  const cancelHold = () => {
+    if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = 0; }
+  };
+
+  stage.addEventListener('pointerdown', e => {
+    if (!_fsTouchMode()) return;
+    if (e.pointerType === 'mouse') return;
+    _swipe = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId };
+    /* 长按快进：和"按住 K"同一套逻辑（手动模式连点推进、自动模式清等待） */
+    if (SET.holdAct === 'rush' && !ST.rush) {
+      _holdFired = false;
+      cancelHold();
+      _holdTimer = setTimeout(() => {
+        _holdTimer = 0;
+        _holdFired = true;
+        _gestureGuard = Date.now();      // 松手后浏览器还会补一次 click，别让它翻句
+        setRush(true);
+      }, HOLD_MS);
+    }
+  }, { passive: true });
+
+  stage.addEventListener('pointermove', e => {
+    if (!_swipe || e.pointerId !== _swipe.id) return;
+    _swipe.mx = e.clientX;                // 记住最后位置：被系统 cancel 时拿它算位移
+    _swipe.my = e.clientY;
+    if (Math.abs(e.clientX - _swipe.x) > 12 || Math.abs(e.clientY - _swipe.y) > 12) {
+      cancelHold();                       // 手指在滑，不算长按
+    }
+  }, { passive: true });
+
+  /* 抬手 / 被系统打断都走这里。
+     有些手机浏览器把横向拖动当"翻页"直接发 pointercancel、后面的 move/up 全没了，
+     以前在 cancel 里只是把状态清掉 —— 表现就是"怎么划都没反应"（2026-11-18 反馈）。
+     所以位移判定在 cancel 里也做一次（用最后一次 move 的坐标）。 */
+  const finishGesture = (e, cancelled) => {
+    cancelHold();
+    if (_holdFired) {
+      _holdFired = false;
+      setRush(false);
+      _gestureGuard = Date.now();
+    }
+    if (!_swipe) return;
+    if (!cancelled && e.pointerId !== _swipe.id) { _swipe = null; return; }
+    const g = _swipe;
+    _swipe = null;
+    if (SET.swipeX !== 'line') return;
+    const x = cancelled ? (g.mx != null ? g.mx : g.x) : e.clientX;
+    const y = cancelled ? (g.my != null ? g.my : g.y) : e.clientY;
+    const dx = x - g.x;
+    const dy = y - g.y;
+    if (Date.now() - g.t > 900) return;
+    if (Math.abs(dx) < 44 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+    _gestureGuard = Date.now();           // 这次是滑动，不是点按
+    if (dx < 0) nextLine(); else prevLine();
+  };
+  // 手指滑出舞台也照样收尾（所以挂 window，不挂在 #stage 上）
+  window.addEventListener('pointerup', e => finishGesture(e, false), { passive: true });
+  window.addEventListener('pointercancel', e => finishGesture(e, true), { passive: true });
+  stage.addEventListener('contextmenu', e => { if (_fsTouchMode()) e.preventDefault(); });
+
+  stage.onclick = () => {
+    // 长按/滑动刚结束：浏览器跟随合成的那次 click 不算点按
+    if (Date.now() - _gestureGuard < 420) return;
+    if (!_fsTouchMode()) { togglePlay(); return; }
     const now = Date.now();
-    if (now - _lastStageTap < 300) {      // 300ms 内第二次点击 = 双击
+    if (now - _lastStageTap < 280) {      // 连点两下
       _lastStageTap = 0;
-      togglePlay();
-      showFsChrome();
+      fsTapAction('twice');
       return;
     }
     _lastStageTap = now;
-    showFsChrome();                        // 单击：只把控制条叫出来
-    return;
-  }
-  togglePlay();
-};
+    fsTapAction('once');
+  };
+})();
 $('#hToggle').onclick = () => {
   const h = $('#history');
   h.classList.toggle('hide');
@@ -8468,11 +9089,14 @@ setAutoPlay(autoPref(), { init: true, noSave: true });
    （用户 2026-11-11 反馈）。延迟一会儿，别和启动时的其它 toast 抢位置。 */
 if (!ST.auto) {
   L10N.ready.then(() => setTimeout(() => toast(L10N.t('ctrl.autoOff',
-    '手动模式：播放键已变成「▶ 下一句」，空格 / P / 点画面也改为切句（要连续播放就勾上「自动」）')), 700));
+    '手动模式：播放键已变成「▶ 下一句」，{play} / 点画面也改为切句（要连续播放就勾上「自动」）',
+    { play: keyLabelsOf('play') })), 700));
 }
-/* ui.json 是异步加载的：等它 applyDom 完再按当前语言重画一次主按钮，
-   日文界面下手动模式才不会暂时显示中文的「▶ 下一句」。 */
-L10N.ready.then(() => setPlayBtn(ST.running));
+/* ui.json 是异步加载的：等它 applyDom 完再按当前语言重画一次主按钮 /
+   键位提示（否则会被 ui.json 里的原文盖掉）。 */
+L10N.ready.then(() => { setPlayBtn(ST.running); syncKeyHints(); });
+/* 任何入口切语言（按钮 / 偏好层恢复 / 测试钩子）都重算一遍键名 */
+L10N.on(() => syncKeyHints());
 /* 控制条 / 设置页 / 侧栏里的 <select>、<input> 改完立刻交还焦点。
    否则控件一直拿着焦点，之后的 ↑↓ / 空格 / 回车全被它自己吃掉：
    选了「倍速」再按 ↑↓ 变成换选项而不是切句，勾完「自动」按空格变成再勾一次，
@@ -8511,31 +9135,30 @@ document.addEventListener('keydown', e => {
   // 已解绑 Ctrl：带 Ctrl/Alt/Meta 的组合键不触发单键快捷键
   if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-  switch (e.code) {
-    case 'Space':
-      e.preventDefault(); togglePlay(); break;      // 空格 = 暂停/播放
-    case 'Enter': case 'NumpadEnter':
-      e.preventDefault(); nextLine(); break;       // 回车 = 下一句
-    case 'ArrowDown': case 'ArrowRight':
-      e.preventDefault(); nextLine(); break;
-    case 'ArrowUp': case 'ArrowLeft':
-      e.preventDefault(); prevLine(); break;
-    case 'KeyP':
-      e.preventDefault(); togglePlay(); break;
-    case 'KeyL': e.preventDefault(); switchLang(); break;   // L = 切换语言
-    case 'KeyS': $('#btnSet').click(); break;
-    case 'KeyF': e.preventDefault(); toggleFullscreen(); break; // F = 全屏
-    case 'BracketLeft': $('#sToggle').click(); break;           // [ = 收起/展开左侧栏
-    case 'KeyK': setRush(true); break;              // K = 快进（按住）
-    case 'KeyD': {
-      const d = $('#dbg');
-      d.style.display = d.style.display === 'none' ? 'block' : 'none';
-      break;
-    }
+  // 调试面板固定 D，不参与自定义键位（免得用户把常用键绑到调试上）
+  if (e.code === 'KeyD') {
+    const d = $('#dbg');
+    if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
+    return;
+  }
+  /* 键位全部走绑定表（设置 → 播放/手势 里可改），显示与行为只有这一处真源 */
+  const act = keyActionOf(e.code);
+  if (!act) return;
+  e.preventDefault();
+  switch (act) {
+    case 'play': togglePlay(); break;
+    case 'next': nextLine(); break;
+    case 'prev': prevLine(); break;
+    case 'rush': setRush(true); break;                 // 按住 = 快进
+    case 'settings': $('#btnSet').click(); break;
+    case 'fullscreen': toggleFullscreen(); break;
+    case 'lang': switchLang(); break;
+    case 'sidebar': $('#sToggle').click(); break;
+    case 'hist': $('#hToggle').click(); break;
   }
 });
 document.addEventListener('keyup', e => {
-  if (e.code === 'KeyK') setRush(false);
+  if (keyActionOf(e.code) === 'rush') setRush(false);
 });
 window.addEventListener('blur', () => setRush(false));
 
@@ -8574,6 +9197,17 @@ setInterval(() => {
   // ?langswitch=zh-Hans 供自动化测试：启动后跑一遍「运行中切换语言」的完整链路
   const ls = new URLSearchParams(location.search).get('langswitch');
   if (ls) setTimeout(() => switchLang(ls === '1' ? undefined : ls), 2500);
+  /* ?setpage=play 供自动化截图：打开设置并切到指定分类页。
+     只切 DOM（不写 SET），正常访问不带这个参数就完全没影响。 */
+  const sp = new URLSearchParams(location.search).get('setpage');
+  if (sp) setTimeout(() => { $('#btnSet').click(); showSetPage(sp); }, 700);
+  /* ?fsp=1 伪全屏（iOS 那条降级路径）供自动化截图：不需要用户手势 */
+  if (new URLSearchParams(location.search).get('fsp') === '1') {
+    setTimeout(() => {
+      const el = document.getElementById('stageWrap');
+      if (el) { el.classList.add('fsp'); onFsChange(); }
+    }, 600);
+  }
 })();
 
 /* ================= 启动 ================= */
@@ -8581,6 +9215,14 @@ setInterval(() => {
 window.__testSeek = n => seekTo(n, { forceResume: true });
 INDEX.sort((a, b) => a.id - b.id);   // 按数字 ID 排序（文件名排序会得到 1,10,100…）
 loadSettings();
+/* 给页面里其它脚本（新手引导 / 帮助文案）取键名用：
+   别在 HTML 里写死"按空格"，改键之后就对不上了。 */
+window.PLAYER_HOTKEYS = {
+  /* 一个动作可能有多个键（'空格 / P'），所以不能只取字段里的第一个 */
+  label: a => keyLabelsOf(a),
+  labels: a => keyLabelsOf(a),
+  hint: () => (document.getElementById('btnKeys') || {}).title || '',
+};
 /* ?msgbox=box|soft|bare 供自动化测试：启动即切到该文本框外观
    （与 ?seek / ?settings / ?langswitch 同一套约定，正常访问不带这个参数就完全没影响）
    注意只切 DOM class，**不碰 SET**：否则会被 escah_set 记住、还会经 UD 同步到
@@ -8600,6 +9242,9 @@ L10N.ready.then(() => {               // ui.json 到位后再刷一遍静态文�
   updateLangBtn();
   updateSidebarToggleText();
   setPlayBtn(ST.running);
+  /* applyDom 会把 data-i18n-title 的模板原样写回去（"显示设置（{key}）"），
+     所以键位提示必须排在它后面再算一次 —— 顺序反了会留下 {key} 这种占位符。 */
+  syncKeyHints();
   if (S.data) renderTabs();
 });
 /* 恢复上次的分类（SRC 在声明处已经从 localStorage 读回来了）：
@@ -8765,5 +9410,25 @@ if (window.PACKSTATE) {
 if (window.PACKSTATE) {
   PACKSTATE.on(() => {
     renderSidebar(($('#search') || {}).value || '');
+  });
+}
+
+/* 角色数据表被别处更新（「更新剧情目录」补了名字/稀有度/实装日、别处装了新角色
+   让 index.js 多一条）→ 原地重载并重画。escalation 2026-11-18：用户反馈
+   "剧情页刷新出来了，别的页面还得自己一页页 F5"。这里把侧栏直接对齐最新数据，
+   正在播放的剧情不受影响（只重画列表，不动舞台与控制条）。 */
+if (window.ESC && ESC.watchData) {
+  ESC.watchData({
+    hot: {
+      'names.js': '__NAMES', 'charmeta.js': '__CHARMETA',
+      'index.js': '__INDEX', 'advindex.js': '__ADV',
+    },
+    onReload: function () {
+      _cloudLoaded = false;                     // 索引变了，云端清单要重算一遍
+      _cloudSig = '';
+      renderSidebar((($('#search') || {}).value) || '');
+      updateCnt();
+      setTimeout(loadCloudChars, 150);
+    },
   });
 }

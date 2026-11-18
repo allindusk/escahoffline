@@ -130,7 +130,7 @@ def _warn_stand_output(job, nums) -> None:
 # ---------------------------------------------------------------- 进度桥
 @contextlib.contextmanager
 def _capture(job):
-    """把 cdn.net 的下载日志同时喂给 Job（进度条）和 stdout（日志）。"""
+    """把 cdn.net 的下载日志喂给 Job（进度条 + 任务详情），不再往启动窗口写。"""
     old = net._log
 
     def hook(msg):
@@ -153,8 +153,13 @@ def _capture(job):
                     job.log(s[:200])
             except Exception:                                  # noqa: BLE001
                 pass
+            return
+        # 没有 Job（少数维护路径调到这里）就只落 app.log。
+        # **绝不 print**：启动窗口只当"启动了，地址在这"，下载细节一律在页面上看
+        # （2026-11-18 用户要求；以前这里每批包都往 CMD 打一行，用户得来回切窗口）。
         try:
-            print(s, flush=True)
+            from .. import log as applog
+            applog.log(s[:400], "cdn")
         except Exception:                                      # noqa: BLE001
             pass
 
@@ -657,25 +662,37 @@ def _run_script_progress(job, name: str, label: str, done0: float,
             pct = None
             stage = label
             detail = ""
+            sub_d = sub_t = 0
             try:
                 with open(progress_file, encoding="utf-8") as f:
                     p = json.load(f)
                 pct = float(p.get("pct") or 0)
                 stage = p.get("stage") or label
-                detail = f" {int(p.get('done', 0))}/{int(p.get('total', 0))}"
+                sub_d = int(p.get("done") or 0)
+                sub_t = int(p.get("total") or 0)
+                detail = f" {sub_d}/{sub_t}"
             except (OSError, ValueError, TypeError):
                 pass
             if job is None:
                 continue
+            # 把子脚本自报的"张 / 首"计数也写进任务条（sub 档）：解包阶段原来的
+            # 「解包 8/9 个」是按**包**计数的，一个封面包里有 82 张，8.91 四舍五入
+            # 就成 9/9 —— 看着像已经完成，其实还在第 123 张（2026-11-17 用户问
+            # 「解包 9/9 个什么意思，用户看到不会以为 100% 吗」）。
+            if sub_t > 0 and not getattr(job, "sub_mode", False):
+                job.sub_progress(sub_d, sub_t, stage)
             if pct is not None and quota > 0:
                 # 只前进不后退（与 job 的高水位一致）；上限留到 quota，
                 # 100% 由调用方补配额，避免这里先把 done 顶过 total。
                 target = done0 + quota * min(99.0, pct) / 100.0
+                # **不要再拼"解包"**：子进程报的 stage 本身就叫「解包封面」/
+                # 「解析曲目」，以前外层再前缀一个 → 「解包解包封面… 89/2」
+                # （2026-11-17 用户截图）。
+                msg = f"{stage}…{detail}" if detail else f"{stage}…"
                 if target > job.done:
-                    job.progress(done=target,
-                                 message=f"解包{stage}…{detail}")
+                    job.progress(done=target, message=msg)
                 else:
-                    job.progress(message=f"解包{stage}…{detail}")
+                    job.progress(message=msg)
             else:
                 job.progress(message=f"{label}…")
 
@@ -1003,12 +1020,18 @@ def _install_voice(mf, cid, job=None, workers: int = 32) -> dict:
     return {"ok": bool(got)}
 
 
-def install_base(job=None, workers: int = 48, parts=None) -> dict:
+def install_base(job=None, workers: int = 48, parts=None,
+                 force_export: bool = True) -> dict:
     """下载并解包「公共素材」：背景 / 音乐 / 音效 / 头像 / 剧情横幅。
 
     默认类别取 :data:`server.facts.PUBLIC_PARTS` 的键 —— 以前把默认值抄成
     ``("bg","bgm","sfx","avatar")``，漏了 banner，跟 ``/api/install/base`` 的
     白名单与界面上写的类别对不上；现在只有一处真源，加类别不会再漏。
+
+    ``force_export``：已存在的成品图要不要重做。
+      · **手动点「补全」→ True**：保留"旧版本 cpanel 头像有错图，重导一次"的修复能力；
+      · **刷新清单顺手补 → False**（见 ``api._auto_fill_public``）：官方只多了几个包，
+        没理由把 1086 张头像全部 force 重裁 —— 那是"几分钟"的直接来源（2026-11-18）。
 
     为什么值得单独做一个入口
     ------------------------
@@ -1231,21 +1254,32 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     # 8 MB 按总量算才 1%，两个数字互相打脸（用户就是这么报的）。
     _have = 0
     _need_dl = 0
+    #: 每个类别真正**要下载**的包数 / 字节（预扫时算出来）。
+    #: 日志里必须报这个，不能报"计划里的包数"：头像类计划 1554 个包（全部），
+    #: 实际往往只要 7 个 —— 直接打 1554 会让人以为"已经装好了还要重下"（2026-11-18）。
+    _need_by_tag: dict = {}
     if job is not None:
         for step in plan:
+            n_need = 0
+            b_need = 0
             for e in step["ents"]:
                 name = str(e.get("bundle_name") or "")
                 sz = int(e.get("size") or 0)
                 if not name or not sz:
                     _need_dl += 1        # 信息不全，保守当作要下
+                    n_need += 1
                     continue
                 try:
                     if net.need_download(net.bundle_path(name), sz):
                         _need_dl += 1
+                        n_need += 1
+                        b_need += sz
                     else:
                         _have += sz
                 except OSError:
                     _need_dl += 1
+                    n_need += 1
+            _need_by_tag[step["tag"]] = (n_need, b_need)
         if _have:
             job.bytes_done = max(job.bytes_done, float(_have))
             # 预扫进来的字节不是"这次下载的量"：不设基线的话，任务开头两秒
@@ -1270,8 +1304,17 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     for step in dl_plan:
         ents = step["ents"]
         if job is not None and ents:
-            job.log(f"下载{step['label']} {len(ents)} 个包 "
-                    f"/ {step['sz'] / 1048576:.0f} MB")
+            # 报"真要下的量"，顺带说明本地跳过了多少（见 _need_by_tag 的说明）
+            n_need, b_need = _need_by_tag.get(step["tag"], (len(ents), step["sz"]))
+            skip = len(ents) - n_need
+            if n_need == 0:
+                job.log(f"{step['label']}：本地已有全部 {len(ents)} 个包，跳过下载")
+            elif skip > 0:
+                job.log(f"下载{step['label']} {n_need} 个包 / "
+                        f"{b_need / 1048576:.1f} MB（本地已有 {skip} 个，跳过）")
+            else:
+                job.log(f"下载{step['label']} {n_need} 个包 "
+                        f"/ {b_need / 1048576:.0f} MB")
         _collect(step["label"],
                  stages.fetch(ents, workers, f"{step['label']}素材", skip=True,
                               pause_event=_pe(job), job=job,
@@ -1292,8 +1335,10 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
     if job is not None and not no_download:
         # 这句要留在"操作记录"里：进度条只有 60% 时最容易让人以为算错了
         # （明明 1 GB 的素材已经下到 900 MB），所以必须说清"下载只占前 60%"。
-        job.log("下载阶段结束（进度条 60%）。接下来解包：不再联网，"
-                "把资源包解成图片/音频，占进度条后 40%")
+        # **必须短**：任务条中间那句只有约 190px（标题与数字区各占一侧），
+        # 以前写「下载阶段结束（进度条 60%）。接下来解包：不再联网，把资源包…」
+        # 会被截成「下载阶段结束（进…」，关键的 60% 反而看不见（2026-11-17 截图实测）。
+        job.log("下载完成（进度条 60%），接着解包资源包到 100%（不再联网）")
         job.phase(60.0, 40.0, total=max(1, _total), unit="个", label="解包")
     if job is not None:
         job.progress(done=0)
@@ -1303,6 +1348,13 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         sz = step["sz"]
         quota = len(ents)          # 与 phase(total=_total) 同一口径：按包记账
         _d0 = job.done if job is not None else 0.0
+        # 清掉上一类的"子脚本进度"（见 _run_script_progress 的 sub_progress）：
+        # 不清的话，解包头像时任务条还挂着「解包封面 165/165」，看着像没动过。
+        if job is not None and not getattr(job, "sub_mode", False):
+            try:
+                job.sub_progress(0, 0, "")
+            except Exception:                                  # noqa: BLE001
+                pass
         if job is not None and ents:
             extra = "，这步比下载还久" if tag == "bg" else ""
             job.progress(message=f"解包{step['label']}（{len(ents)} 个包{extra}，"
@@ -1344,10 +1396,12 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
                         job.progress(add=1)      # 跳过也要推进，进度条不能卡住
                     continue
                 try:
-                    # force=True：旧版本导出的 cpanel 头像有错图；新官方头像也允许
-                    # 官方更新后覆盖旧文件。x2 一起重做。
+                    # force：手动「补全」时 True（旧版本导出的 cpanel 头像有错图、
+                    # 官方更新后也要覆盖旧文件）；刷新清单顺手补时传 False —— 只补
+                    # 真正缺的，不把 1086 张重裁一遍。
                     # regen=False：整批结束后统一重建一次映射，别每张都重扫媒体树。
-                    if stages.export_avatar_bundle(name, force=True, regen=False):
+                    if stages.export_avatar_bundle(name, force=force_export,
+                                                   regen=False):
                         n_ok += 1
                     else:
                         # 不是每张官方头像都有对应文件（编号空洞/包结构异常），
@@ -1579,19 +1633,24 @@ def install_base(job=None, workers: int = 48, parts=None) -> dict:
         except Exception:                                      # noqa: BLE001
             pass
 
-    # ⑤ 收尾体检：把"还没齐"的类别点出来，别让用户对着一个 98% 的数字猜
+    # ⑤ 收尾体检：把"还没齐"的类别点出来，别让用户对着一个 98% 的数字猜。
+    # **只查这次真的要求装的类别**：原声集 / 全部立绘是可选按钮，用户没勾它们
+    # 时本来就是空的 —— 报一句「仍未齐：原声集封面 0/165」只会让人以为这次失败了
+    # （2026-11-17 用户看到这句后专门去补了一轮）。NPC/敌 SD 与战斗语音已于
+    # 2026-11-16 停用（不再下载），更不该出现在这张体检表里。
     try:
         st = public_status()
         short = []
-        for name, have_k, total_k in (("背景", "back", "backTotal"),
-                                      ("BGM", "music", "musicTotal"),
-                                      ("音效", "sfx", "sfxTotal"),
-                                      ("头像", "avatar", "avatarTotal"),
-                                      ("横幅", "banner", "bannerTotal"),
-                                      ("演出特效", "advfx", "advfxTotal"),
-                                      ("原声集封面", "jacket", "jacketTotal"),
-                                      ("NPC/敌 SD", "sdNpc", "sdNpcTotal"),
-                                      ("战斗语音", "voice", "voiceTotal")):
+        for name, have_k, total_k, part in (
+                ("背景", "back", "backTotal", "bg"),
+                ("BGM", "music", "musicTotal", "bgm"),
+                ("音效", "sfx", "sfxTotal", "sfx"),
+                ("头像", "avatar", "avatarTotal", "avatar"),
+                ("横幅", "banner", "bannerTotal", "banner"),
+                ("演出特效", "advfx", "advfxTotal", "advfx"),
+                ("原声集封面", "jacket", "jacketTotal", "gallery")):
+            if part not in parts:
+                continue
             have, total = int(st.get(have_k) or 0), int(st.get(total_k) or 0)
             if total and have < total * 0.98:
                 short.append(f"{name} {have}/{total}")
@@ -1796,9 +1855,27 @@ def public_deficit() -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-#: 自动补公共素材的上限（个包）。超过它就只在日志里提示去「资源管理」补全 ——
-#: 全新环境一次缺几百个包，那等于把 800 MB 全下一遍，不能替用户决定。
+#: 自动补公共素材的**最小**精确补额度（个包）。
+#: 真正的判据见下面的 ``PUBLIC_DELTA_RATIO``（按占比）；这个数只是下限 ——
+#: 清单还没下过 / 无法统计总数时，缺 12 个以内仍然精确补。
 PUBLIC_AUTO_LIMIT = 12
+#: 「精确补 / 整类重做」的分界（占该类包总数的比例）。
+#:
+#: 只看绝对个数会误判：2026-11-18 实测，用户头像 1086/1086、横幅 557/557 全齐，
+#: 官方新增 6 部剧情只多了 16 个包 —— 但 16 > 12，于是被判成"缺口很大"、按类别
+#: 整批重做，白下载/重导 1554 个头像包 + 394 个横幅包（几分钟）。
+#: 真正该整批重做的只有"基本没装过"的用户，所以按**占比**判断。
+PUBLIC_DELTA_RATIO = 0.2
+
+
+def public_totals() -> dict:
+    """清单里头像 / 横幅各有多少个包（判断"缺口算大还是算小"用）。"""
+    try:
+        c = _cur_counts()
+    except Exception:                                          # noqa: BLE001
+        return {"avatar": 0, "banner": 0}
+    return {"avatar": int(c.get("avatar") or 0),
+            "banner": int(c.get("banner") or 0)}
 
 
 def install_public_delta(job, delta: dict) -> dict:
@@ -1820,8 +1897,16 @@ def install_public_delta(job, delta: dict) -> dict:
     n_av = n_bn = 0
     for n in delta.get("avatar") or []:
         try:
-            if stages.export_avatar(int(n.rsplit("_", 1)[-1]), force=True):
+            # 必须按**包名**导出：头像类有三族（cpanel / usericon d,b,n,e / 敌人战斗图标），
+            # 以前统一当 cpanel 调 export_avatar(编号)，官方那几族一律导不出来 →
+            # 缺口永远补不完（2026-11-18 排查）。export_avatar_bundle 认得全部三族。
+            if stages.export_avatar_bundle(n, force=True, regen=False):
                 n_av += 1
+        except Exception:                                      # noqa: BLE001
+            pass
+    if n_av:
+        try:
+            stages.regen_mediaindex()     # 新头像落盘 → 前端立刻知道"这个有图了"
         except Exception:                                      # noqa: BLE001
             pass
     cids = []
@@ -1850,6 +1935,16 @@ def install_public_delta(job, delta: dict) -> dict:
         pass
     if job is not None:
         job.log(f"   公共素材补齐：头像 {n_av}、角色横幅 {n_bn}")
+    # 补齐后把"已跟到清单的包数"记下来（和 install_base 末尾同一口径）：
+    # 不写的话 new_public() 每次刷新清单都还会把这几类报成"有新增"。
+    # 漏导出的个别图不靠 stamp 兜底 —— public_deficit() 是按磁盘上的图核对的。
+    try:
+        counts = _cur_counts()
+        sub = {k: counts[k] for k in ("avatar", "banner") if k in counts}
+        if sub:
+            write_stamp(sub)
+    except Exception:                                          # noqa: BLE001
+        pass
     return {"packs": len(names), "avatars": n_av, "banners": n_bn}
 
 

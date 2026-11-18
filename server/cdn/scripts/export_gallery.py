@@ -226,9 +226,19 @@ def jacket_file(no: int) -> str:
 
 # ---------------------------------------------------------------- 封面
 def export_jackets(total_hint: int = 0) -> int:
-    """``msc_NNNN`` → ``media/img/jacket/msc_NNNN.webp``。"""
+    """``msc_NNNN`` → ``media/img/jacket/msc_NNNN.webp``。
+
+    **分母必须是"张数"，不能是"包数"**：清单里封面包只有 2 个（新旧各一），
+    而每个包里有 82 张纹理。以前拿 ``len(jacket_bundles())`` 当分母，
+    第 89 张时报的是 ``89/2`` → pct 算成 2225%，外层 clamp 到 99% 后进度条
+    就钉死在 99.x% 一动不动，用户看到的是「解包封面… 89/2」+「卡了几分钟」
+    （2026-11-17 实测）。
+
+    所以分两趟：先把所有包的对象名收集一遍（只读名字、不解码像素，很便宜），
+    拿到真实总张数，再逐张解码导出 —— 期间 ``n/total`` 始终是可信的。
+    """
     os.makedirs(OUT_JACKET, exist_ok=True)
-    n = 0
+    pending = []
     for p in jacket_bundles():
         try:
             env = UnityPy.load(p)
@@ -239,20 +249,24 @@ def export_jackets(total_hint: int = 0) -> int:
             if obj.type.name != "Texture2D":
                 continue
             try:
-                d = obj.read()
-                name = str(d.m_Name or "")
-                if not name.startswith("msc_"):
-                    continue
-                out = os.path.join(OUT_JACKET, name + ".webp")
-                if os.path.exists(out):
-                    n += 1
-                    continue
-                d.image.save(out, "WEBP", quality=92, method=6)
-                n += 1
-                # 每导出一张报一次真实进度（没 total_hint 时用包数兜底也不会 >100%）
-                _progress("解包封面", n, total_hint or len(jacket_bundles()))
+                d = obj.read()          # 读一次并持有：第二趟直接取 .image，
+                name = str(d.m_Name or "")   # 不要重新 read（那会白解一遍包）
             except Exception:                                    # noqa: BLE001
                 continue
+            if name.startswith("msc_"):
+                pending.append((d, name))
+    total = total_hint or len(pending)
+    _progress("解包封面", 0, total)
+    n = 0
+    for d, name in pending:
+        try:
+            out = os.path.join(OUT_JACKET, name + ".webp")
+            if not os.path.exists(out):
+                d.image.save(out, "WEBP", quality=92, method=4)
+        except Exception:                                        # noqa: BLE001
+            continue
+        n += 1
+        _progress("解包封面", n, total)
     return n
 
 
@@ -530,7 +544,7 @@ def build(check_only: bool = False) -> int:
 
     jackets = 0
     if not check_only:
-        _progress("解包封面", 0, len(jacket_bundles()))
+        # 分母（总张数）由 export_jackets 自己先数一遍再报，这里不要再用包数占位
         jackets = export_jackets()
         _log(f"封面 {jackets} 张")
 

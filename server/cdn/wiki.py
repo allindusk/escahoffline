@@ -41,6 +41,9 @@ MEDIA_BASE = "https://escalationheroines.wikiru.jp"
 _REPO = "allindusk/escahoffline"
 _BRANCH = "main"
 _PROD_PATH = "web/data/charmeta.js"
+#: 名字键的中间产物：{日文名: {r,d,t,cat,…}}。
+#: **新角色只有这张表里有** —— 见 :func:`fetch_remote_char_meta` 的说明。
+_META_PATH = "server/cdn/data/char_meta.json"
 
 # 线路不在这里维护 —— 统一用 ``mirrors.fetch()``（和「检查程序更新」同一张线路表）。
 # 那张表里已按"时效优先"排好：raw / github.com 直连 → gh 反代 → jsDelivr 兜底
@@ -141,30 +144,151 @@ def fetch_html(url: str, proxy: str | None = None, timeout: int = 30) -> str:
 
 
 def fetch_remote_charmeta(timeout: int = 8) -> tuple[dict | None, str]:
-    """拉每日 CI 产出的 charmeta 成品 → ``(data, route)``。
+    """拉每日 CI 产出的 charmeta 成品（id 键）→ ``(data, route)``。
 
-    **线路不再在这里维护**：统一交给 :func:`server.mirrors.fetch`（与
+    **运行时别再拿它当主数据源**：这张表是「按 id」的成品，新角色在 CI 那边没有
+    名字、整条缺失（详见 :func:`fetch_remote_char_meta`）。留着只是因为：
+    它只有 17KB，线路/解析都现成，排查「哪个 id 缺元数据」时方便对照。
+
+    **线路不在这里维护**：统一交给 :func:`server.mirrors.fetch`（与
     「检查程序更新」共用同一张线路表与模板），这里只给出仓库内路径。
     全部线路失败返回 ``(None, 最后一条错误描述)``。
     """
+    return _fetch_json_payload(_PROD_PATH, timeout)
+
+
+def _fetch_json_payload(path: str, timeout: int) -> tuple[dict | None, str]:
+    """按线路表拉仓库里的一个 JSON 文件 → ``(data, route)``；失败 ``(None, 原因)``。"""
     from .. import mirrors                                    # 避免层间循环导入
-    url = ("https://raw.githubusercontent.com/%s/%s/%s"
-           % (_REPO, _BRANCH, _PROD_PATH))
-    # jsDelivr 不能靠"前缀代理"，得自己拼 gh/{repo}@{br}/{path} 形式；
-    # 它有约 12 小时缓存（时效差），所以作为**最后兜底**追加，不进公共线路表。
+    url = "https://raw.githubusercontent.com/%s/%s/%s" % (_REPO, _BRANCH, path)
     extra = [{"name": "jsDelivr",
               "tpl": "https://cdn.jsdelivr.net/gh/%s@%s/%s"
-                     % (_REPO, _BRANCH, _PROD_PATH)}]
+                     % (_REPO, _BRANCH, path)}]
     try:
         txt, route = mirrors.fetch(url, want="text", timeout=timeout,
                                    budget=timeout * 5, extra=extra)
-        body = txt[txt.index("{"): txt.rindex("}") + 1]
-        data = json.loads(body)
+        data = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
         if not data:
             return None, f"{route}: 空数据"
         return data, route
     except Exception as e:                                     # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
+
+
+def fetch_remote_char_meta(timeout: int = 8) -> tuple[dict | None, str]:
+    """拉每日 CI 产出的**名字键**元信息表 → ``(data, route)``。
+
+    为什么运行时必须拉这张，而不是只用 ``charmeta.js``
+    -------------------------------------------------
+    ``charmeta.js`` 是「**id 键**」的成品，由 CI 用自己的 ``names.js`` 把名字换成
+    id；而 CI 里没有解包剧本、**根本不知道新角色叫什么**，于是新角色在成品里整条
+    缺失。2026-11-18 实测：GitHub 上 ``char_meta.json`` 已经收录 4 个当天实装的新
+    角色（SSR/SR + 实装日都在），``charmeta.js`` 里却一条都没有 —— 客户端点
+    「更新剧情目录」后新角色仍是「ID 400 / 实装日期未收录」，稀有度也永远刷不到。
+
+    所以名字键的表才是运行时该拉的那份：id 由客户端按本机 ``names.js`` 现配
+    （见 :func:`match_meta_by_names`）。
+    """
+    return _fetch_json_payload(_META_PATH, timeout)
+
+
+# ---------------------------------------------------------------- 名字 ↔ 元信息
+#: 重名角色在 names.js 里带「(13)」这样的后缀，比对时必须抹掉
+_NAME_SUFFIX_RE = re.compile(r"\s*\(\d+\)$")
+
+
+def pure_name(nm) -> str:
+    """去掉重名后缀的原始名字（不做归一化）。"""
+    return _NAME_SUFFIX_RE.sub("", str(nm or "")).strip()
+
+
+def name_key(nm) -> str:
+    """名字比对口径：NFKC（全角数字/字母转半角）+ 去掉空白、中点、括号。
+    不归一的话「妹の１０２４」和「妹の1024」会被当成两个角色。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", pure_name(nm))
+    return re.sub(r"[\s・·（）()]", "", s)
+
+
+def core_name(nm, owner: str = "") -> str:
+    """名字的「核心段」：去掉所属前缀、取第一个分隔段。
+
+    例：``魔女チィコ``（所属=魔女）→ ``チィコ``；``チィコ・リョウ`` → ``チィコ``。
+    Wiki 用「所属+名」，剧本里常是「名・姓」，两种写法只能靠这个口径对齐。
+    """
+    s = pure_name(nm)
+    if owner and s.startswith(owner):
+        s = s[len(owner):]
+    return name_key(re.split(r"[・·]", s)[0])
+
+
+def meta_index(meta: dict) -> dict:
+    """把「名字键」元信息索引化，供 :func:`meta_for_name` 反复查。
+
+    为什么要索引：装机一次要给 389 个 id 各查一遍，逐个 normalize 是 0.5~1 秒的
+    白等（每次装剧情都要付）。
+    """
+    by_nk: dict = {}
+    by_core: dict = {}
+    for k, m in (meta or {}).items():
+        by_nk.setdefault(name_key(k), []).append((k, m))
+        by_core.setdefault(core_name(k, str((m or {}).get("t") or "")), []).append((k, m))
+    return {"by_nk": by_nk, "by_core": by_core}
+
+
+def meta_for_name(nm, index: dict) -> dict | None:
+    """本地名字 → 元信息：先「归一后完全同名」，再「核心段唯一命中」。"""
+    if not index or not nm:
+        return None
+    hits = index["by_nk"].get(name_key(nm)) or []
+    if len(hits) == 1:
+        return hits[0][1]
+    hits = index["by_core"].get(core_name(nm)) or []
+    return hits[0][1] if len(hits) == 1 else None
+
+
+def match_meta_by_names(remote: dict, names: dict) -> tuple[dict, dict]:
+    """远程「名字键」元信息 → ``({本地名字: 元信息}, {对不上的名字: 元信息})``。
+
+    只把**能确定对应到本机 id** 的条目交出去（``gen_charmeta.py`` 按名字查表），
+    对不上的原样返回，由调用方存进表里等名字到了再挂上。
+
+    两步匹配：
+      1. 归一后完全同名 —— 老角色几乎全走这条；
+      2. 核心段唯一命中（Wiki「魔女チィコ」vs 剧本「チィコ・リョウ」）：
+         **命中多个就放弃**，宁可先显示 ID，也不把名字/稀有度贴到别人头上。
+    """
+    out: dict = {}
+    left: dict = {}
+    nk_names: dict = {}
+    core_names: dict = {}
+    for cid, nm in (names or {}).items():
+        nk_names.setdefault(name_key(nm), []).append(str(cid))
+        core_names.setdefault(core_name(nm), []).append(str(cid))
+    used: set = set()
+
+    def _take(cids, m):
+        """一个 id 只能被一条元信息占用（同一角色在 wiki 上可能有复姓条目）。"""
+        cid = cids[0]
+        if cid in used:
+            return False
+        used.add(cid)
+        out[str(names[cid])] = m
+        return True
+
+    for rname, m in (remote or {}).items():
+        cids = nk_names.get(name_key(rname)) or []
+        if len(cids) == 1 and _take(cids, m):
+            continue
+        left[rname] = m
+    if not left:
+        return out, {}
+    rest: dict = {}
+    for rname, m in left.items():
+        cids = core_names.get(core_name(rname, str((m or {}).get("t") or ""))) or []
+        if not (len(cids) == 1 and _take(cids, m)):
+            rest[rname] = m
+    return out, rest
 
 
 def _cell_text(html_frag: str) -> str:

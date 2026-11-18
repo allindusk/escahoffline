@@ -13,14 +13,9 @@ const el = (t, c) => { const e = document.createElement(t); if (c) e.className =
    角色前面，点一下就是"只看主线 CG"。 */
 const CATS = { '-1': '主线剧情 CG', '-2': '活动剧情 CG', '-3': '其他剧情 CG' };
 const ADV  = window.__ADV || [];
-const ADV_TITLE = (() => {
-  const m = {};
-  const label = { main: '主线', event: '活动', other: '其他', tutorial: '教程', op: '开场' };
-  for (const a of ADV) {
-    m[a.key] = (label[a.kind] || a.kind) + (a.no ? ' 第' + a.no + '话' : '');
-  }
-  return m;
-})();
+const ADV_LABEL = { main: '主线', event: '活动', other: '其他', tutorial: '教程', op: '开场' };
+/* key → 「活动 第42话」：内容在 buildIndex() 里填（数据表被别处更新时要能重算） */
+const ADV_TITLE = {};
 const isCat = id => id < 0;
 
 /* ---------- 收藏（与播放器共用 assets/js/userdata.js） ----------
@@ -144,42 +139,14 @@ function setChain(img, list) {
   img.src = list[0];
 }
 
-/* ---------- 建立角色索引 ---------- */
+/* ---------- 角色索引 ----------
+ * 这些索引由 NAMES / META / GROUPS / ADV 推导出来。那几张表现在会被
+ * 「更新剧情目录 / 装一部剧情」在后台重写，页面重新可见时 ESC.watchData 会把新内容
+ * 原地并进来 —— 所以索引必须**能重建**，否则侧栏还是老名字、新角色进不来
+ * （2026-11-18 用户反馈："剧情页刷新了，别的页面列表没刷新"）。
+ *
+ * 全在同一个 Map / 数组上原地改（不换引用）：别的函数在加载时就抓住了它们。 */
 const chars = new Map();   // id -> {id, name, zh, r, groups: [groupIndex...], total}
-
-for (const c of Object.keys(NAMES).concat(Object.keys(META))) {
-  const id = +c;
-  if (!chars.has(id)) {
-    chars.set(id, {
-      id,
-      name: NAMES[c] || ('ID ' + c),
-      zh: (META[c] && META[c].zh) || '',
-      r: (META[c] && META[c].r) || '',
-      t: (META[c] && META[c].t) || '',
-      d: (META[c] && META[c].d) || '',
-      groups: [],
-      total: 0
-    });
-  }
-}
-GROUPS.forEach((g, gi) => {
-  let ch = chars.get(g.c);
-  if (!ch) {
-    ch = { id: g.c, name: CATS[g.c] || ('ID ' + g.c), zh: '', r: '', d: '',
-           groups: [], total: 0, cat: isCat(g.c) };
-    chars.set(g.c, ch);
-  }
-  ch.groups.push(gi);
-  ch.total += g.f.length;
-});
-
-/* 实装日期比较：没有日期的角色一律排最后（asc 用 'z' 当哨兵，与剧情页同口径） */
-function cmpDate(a, b, asc) {
-  const da = (a && a.d) || (asc ? 'z' : '');
-  const db = (b && b.d) || (asc ? 'z' : '');
-  return asc ? da.localeCompare(db) : db.localeCompare(da);
-}
-
 /* 角色清单的两个口径（2026-11-04 用户反馈：剧情页写 385、CG 页只有 384，像角色丢了）：
      allCharList = 认得的**全部**角色（names / charmeta 里有就列）——
                    包括刚实装、还没装、cgmap 里自然没有 CG 组的新角色；
@@ -187,21 +154,72 @@ function cmpDate(a, b, asc) {
                    别把 0 组的空角色送去导出。
    **必须剔除 -1/-2/-3 三个分类桶**：它们是"主线/活动/其他的剧情 CG"，
    跟角色不是一回事，混进来会变成"全部角色（387）"。 */
-const allCharList = [...chars.values()].filter(c => !isCat(c.id))
-  .sort((a, b) => a.id - b.id);
-const withCG = allCharList.filter(c => c.groups.length > 0);
+const allCharList = [];
+const withCG = [];
 /* 分类桶：-1 主线 / -2 活动 / -3 其他，各自按"哪部剧情"再分组 */
 const catUnits = {};      // -1 -> [{u, title, groups:[gi], imgs}]
-for (const id of Object.keys(CATS).map(Number)) {
-  const m = new Map();
-  for (const gi of (chars.get(id) || { groups: [] }).groups) {
-    const u = GROUPS[gi].u || ('cat' + id);
-    if (!m.has(u)) m.set(u, { u, title: unitTitle(u, GROUPS[gi].k), groups: [], imgs: 0 });
-    const e = m.get(u);
-    e.groups.push(gi);
-    e.imgs += GROUPS[gi].f.length;
+
+function buildIndex() {
+  chars.clear();
+  for (const c of Object.keys(NAMES).concat(Object.keys(META))) {
+    const id = +c;
+    if (!chars.has(id)) {
+      chars.set(id, {
+        id,
+        name: NAMES[c] || ('ID ' + c),
+        zh: (META[c] && META[c].zh) || '',
+        r: (META[c] && META[c].r) || '',
+        t: (META[c] && META[c].t) || '',
+        d: (META[c] && META[c].d) || '',
+        groups: [],
+        total: 0
+      });
+    }
   }
-  catUnits[id] = [...m.values()].sort((a, b) => advOrder(a.u) - advOrder(b.u) || a.u.localeCompare(b.u));
+  GROUPS.forEach((g, gi) => {
+    let ch = chars.get(g.c);
+    if (!ch) {
+      ch = { id: g.c, name: CATS[g.c] || ('ID ' + g.c), zh: '', r: '', d: '',
+             groups: [], total: 0, cat: isCat(g.c) };
+      chars.set(g.c, ch);
+    }
+    ch.groups.push(gi);
+    ch.total += g.f.length;
+  });
+
+  allCharList.length = 0;
+  [...chars.values()].filter(c => !isCat(c.id)).sort((a, b) => a.id - b.id)
+    .forEach(c => allCharList.push(c));
+  withCG.length = 0;
+  allCharList.filter(c => c.groups.length > 0).forEach(c => withCG.push(c));
+
+  Object.keys(catUnits).forEach(k => delete catUnits[k]);
+  for (const id of Object.keys(CATS).map(Number)) {
+    const m = new Map();
+    for (const gi of (chars.get(id) || { groups: [] }).groups) {
+      const u = GROUPS[gi].u || ('cat' + id);
+      if (!m.has(u)) m.set(u, { u, title: unitTitle(u, GROUPS[gi].k), groups: [], imgs: 0 });
+      const e = m.get(u);
+      e.groups.push(gi);
+      e.imgs += GROUPS[gi].f.length;
+    }
+    catUnits[id] = [...m.values()]
+      .sort((a, b) => advOrder(a.u) - advOrder(b.u) || a.u.localeCompare(b.u));
+  }
+
+  /* 剧情标题（advindex 变了要跟着变） */
+  Object.keys(ADV_TITLE).forEach(k => delete ADV_TITLE[k]);
+  for (const a of ADV) {
+    ADV_TITLE[a.key] = (ADV_LABEL[a.kind] || a.kind) + (a.no ? ' 第' + a.no + '话' : '');
+  }
+}
+buildIndex();
+
+/* 实装日期比较：没有日期的角色一律排最后（asc 用 'z' 当哨兵，与剧情页同口径） */
+function cmpDate(a, b, asc) {
+  const da = (a && a.d) || (asc ? 'z' : '');
+  const db = (b && b.d) || (asc ? 'z' : '');
+  return asc ? da.localeCompare(db) : db.localeCompare(da);
 }
 /** 剧情在 advindex 里的顺序（= 游戏发布顺序），拿不到就沉底 */
 function advOrder(u) {
@@ -1065,6 +1083,29 @@ function applyRemotePrefsToUI() {
 if (usp.has('g')) {
   const pos = +usp.get('g');
   if (pos >= 0 && pos < visible.length) openLB(visible[pos], 0);
+}
+
+/* 数据表被别处更新（更新剧情目录补了名字/稀有度、装完剧情 cgmap 多了组）
+   → 重建索引并重画。灯箱开着时不打扰（组序号会整体位移），改成提示刷新。 */
+if (window.ESC && ESC.watchData) {
+  ESC.watchData({
+    hot: {
+      'names.js': '__NAMES', 'charmeta.js': '__CHARMETA', 'cgmap.js': '__CGMAP',
+      'advindex.js': '__ADV', 'imgmap.js': '__IMGMAP', 'imgmap.x2.js': '__IMGX2',
+      'imgmap.base.js': '__IMGBASE',
+    },
+    onReload: function () {
+      if (lb.g >= 0) {
+        if (ESC.askReload) ESC.askReload('CG 数据有更新，刷新后显示最新的列表');
+        return;
+      }
+      const top = $('#grid').scrollTop;
+      buildIndex();
+      renderChars();
+      renderGrid();
+      $('#grid').scrollTop = top;
+    },
+  });
 }
 
 })();

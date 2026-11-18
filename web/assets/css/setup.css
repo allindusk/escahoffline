@@ -438,6 +438,11 @@ details.explain li { margin-bottom: 2px; }
   white-space: pre-wrap; word-break: break-word;
   color: #ffb3ba; font-size: 15px; line-height: 1.7;
 }
+/* 任务记录（不是报错）：中性色 + 等宽，读起来像日志而不是"又出错了" */
+.apDBody.apLogBody .apDText {
+  color: #cfe0ee; font-size: 14px;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+}
 .apDLabel { margin: 12px 0 4px; color: #7c94aa; font-size: 14px; }
 .apDSub {
   padding: 8px 10px; border-radius: 8px; background: #0f1c28;
@@ -459,7 +464,14 @@ details.explain li { margin-bottom: 2px; }
   border-top: 1px solid var(--line2); font-size: 15.1px;
   box-shadow: 0 -8px 24px rgba(0, 0, 0, .4);
 }
-.job .jt { min-width: 150px; color: var(--fg); font-weight: 600; font-size: 15.1px; }
+/* 标题不许把中间那句说明挤没：公共素材的标题是「下载公共素材（背景 / 音乐 /
+   音效 / 头像 / 剧情横幅 / 演出特效）」，按内容宽度排下来，.jm（flex:1、basis 0）
+   只剩几十像素，于是「下载阶段结束（进度条 60%）…」被截成「下载阶段结束（进…」，
+   用户看不到"剩下的 40% 是解包"这句关键说明（2026-11-17 截图实测）。
+   全文仍在 title 上，悬停可看。 */
+.job .jt { min-width: 150px; max-width: 24%; color: var(--fg); font-weight: 600;
+  font-size: 15.1px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .job .jm { flex: 1; min-width: 0; color: var(--fg3); font-size: 14px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 进度条放大：原来 190×6px 太细，扫一眼看不出来 */
@@ -488,7 +500,9 @@ details.explain li { margin-bottom: 2px; }
 .job .jp { position: relative; }
 .job .jp u {
   position: absolute; top: 0; bottom: 0; width: 0; z-index: 2;
-  border-left: 1px dashed rgba(233, 245, 255, .6);
+  /* 2px / .85：1px 半透明的线压在 11px 高的条上几乎看不见，
+     而这条线的全部意义就是"让用户看出下载只占前 60%"（2026-11-17）。 */
+  border-left: 2px dashed rgba(233, 245, 255, .85);
   pointer-events: none;
 }
 /* 解包阶段（不再有网络流量）：进度条换成琥珀色，和"正在下载"的蓝色区分开 */
@@ -519,6 +533,9 @@ details.explain li { margin-bottom: 2px; }
 .job .jv i { font-style: normal; color: var(--fg3); font-size: 14px; }
 .job .jx { background: none; border: none; color: var(--fg3); cursor: pointer; font-size: 16.8px; }
 .job .jx:hover { color: var(--err); }
+/* 「详情」只是"看记录"，不该做成和「取消」一样的红字（误点会以为要停任务） */
+.job .jx.jl { font-size: 14px; }
+.job .jx.jl:hover { color: #8fd0ff; }
 .job.done { opacity: .55; }
 .job.failed { border-top-color: var(--err); }
 .job.failed .jt { color: #ff9aa5; }
