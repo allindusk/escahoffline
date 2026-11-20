@@ -183,8 +183,8 @@
         '成品文件也只会落在电脑的导出目录里，手机拿不到。',
     },
     {
-      sel: '#btnCgExport, #btnExportCg, #btnExport',
-      name: '导出 / 打包（CG、原声集）',
+      sel: '#btnCgExport, #btnExportCg, #btnExport, #btnExportStand',
+      name: '导出 / 打包（CG、立绘、原声集）',
       why: '打包好的压缩包会存在电脑的导出目录里，手机上下载不到。',
     },
     {

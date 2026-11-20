@@ -444,10 +444,10 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 }
 
 /* 文字窗口：纯色 + 可调不透明度（不用毛玻璃） */
-/* --msgY 垂直位置、--msgH 最小高度，由设置里的滑块控制 */
+/* 几何（宽/左/底）由 player.js 的 layoutMsgChrome() 按 1280×720 舞台坐标落成 px，
+   并且夹在舞台内（滑块拖到头也只贴边）。这里的 left/right/bottom 只是首帧兜底；
+   --msgH 是「最小高度」下限，长句会自己往上长高。 */
 #msgWindow{position:absolute;left:52px;right:52px;
-  /* 舞台固定 1280x720 后整体缩放，所以像素值跨分辨率等价。
-     用 min() 兜底：滑块拉满时会让对话框**正好贴住舞台顶**，不会越界。 */
   bottom:min(var(--msgY,26px), calc(100% - var(--msgH,150px)));
   min-height:var(--msgH,150px);
   background:rgba(var(--msgBg,10,14,22),var(--msgA,.90));
@@ -476,7 +476,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
    可以用「自动抠底 + 换色」把它换成对话框同色。
    整个头像 pointer-events:none，点对话框照样翻页。 */
 #msgAvatar{position:absolute;left:0;top:0;z-index:2;display:block;
-  width:var(--avSize,54px);height:var(--avSize,54px);padding:2px;border-radius:50%;
+  width:var(--avSize,96px);height:var(--avSize,96px);padding:2px;border-radius:50%;
   background:linear-gradient(155deg,#f8e8bb 0%,#e4c178 26%,#c99b45 52%,#8a6320 78%,#5c3d10 100%);
   box-shadow:
     0 0 0 1px rgba(0,0,0,.65),
@@ -525,7 +525,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #msgAvatar.avRing-none::after{border-radius:inherit}
 /* 形状 */
 #msgAvatar.avShape-circle,#msgAvatar.avShape-circle .avBox{border-radius:50%}
-#msgAvatar.avShape-rounded,#msgAvatar.avShape-rounded .avBox{border-radius:calc(var(--avSize,54px) * .2)}
+#msgAvatar.avShape-rounded,#msgAvatar.avShape-rounded .avBox{border-radius:calc(var(--avSize,96px) * .2)}
 #msgAvatar.avShape-square,#msgAvatar.avShape-square .avBox{border-radius:2px}
 
 #msgText{font-size:var(--msgFS,21px);line-height:var(--msgLH,1.62);
@@ -533,13 +533,16 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   white-space:pre-wrap;word-break:break-word;color:var(--msgColor,#f2f5fb);
   min-height:96px;
   text-align:var(--msgAlign,left);
-  transform:translateX(var(--msgX,0px));
   text-shadow:
     calc(var(--msgStroke,1.2px) * -1) 0 0 rgba(0,0,0,.9),
     var(--msgStroke,1.2px) 0 0 rgba(0,0,0,.9),
     0 calc(var(--msgStroke,1.2px) * -1) 0 rgba(0,0,0,.9),
     0 var(--msgStroke,1.2px) 0 rgba(0,0,0,.9),
     0 2px 10px rgba(0,0,0,.8)}
+/* 「文字水平位置」= 正文再往右让多少（设置里那一项，默认 32px）。
+   用的是 padding-left 而不是 transform：折行宽度跟着一起收，所以文字永远在框内，
+   不会像以前那样被推出边框。负值能贴到边框上（左内边距被吃掉）。 */
+#msgText{padding-left:var(--msgTX,0px)}
 
 /* ---------- 无框字幕（设置 → 文本框外观） ----------
    soft：文字后面垫一层**看不见边界**的径向暗晕，白字压在任何浅色 CG 上都能看清；
@@ -596,6 +599,9 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
   /* 关闭按钮已经移到面板外（浮窗），这里不用再给左侧留 44px 空白 */
   padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.7);font-size:14px;
   max-height:calc(100vh - 110px);overflow-y:auto}
+/* 拖「文本框 / 话者」页的滑块时面板让一半透明度：框和名条就在面板底下，
+   不透明面板会把正在调的东西整个挡住，用户只能瞎拖（2026-11-19）。 */
+#settings.peek{opacity:.3;transition:opacity .12s ease}
 /* 分类页签栏：顶部一行按钮，当前类高亮。窄屏可横向滚动，不换行。 */
 #setTabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap;
   padding:0 0 9px;margin:0 0 4px;border-bottom:1px solid var(--line)}
@@ -640,6 +646,8 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #settings .key-group>.set-group{margin-top:0}
 #settings .set-note{grid-column:1/-1;color:var(--fg3);font-size:14px;line-height:1.5;
   margin:0 0 6px}
+/* 分组标题上的「?」（外观 / 话者名条）：说明挂在标题的 title 上，走
+   initSettingTips 的自绘气泡；样式直接复用 #settings .qh，不需要额外规则。 */
 /* 工具栏按钮组：三个复选框挤在一行，别各自占一格 */
 #settings .kchecks{display:inline-flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0}
 #settings .kchecks label{display:inline-flex;align-items:center;gap:4px;margin:0;
@@ -662,6 +670,10 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #settings .kkeys{display:inline-flex;align-items:center;justify-content:flex-end;
   flex-wrap:wrap;gap:6px;flex:0 1 auto;min-width:0}
 #settings .ksep{flex:0 0 auto;width:1px;height:16px;background:var(--line2);opacity:.75}
+/* 没绑键的「空格子」：键位框的数量永远是默认的格数，被挪走的键留虚线空格，
+   点一下就能补一个键。不删格子，用户才看得出「这一格现在是空的」。 */
+#settings .kbind.empty{border-style:dashed;opacity:.55;background:none}
+#settings .kbind.empty:hover{border-color:var(--gold);opacity:1}
 #settings .kbind:hover{border-color:var(--gold);color:var(--gold)}
 #settings .kbind.wait{border-color:var(--gold);color:var(--gold);
   background:rgba(224,181,102,.12);animation:kbindPulse 1s ease-in-out infinite}

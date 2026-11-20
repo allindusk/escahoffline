@@ -427,10 +427,16 @@ BANNER_PREFIXES = ("bundle_episodeicons_episode_character_", "bundle_image_story
 STAND_PACK_PREFIX = "bundle_standimage_"
 
 #: 「全部立绘」做完后写的完成标记（``userdata/_archive/stand_extra_done.json``）。
-#: 存"当时清单里有多少个立绘源包 + 合成出多少张"，界面据此判「已就绪 / 补全」：
+#: 存"当时清单里有多少个立绘源包 + 合成出多少张"，界面上展示进度用：
 #: 官方上新包 → 清单数变大 → 自动变回「补全」；用户清理过 bundle 缓存 →
 #: 成品还在、标记也还在，不该让他再下一遍（所以判齐**不看**本地包数）。
+#: **判「已就绪」别看它**，看 :func:`stand_extra_missing`。
 STAND_EXTRA_STAMP = "stand_extra_done.json"
+
+#: 合成脚本（``compose_stand_all.py --all-packs``）写的组登记表：
+#: ``{"编号_服装": {"n": 表情数, "pack": 源包字节}}``。这是判「全部立绘」是否
+#: 真齐的唯一依据 —— 包下齐 ≠ 每套服装都合成过（2026-11-20 反馈的根因）。
+STAND_EXTRA_GROUPS = "stand_extra_groups.json"
 
 #: 演出特效（advfx）要用到的包：
 #:   · bundle_image_adv        —— 表情符号图集 + 画面特效逐帧参数表
@@ -751,8 +757,11 @@ def read_stand_extra_stamp() -> dict:
 def write_stand_extra_stamp(packs: int, files: int) -> None:
     """写完成标记：``packs`` = 当时清单里的立绘源包数。
 
-    判齐看它而不是"本地源包数"：清理缓存删掉源包后，成品还在、标记也还在，
-    不该让用户以为要重下；官方上新包 → 清单包数变大 → 自动变回「补全」。
+    **不要再拿它判「已就绪」**：合成的实际单位是"一套服装"，而按编号分 120 个
+    一批跑，某一批失败时包全下齐了、标记也照写 —— 用户会看到「已就绪」但
+    角色整组缺张（2026-11-20 反馈）。真正的判据是
+    :func:`stand_extra_missing`（按合成脚本写的组登记表对账）。
+    这里保留只是为了兼容旧版本的读取与展示。
     """
     p = stand_extra_stamp_path()
     try:
@@ -763,6 +772,84 @@ def write_stand_extra_stamp(packs: int, files: int) -> None:
                       f, ensure_ascii=False)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------- 全部立绘：是否真的合成过
+#: 一套服装 = 清单里的一个 ``bundle_standimage_stand_<编号>_<服装>``。
+_STAND_GROUP_RE = re.compile(r"^bundle_standimage_stand_(\d+)_([0-9a-zA-Z]+)$")
+
+
+def stand_extra_groups_path() -> str:
+    """``compose_stand_all.py --all-packs`` 写的组登记表。"""
+    return os.path.join(config.WS, "_archive", STAND_EXTRA_GROUPS)
+
+
+def read_stand_extra_groups() -> dict:
+    """``{"编号_服装": {"n": 表情数, "pack": 源包字节}}``（没跑过返回空 dict）。"""
+    try:
+        with open(stand_extra_groups_path(), encoding="utf-8") as f:
+            d = json.load(f) or {}
+        g = d.get("groups")
+        return g if isinstance(g, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def stand_extra_expected(index: dict) -> dict:
+    """清单里每套服装 → 源包字节数（key 与组登记表同形：``编号_服装``）。"""
+    out = {}
+    for name, e in index.items():
+        m = _STAND_GROUP_RE.match(name)
+        if m:
+            # 服装段转大写：包名是小写 hex，成品文件名/登记表用大写
+            out[f"{m.group(1)}_{m.group(2).upper()}"] = int((e or {}).get("size") or 0)
+    return out
+
+
+def stand_extra_missing(index: dict = None) -> list:
+    """还没按"包内全套表情"合成过的服装（key 列表）。
+
+    判据不是文档里的完成标记，而是**合成脚本真正写出成品的组**：
+      · 组登记表里没有 → 这套服装从没跑过全套合成（剧本模式只写被引用的几张）；
+      · 登记的源包字节数与当前清单不符 → 官方换过这套素材，表情可能变了。
+    这样任何一次"某一批没跑成"都会在下一次「补全」被精确补上，而不是
+    永久停在"已就绪 + 整组缺张"。
+    """
+    if index is None:
+        try:
+            index = manifest.load_index()
+        except Exception:                                      # noqa: BLE001
+            return []
+    exp = stand_extra_expected(index)
+    rec = read_stand_extra_groups()
+    miss = []
+    for key, size in exp.items():
+        r = rec.get(key)
+        if not isinstance(r, dict) or not r:
+            miss.append(key)
+        elif size and int(r.get("pack") or 0) != size:
+            miss.append(key)
+    return miss
+
+
+def _compose_retry(chunk: list, job=None, tries: int = 2) -> int:
+    """跑一批「全部立绘」合成；退出码非 0 再试一次（返回最后一次的退出码）。
+
+    为什么必须重试：一批是 120 个编号、用 8 个进程跑，一次原生层崩溃就能让
+    这一批后面几十套服装一张图都不写（脚本自己会记下哪几组失败）。合成是
+    幂等的 —— 已写好的直接跳过，重试只补剩下的，代价很小。
+    """
+    rc = 1
+    for i in range(max(1, tries)):
+        try:
+            rc = int(stages.compose_stands_all_packs(chunk) or 0)
+        except Exception as ex:                                # noqa: BLE001
+            rc = -1
+            if job is not None:
+                job.log(f"   立绘合成异常（第 {i + 1} 次）：{str(ex)[:100]}")
+        if rc == 0:
+            return 0
+    return rc
 
 
 # def _is_npc_sd(name: str) -> bool:
@@ -1091,6 +1178,20 @@ def install_base(job=None, workers: int = 48, parts=None,
         if _mm and _mm.group(1) not in _stand_seen:
             _stand_seen.add(_mm.group(1))
             _stand_nums.append(_mm.group(1))   # 补零宽度必须原样保留：036 ≠ 36
+    # 已经按「包内全套表情」合成过的服装不必再跑一遍（幂等守卫还是要解包读图，
+    # 全量 1002 个编号要几分钟）。判据是合成脚本自己写的组登记表 ——
+    # 包下齐了但没合成过的组、官方换过素材的组，都会留在这里被补上。
+    _stand_todo: list[str] = []
+    if _stand_nums:
+        try:
+            _miss = set(stand_extra_missing(mf.index))
+        except Exception:                                      # noqa: BLE001
+            _miss = set()
+        _miss_nums = {k.split("_", 1)[0] for k in _miss}
+        _stand_todo = [n for n in _stand_nums if n in _miss_nums]
+        if job is not None:
+            job.log(f"   全部立绘：{len(_stand_todo)} 个编号要合成"
+                    f"（清单共 {len(_stand_nums)} 个；已合成过的不重做）")
     # 2026-11-16：NPC / 敌人的 SD 小人 + 音声整体停用。
     # 原来这里在 parts 含 "sd_npc" 时收集 435 个 bundle_unit_* 与
     # 435 个 bundle_audioclipsprefab_unit_*（1xxxx/2xxxx），现在全部注释。
@@ -1118,10 +1219,11 @@ def install_base(job=None, workers: int = 48, parts=None,
         _total += len([n for n in mf.index if n.startswith(ADVFX_PREFIXES)])
     if "gallery" in parts:
         _total += len(_gal_names)
-    if _stand_nums:
+    if _stand_todo:
         # 按**编号**记账（不是包数）：这一项在解包阶段做的是「一套服装合成一次」，
         # 分母若按 2623 个包算，进度条到最后只会走到约 73%（见上面 _stand_nums）。
-        _total += len(_stand_nums)
+        # 只算**这次真要跑**的编号：已合成过的不重做，进度条才不会走不到头。
+        _total += len(_stand_todo)
     # 2026-11-16：sd_npc 已停用
     # if "sd_npc" in parts:
     #     _total += len(_sd_names) + len(_vc_names)
@@ -1482,10 +1584,12 @@ def install_base(job=None, workers: int = 48, parts=None,
             # ``ImageGroup.ExpressionImages`` 把每套服装的全部表情都合成出来
             # （已存在的成品走幂等守卫，不重写、也不重复占空间）。
             #
-            # 进度口径：`_total` 里这一项记的是**编号数**（`_stand_nums`），
+            # 进度口径：`_total` 里这一项记的是**编号数**（`_stand_todo`），
             # 与这里 `add=len(chunk)` 一一对应，所以整条进度条单调爬到 100%，
             # 合成阶段自己占掉它该占的那一段（不再「下载完就 100%、合成像卡死」）。
-            nums = _stand_nums
+            nums = _stand_todo        # 只跑"还没按全套表情合成过"的编号
+            if job is not None and not nums:
+                job.log("   全部立绘：清单里每一套服装都合成过，跳过合成")
             BATCH = 120                          # 一批约 3~5 分钟，进度条不至于冻住
             bad = 0
             done_sets = 0
@@ -1498,14 +1602,14 @@ def install_base(job=None, workers: int = 48, parts=None,
                 if job is not None:
                     job.progress(message=f"合成全部立绘 {bi + 1}-{bi + len(chunk)}"
                                          f"/{len(nums)} 套服装（含剧情没用到的表情）…")
-                try:
-                    stages.compose_stands_all_packs(chunk)
-                    done_sets += len(chunk)
-                except Exception as ex:                        # noqa: BLE001
+                rc = _compose_retry(chunk, job)
+                if rc != 0:
                     bad += 1
                     if job is not None and bad <= 3:
-                        job.log(f"   立绘合成失败（{chunk[0]} 起 {len(chunk)} 套）："
-                                f"{str(ex)[:80]}")
+                        job.log(f"   立绘合成失败（{chunk[0]} 起 {len(chunk)} 套，"
+                                f"退出码 {rc}）：详见 app.log 的 compose_stand_all 段落")
+                else:
+                    done_sets += len(chunk)
                 if job is not None:
                     job.progress(add=len(chunk))
             # 立绘页的分组表 / "这组有没有"清单都靠扫磁盘，必须跟着重建，
@@ -1517,19 +1621,31 @@ def install_base(job=None, workers: int = 48, parts=None,
             out["bytes"] += sz
             if job is not None:
                 job.log(f"   立绘总张数 {n_img}（含剧情里没用到的表情）")
-            # **只有真的跑完才写完成标记**：界面的「已就绪」判据就是它。
-            # 中途取消 / 有批次失败还盖章的话，用户会看到一个假的「已就绪」，
-            # 而且以后再也不会提示补全（2026-11-17 审计）。
+            # **判「已就绪」按"每套服装都真合成过"对账，不看包数**：
+            # 包下齐 ≠ 合成过（剧本模式只写被引用的几张），以前只看包数就盖章，
+            # 于是装完全部剧情 + 全部立绘仍可能整组缺张（2026-11-20 反馈）。
+            try:
+                left = stand_extra_missing(mf.index)
+            except Exception:                                  # noqa: BLE001
+                left = []
             if cancelled:
                 fails.append("全部立绘：已取消，没有标记为完成")
                 hints.append("再点一次「补全」会接着做（已合成的不会重做）")
-            elif bad:
-                fails.append(f"全部立绘：{bad} 批合成失败（详见日志），未标记为完成")
-                hints.append("重试一次；仍失败请反馈日志里的 compose_stand_all 段落")
+            elif bad or left:
+                why = []
+                if bad:
+                    why.append(f"{bad} 批合成失败")
+                if left:
+                    why.append(f"还有 {len(left)} 套服装没合成")
+                fails.append("全部立绘：" + "、".join(why)
+                             + "（详见日志），未标记为完成")
+                hints.append("再点一次「补全」只会补没合成的那几套；"
+                             "仍失败请反馈日志里的 compose_stand_all 段落")
             else:
                 write_stand_extra_stamp(len(_stand_names), n_img)
                 if job is not None:
-                    job.log(f"   已合成 {done_sets}/{len(nums)} 套服装，标记为已就绪")
+                    job.log(f"   已合成 {done_sets}/{len(nums)} 个编号的服装，"
+                            f"{len(_stand_names)} 个源包全部对账通过，标记为已就绪")
         # 2026-11-16：sd_npc 解包/导出分支已删除（NPC 敌 SD + 音声整体停用）
         # elif tag == "sd_npc":
         # elif tag == "sd_npc":
@@ -2120,13 +2236,18 @@ def _public_status_calc() -> dict:
     n_gal_jacket = _count(os.path.join(config.IMG, "jacket"), (".webp", ".png"))
     gal_total = len(gallery_audio_nos(idx)) or len(gallery_tracks()) or 165
 
-    # 全部立绘（可选）：分子是**磁盘成品张数**（展示用）；判齐看完成标记里记的
-    # "当时清单有多少个立绘源包" —— 清理缓存删了源包不该判成缺。
+    # 全部立绘（可选）：分子是**磁盘成品张数**（展示用）；判齐看
+    # **每套服装是否真的按包内全套表情合成过**（合成脚本写的组登记表）——
+    # 只看"源包数"会在"包下齐了但某一批没合成"时误报「已就绪」
+    # （2026-11-20 反馈：装完全部剧情 + 全部立绘，部分角色仍只有 3~4 组）。
     stand_packs = len([n for n in idx if n.startswith(STAND_PACK_PREFIX)]) or 2623
     n_stand_img = stand_img_count()
-    _st_stamp = read_stand_extra_stamp()
-    stand_extra_ok = (int(_st_stamp.get("packs") or 0) >= stand_packs
-                      and n_stand_img > 0)
+    try:
+        _stand_left = stand_extra_missing(idx)
+    except Exception:                                          # noqa: BLE001
+        _stand_left = []
+    _stand_checked = bool(read_stand_extra_groups())
+    stand_extra_ok = not _stand_left and n_stand_img > 0
     # 「没有任何剧情包包含」的张数 = 磁盘总数 − imgmap 里被剧本引用到的键数。
     # 界面上要写清这部分才是这一项独有的价值（不然用户觉得"我装了剧情怎么还缺"）。
     try:
@@ -2184,6 +2305,10 @@ def _public_status_calc() -> dict:
             #      不再是 0-1 布尔值）；分母含官方新曲，上新后按钮会变回「补全」。
             # 13 = 加 standExtra（可选「全部立绘」：含剧情没用到的表情）+
             #      standExtraPacks / standExtraOk。
+            # 14 = 加 standExtraMissing（还有多少套服装没合成过）：判齐改成按
+            #      合成脚本写的组登记表对账，不再信"源包数 >= 清单包数"。
+            # 15 = 加 standExtraChecked（台账在不在）：老用户升级后第一次缺的
+            #      数量等于"全部服装"，界面据此只提示"点一次补全核对"。
             # 前端看到 v 低于自己需要的版本，就不能把缺字段当成 0/0，
             # 否则界面会显示「横幅 0/0」这种看起来像"没有横幅"的假象。
             "advfx": 1 if advfx_ok else 0, "advfxTotal": 1,
@@ -2198,11 +2323,17 @@ def _public_status_calc() -> dict:
             "standExtra": n_stand_img, "standExtraPacks": stand_packs,
             "standExtraOnly": stand_extra_only,
             "standExtraOk": bool(stand_extra_ok),
+            # 还有多少套服装没按全套表情合成过（0 = 真的齐了）
+            "standExtraMissing": len(_stand_left),
+            # 组登记表在不在：0 = 这台机器还没用新判据核对过（老用户升级后
+            # 第一次，standExtraMissing 会等于全部服装数，此时界面不要写成
+            # "还有 2650 套要补"，那会把人吓一跳 —— 实际可能只缺几十套）。
+            "standExtraChecked": 1 if _stand_checked else 0,
             # NPC / 敌人 SD：已合成的编号数 / 清单里的编号数
             "sdNpc": n_sd_npc, "sdNpcTotal": sd_npc_total,
             # 战斗语音：已导出的 NPC 单位数 / 清单里的 NPC 单位数
             "voice": n_voice, "voiceTotal": voice_total,
-            "v": 13,
+            "v": 15,
             "bytes": 0}
 
 

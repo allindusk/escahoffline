@@ -39,6 +39,7 @@ body{background:radial-gradient(circle at 70% 20%,#1a2030 0,#0b0d12 60%);
 #plChips button.chip-toggle.on{background:#2d2a4a;color:var(--gold)}
 /* hidden 属性在 flex 容器里要显式声明，避免个别浏览器用 display 覆盖它 */
 #plChips button[hidden]{display:none}
+#bulkBar button[hidden]{display:none}
 .pl-tools{display:flex;gap:6px;padding:8px 12px;flex-shrink:0;border-bottom:1px solid var(--line)}
 .pl-tools select{flex:1;min-width:0;padding:4px 6px;border-radius:6px;font-size:14px;
   font-family:inherit;border:1px solid var(--line);background:var(--bg3);color:var(--fg)}
@@ -124,8 +125,9 @@ body{background:radial-gradient(circle at 70% 20%,#1a2030 0,#0b0d12 60%);
 #jacket.native{width:auto;height:auto;object-fit:none;
   max-width:100%;max-height:100%}
 #jacket.none{opacity:.25}
-.spindle{position:absolute;left:50%;top:50%;width:10px;height:10px;border-radius:50%;
-  transform:translate(-50%,-50%);background:#c9cfdb;box-shadow:0 0 0 3px #0a0c11}
+/* 唱片中心的"轴孔"圆点：2026-11-20 用户要求隐藏 —— 音声模式中心贴的是角色
+   头像/立绘，圆点压在图上经常和画面不搭。节点留着（不删 HTML），只是不画。 */
+.spindle{display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* 唱臂：播放时压到唱片上，暂停抬起 */

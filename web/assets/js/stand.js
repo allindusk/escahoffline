@@ -54,6 +54,25 @@
     return n ? String(n) : '';
   }
 
+  /* 这个编号是不是「已实装的角色」。
+   *
+   * 判据只看**官方角色表**（`names.js` 的名字 / `charmeta.js` 的稀有度·职业·
+   * 实装日）：两个表都查不到 = 官方还没把她当角色公布。这类编号只因为活动剧情
+   * 里当过路人 / 剪影才留下资源包，立绘页原来会显示成 "#364" 这种无名行，
+   * 混在角色列表里（2026-11-20 反馈 #364 / #399 / #404）。
+   *
+   * **不能用"剧情有没有引用"判**：这些角色恰恰是在别的角色的剧情里出场才有的
+   * 图，引用数 > 0，按引用判反而永远移不出去。
+   *
+   * 反过来，一旦实装，CI 更新的 charmeta.js / names.js 会补上她 —— 本页的数据
+   * 热更新（ESC.watchData 的 onReload）会原地合并这两张表并调 rebuildData()，
+   * 所以下次打开或数据更新时她**自动回到角色列表**，不需要重装素材或重算索引。
+   */
+  function released(num) {
+    const n = numOf(num);
+    return !!nameOf(num) || !!(META[n] || META[String(num)]);
+  }
+
   // ---------------------------------------------------------------- 数据整形
   const STAND_BY_KEY = Object.create(null);   // 立绘键 -> 卡片下标（灯箱反查用）
 
@@ -88,11 +107,17 @@
       }
       if (!files.length) continue;
       const any = standAvail(g.n, g.c, files);
+      /* 官方角色表里没有的编号 → 归「其他立绘」（见 released() 的说明）。
+         只在 char 段生效：4xxx/5xxx 本来就是 NPC / 敌人。 */
+      const band = (g.b === 'char' && !released(g.n)) ? 'other' : g.b;
       out.push({
-        t: 'stand', num: g.n, band: g.b, cloth: g.c,
-        cid: g.b === 'char' ? parseInt(numOf(g.n), 10) : null,
+        t: 'stand', num: g.n, band: band, cloth: g.c,
+        /* 未实装的编号也带 cid：同一套素材有 `399` 与 `0399` 两种补零写法，
+           靠它把两套合并成一行（和角色列表里的合并口径一致），否则「其他」
+           里会出现 #399 / #0399 两条同名的人。 */
+        cid: (band === 'char' || band === 'other') ? parseInt(numOf(g.n), 10) : null,
         files, any,
-        title: nameOf(g.n) || ('#' + g.n),
+        title: nameOf(g.n) || ('#' + numOf(g.n)),
         sub: '服装 ' + g.c.slice(0, 8),
       });
     }
@@ -176,27 +201,35 @@
     return ALL.filter(c => (c.band === 'char') === s.char && c.t === s.t);
   }
 
+  /** 侧栏每一项的 key：有 cid 的角色按 cid 合并（`399` 与 `0399` 是同一人），
+   *  NPC / 敌人没有 cid，用原始编号（它们的补零宽度是不同单位，不能合并）。 */
+  function sideKeyOf(c) {
+    return c.cid != null ? 'c' + c.cid : 'n' + c.num;
+  }
+
   function sideEntries() {
-    // 角色范围按角色聚合；「其他」范围按编号聚合（它们没有角色名，编号就是标识）
     const cards = scopeCards();
-    const byChar = curScope().char;
     const by = new Map();
     for (const c of cards) {
-      const key = byChar
-        ? (c.cid != null ? 'c' + c.cid : 'n' + c.num)
-        : 'n' + c.num;
+      const key = sideKeyOf(c);
       let e = by.get(key);
       if (!e) {
-        e = { key, cid: c.cid, num: c.num, n: 0, imgs: 0, any: false };
+        e = { key, cid: c.cid, num: c.num, n: 0, imgs: 0,
+              any: false, miss: false, fav: false };
         by.set(key, e);
       }
       e.n += 1;
       e.imgs += c.files.length;
       if (c.any) e.any = true;
+      else e.miss = true;         // 这一位下面还有没下载的服装
+      if (isFav(c)) e.fav = true; // 这一位下面有收藏过的服装
     }
     const out = Array.from(by.values());
     out.forEach(e => {
-      e.name = e.cid != null ? (nameOf(e.cid) || ('#' + e.cid)) : ('#' + e.num);
+      /* 有名字用名字；没名字（未实装 / NPC / 敌人）用 `#编号`。
+         未实装的编号会带 cid，但编号本身要显示原样（`#364` 而不是 `#0364`）。 */
+      const nm = e.cid != null ? nameOf(e.cid) : '';
+      e.name = nm || ('#' + numOf(e.num));
       e.sortName = e.name;
       e.idNum = parseInt(numOf(e.num), 10) || 0;
       // 实装日期（公共素材清单里的 d 字段）：给"按实装日期"排序用，
@@ -209,6 +242,12 @@
   function renderSidebar() {
     const box = $('#charList');
     let list = sideEntries();
+    /* 「已下载 / 未下载 / 已收藏」和卡片墙用同一份判定（CG 页也是这么做的）：
+       以前侧栏完全不看这个下拉，选「只看未下载」时左边照样列着全部角色，
+       点进去却是一片空墙；导出也跟着这个下拉走（见 standexport.js）。 */
+    if (ST.filter === 'have') list = list.filter(e => e.any);
+    else if (ST.filter === 'miss') list = list.filter(e => e.miss);
+    else if (ST.filter === 'fav') list = list.filter(e => e.fav);
     const q = ST.q.trim().toLowerCase();
     if (q) {
       list = list.filter(e => (e.name || '').toLowerCase().includes(q)
@@ -226,9 +265,9 @@
     for (const e of list) {
       const on = ST.cur === e.key ? ' on' : '';
       const ava = e.cid != null ? avatarCands(e.cid) : [];
-      // NPC / 敌人没有角色头像：用自己的编号末三位当"脸"，比一个 # 好认
-      const ph = e.cid != null
-        ? (e.name ? e.name.slice(0, 1) : '#')
+      // NPC / 敌人 / 未实装角色都没有头像：用编号末三位当"脸"，比一个 # 好认
+      const ph = (e.cid != null && nameOf(e.cid))
+        ? e.name.slice(0, 1)
         : String(e.idNum).slice(-3);
       const media = ava.length
         // data-lsrc：侧栏几百行，抽屉没展开时离屏，一张都不该请求
@@ -299,14 +338,21 @@
   function filtered() {
     let list = scopeCards();
     if (ST.cur != null) {
-      list = list.filter(c => {
-        const key = curScope().char && c.cid != null ? 'c' + c.cid : 'n' + c.num;
-        return key === ST.cur;
-      });
+      list = list.filter(c => sideKeyOf(c) === ST.cur);
     }
     if (ST.filter === 'have') list = list.filter(c => c.any);
     else if (ST.filter === 'miss') list = list.filter(c => !c.any);
     else if (ST.filter === 'fav') list = list.filter(c => isFav(c));
+    /* 搜索框以前只筛左边那列，卡片墙纹丝不动 —— 搜完一个角色、墙上还是全部，
+       接着点「导出立绘」就会把两千多组全打包（2026-11-20 反馈）。两侧同口径：
+       名字 / 角色编号 / 原始编号都能搜。 */
+    const q = ST.q.trim().toLowerCase();
+    if (q) {
+      const qn = q.replace(/^#/, '');
+      list = list.filter(c => (c.title || '').toLowerCase().includes(q)
+        || (qn && String(c.num).includes(qn))
+        || (qn && String(c.cid) === qn));
+    }
     /* 卡片墙自己也要排：以前只在 renderSidebar 里排，卡片墙永远按 standmap
        的原始顺序画，改下拉框"看着没反应"（2026-11-16 反馈）。
        同一角色的多套服装靠排序的稳定性保持原顺序。 */
@@ -591,10 +637,7 @@
     /* 上次选中的角色可能已经一张立绘都没有了（换机器 / 清理过空间 / 卸载过剧情）：
        照原样恢复会让整面墙空着、还写着"这里还没有素材"，看起来像列表坏了。
        校验一下，没有卡就退回「全部」。 */
-    if (ST.cur != null && !scopeCards().some(c => {
-      const key = (curScope().char && c.cid != null) ? 'c' + c.cid : 'n' + c.num;
-      return key === ST.cur;
-    })) {
+    if (ST.cur != null && !scopeCards().some(c => sideKeyOf(c) === ST.cur)) {
       ST.cur = null;
       setPref('stand', 'cur', null);
     }
@@ -700,8 +743,14 @@
     const qs = new URLSearchParams(location.search);
     const sc = qs.get('scope');
     if (sc) {
-      ST.scope = normScope(sc);          // 旧值 stand/sd/npc/enemy 也能认（SD 回落立绘）
+      const want = normScope(sc);        // 旧值 stand/sd/npc/enemy 也能认（SD 回落立绘）
+      /* 换范围必须清掉上次选中的角色（`setScope` 也是这么做的）：
+         否则深链带着"角色范围里选的 c416"进「其他」，过滤后一张卡都不剩，
+         页面写着"这里还没有素材"，看着像这个范围是空的（2026-11-20 发现）。 */
+      if (want !== ST.scope) ST.cur = null;
+      ST.scope = want;
       setPref('stand', 'scope', ST.scope); // 深链切过来的范围也记住，刷新不跳回
+      setPref('stand', 'cur', null);
       applySize(ST.cardMin);
     }
     $$('#sdScope button').forEach(b => b.classList.toggle('on', b.dataset.scope === ST.scope));
@@ -747,6 +796,25 @@
     scope: () => ST.scope,
     cards: () => ST.list.length,
     setScope,
+    /* ---- 导出（web/assets/js/standexport.js）用 ----
+       导什么 = 当前**看得见**的那些卡：选了角色就是那一个角色，没选就是全部；
+       勾了「只看已下载 / 只看已收藏」也就只导那部分。 */
+    scopeName: () => (curScope().char ? '角色立绘' : '其他立绘'),
+    /** 搜索框里当前的关键字（导出确认框要说清楚"搜索也生效"） */
+    query: () => ST.q,
+    exportGroups: () => ST.list.map(c => [c.num, c.cloth]),
+    counts: () => ({
+      groups: ST.list.length,
+      imgs: ST.list.reduce((n, c) => n + c.files.length, 0),
+      chars: new Set(ST.list.map(c => c.num)).size,
+    }),
+    /* 选中角色的名字：从 ALL 里找，不走 sideEntries() —— 那份已经按
+       「只看已收藏 / 未下载」和搜索框筛过了，筛掉的选中项会变成空名字。 */
+    curName: () => {
+      if (ST.cur == null) return '';
+      const c = ALL.find(x => sideKeyOf(x) === ST.cur);
+      return c ? (c.title || '') : '';
+    },
   };
 
   /* 数据表被别处更新（装完角色立绘 / 更新剧情目录补了名字与实装日）→ 重建并重画。

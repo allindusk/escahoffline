@@ -37,31 +37,35 @@
     }
     const scope = window.CGPAGE ? CGPAGE.scope() : 'char';
     const cur = window.CGPAGE ? CGPAGE.cur() : null;
-    let body;
-    if (scope !== 'char') {
-      // 剧情 CG（主线/活动/其他）：按组导出，服务端 exports.export_cg 的 groups 参数
-      const gs = CGPAGE.groupsForExport();
-      const c = CGPAGE.visibleCounts();
-      if (!gs.length) {
-        await Dlg.alert('当前筛选没有 CG 可导出。', { anchor: btn });
-        return;
-      }
-      if (!(await Dlg.confirm(`导出「${CGPAGE.scopeName()}」的 ${c.groups} 组 / ${c.imgs} 张 CG？\n\n` +
-        `（想只导一部剧情，先在左侧点一部再点导出）\n\n继续？`,
-        { anchor: btn, ok: '开始导出' }))) return;
-      body = { groups: gs };
-    } else if (cur) {
-      if (!(await Dlg.confirm(`导出角色「${CGPAGE.nameOf(cur)}」的全部 CG？`,
-        { anchor: btn, ok: '开始导出' }))) return;
-      body = { chars: [cur] };
-    } else {
-      const c = window.CGPAGE ? CGPAGE.counts() : { chars: 0, total: 0 };
-      if (!(await Dlg.confirm(`当前是「全部角色」，将打包 ${c.chars} 个角色、共 ${c.total} 张 CG。\n\n` +
-        `（不含主线/活动/其他的剧情 CG；想只导一个角色，先在左侧点一个角色再点导出）\n\n继续？`,
-        { anchor: btn, ok: '开始导出' }))) return;
-      // 显式给角色列表，不用 whole：whole 会把 -1/-2/-3 三个剧情桶也算进去
-      body = { chars: window.CGPAGE ? CGPAGE.allCharIds() : [] };
+    /* 导什么 = **墙上当前看得见的那些组**（CGPAGE.groupsForExport()），
+       不是"这个范围的全部"。以前角色范围没选角色时直接发
+       `chars: allCharIds()` —— 勾了「只看已收藏 / 只看未下载」、或者在搜索框
+       里筛过之后点导出，导出的仍是全量（2026-11-20 反馈）。
+       groups 是 [[桶 id, 组序号], …]，服务端按它精确挑组，角色 CG 与剧情 CG
+       走同一条路。 */
+    const gs = window.CGPAGE ? CGPAGE.groupsForExport() : [];
+    const c = window.CGPAGE ? CGPAGE.visibleCounts() : { groups: 0, imgs: 0 };
+    if (!gs.length) {
+      await Dlg.alert('当前筛选没有 CG 可导出。', { anchor: btn });
+      return;
     }
+    const dlf = ($('#dlFilter') || {}).value || '';
+    let head, hint;
+    if (scope !== 'char') {
+      head = `导出「${CGPAGE.scopeName()}」的 ${c.groups} 组 / ${c.imgs} 张 CG？`;
+      hint = '\n（想只导一部剧情，先在左侧点一部再点导出）';
+    } else if (cur) {
+      head = `导出角色「${CGPAGE.nameOf(cur)}」的 ${c.groups} 组 / ${c.imgs} 张 CG？`;
+      hint = '';
+    } else {
+      head = `导出「全部角色」的 ${c.groups} 组 / ${c.imgs} 张 CG？`;
+      hint = '\n（不含主线/活动/其他的剧情 CG；想只导一个角色，先在左侧点一个角色再点导出）';
+    }
+    if (dlf === 'fav') hint += '\n· 现在开着「只看已收藏」，只导出收藏过的那些组';
+    if (dlf === 'miss') hint += '\n· 现在开着「只看未下载」，只导出本机还没下载的那些组';
+    if (!(await Dlg.confirm(`${head}\n${hint}\n\n继续？`,
+      { anchor: btn, ok: '开始导出' }))) return;
+    const body = { groups: gs };
     btn.disabled = true;
     btn.textContent = '打包中…';
     try {

@@ -150,19 +150,25 @@ def export_cg(job, chars: list[int] | None = None,
     ``chars``  角色 id 列表（None = 全部有 CG 的角色）
     ``groups`` 精确到事件组：[charId, groupIndex] 的列表（剧情 CG 走这条，charId 是 -1/-2/-3）
     ``whole``  True 表示忽略筛选导出全部
+
+    ``groups`` 是"前端当前看得见的组"（筛选 / 搜索之后的结果）：角色范围不再
+    按角色 id 一把抓，否则「只看已收藏」点导出会把全量都打包（2026-11-20）。
     """
     cgmap = _load_js(os.path.join(paths.DATA, "cgmap.js"))
     imgmap = media.load_imgmap()
     base = media.load_overlay("base")
     x2 = media.load_overlay("x2")
 
+    # 用集合比对：全量导出时 groups 有四千多条，逐个 in 列表是 O(n²)
+    gset = ({(int(a), int(b)) for a, b in groups} if groups else None)
+    cset = set(chars) if chars else None
     picked: list[tuple[int, str, list[str], str]] = []
     for gi, g in enumerate(cgmap):
         cid = g.get("c")
-        if groups and not whole:
-            if [cid, gi] not in groups:
+        if gset is not None and not whole:
+            if (cid, gi) not in gset:
                 continue
-        elif chars and not whole and cid not in chars:
+        elif cset is not None and not whole and cid not in cset:
             continue
         picked.append((cid, g.get("k") or f"group{gi}", g.get("f") or [],
                        g.get("u") or ""))
@@ -227,6 +233,130 @@ def export_cg(job, chars: list[int] | None = None,
                     job.progress(add=1, message=f"打包 {written}/{total} 张")
     if job is not None:
         job.finish(f"已导出 {written} 张 CG")
+    return {"path": paths.rel(out) if out.startswith(paths.WEB) else out,
+            "abs": out, "files": written, "missing": missing}
+
+
+# ---------------------------------------------------------------- 立绘导出
+def _stand_groups() -> list[dict]:
+    """``standmap.js`` 的组清单（``n`` 编号 / ``c`` 服装 / ``b`` 桶 / ``f`` 文件键）。"""
+    try:
+        d = _load_js(os.path.join(paths.DATA, "standmap.js"))
+    except Exception:                                            # noqa: BLE001
+        return []
+    return (d or {}).get("groups") or []
+
+
+def _stand_int(num) -> int | None:
+    try:
+        return int(str(num).lstrip("0") or "0")
+    except (TypeError, ValueError):
+        return None
+
+
+def stand_label(num: str) -> str:
+    """立绘归属的显示名：角色名 → 没有就 ``#编号``。
+
+    不用 ``names.of()``：它对未实装 / NPC 会返回「角色364」这种序号化名字，
+    而页面上这些条目就叫 ``#364``（2026-11-20 立绘页的口径），导出文件夹要一致。
+    """
+    from . import names as nameutil
+    cid = _stand_int(num)
+    nm = (nameutil.all_names().get(cid) or "").strip() if cid is not None else ""
+    if nm:
+        return nm
+    return "#" + str(num).lstrip("0")
+
+
+def export_stand(job, groups: list[list[str]] | None = None,
+                 chars: list[int] | None = None) -> dict:
+    """导出立绘为 zip。
+
+    ``groups`` 精确到「一套服装」：``[["0400","8AEE967B"], …]``（前端按当前
+    筛选结果给，含「其他立绘」里的 NPC / 敌人 / 未实装角色）。
+    ``chars``  角色 id 列表（同一个角色的两套补零编号 400 / 0400 一起导）。
+    两者都不给 = 全部。
+
+    目录结构：``<角色名或 #编号>/服装 <服装HEX>/<表情>.webp``。
+    实际取图优先高清（``imgmap.x2.js`` 指过去的那份），没有才用原图 ——
+    和播放器、立绘页看到的是同一张。
+    """
+    sm = _stand_groups()
+    if not sm:
+        return {"path": "", "files": 0, "note": "没有立绘索引（先装剧情或补全立绘）"}
+
+    want = None
+    if groups is not None:
+        want = {(str(a), str(b).upper()) for a, b in groups}
+    chars_set = set(int(c) for c in (chars or [])) if chars else None
+
+    picked = []
+    for g in sm:
+        num, cloth = str(g.get("n") or ""), str(g.get("c") or "").upper()
+        if not num or not cloth:
+            continue
+        if want is not None and (num, cloth) not in want:
+            continue
+        if chars_set is not None and _stand_int(num) not in chars_set:
+            continue
+        files = [k for k in (g.get("f") or []) if k]
+        if files:
+            picked.append((num, cloth, files))
+
+    total = sum(len(f) for _n, _c, f in picked)
+    if job is not None:
+        job.set_total(total, "张")
+        job.set_items(total)
+    if not total:
+        return {"path": "", "files": 0, "note": "没有匹配到立绘"}
+
+    # 名字去重：一个角色常有 `399` / `0399` 两套补零编号，标签都会算成「#399」
+    labels: list[str] = []
+    for _n in sorted({p[0] for p in picked}):
+        lb = stand_label(_n)
+        if lb not in labels:
+            labels.append(lb)
+    if len(labels) == 1:
+        tag = labels[0] + "_立绘"
+    elif len(labels) <= 3:
+        tag = "、".join(labels) + "_立绘"
+    else:
+        tag = f"{labels[0]}等{len(labels)}个_立绘"
+    from . import names as nameutil
+    out = _unique_path(nameutil.safe(tag, 70))
+
+    x2s = (media.load_overlay("x2").get("stand") or {})
+    written = missing = 0
+    used: dict[str, set] = {}          # 每个文件夹已用过的文件名（见下面的撞车处理）
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as z:
+        for num, cloth, files in picked:
+            if job is not None and job.cancelled:
+                break
+            folder = f"{_san(stand_label(num))}/服装 {cloth[:8]}"
+            have = used.setdefault(folder, set())
+            for key in files:
+                if job is not None and job.cancelled:
+                    break
+                rel = x2s.get(key) or f"media/img/stand/{key}.webp"
+                src = paths.web_path(rel)
+                if not os.path.exists(src):
+                    missing += 1
+                    if job is not None:
+                        job.progress(add=1)
+                    continue
+                # 同一角色的两套补零编号（399 / 0399）会落进同一个文件夹、
+                # 表情名也一样 → 后到的那个加编号区分，否则 zip 里重名丢文件
+                expr = key.rsplit("_", 1)[-1]
+                fn = expr + ".webp"
+                if fn in have:
+                    fn = f"{expr}_{num}.webp"
+                have.add(fn)
+                z.write(src, f"{folder}/{fn}")
+                written += 1
+                if job is not None:
+                    job.progress(add=1, message=f"打包 {written}/{total} 张")
+    if job is not None:
+        job.finish(f"已导出 {written} 张立绘")
     return {"path": paths.rel(out) if out.startswith(paths.WEB) else out,
             "abs": out, "files": written, "missing": missing}
 
@@ -296,6 +426,86 @@ def export_audio(job, tracks: list[int] | None = None) -> dict:
                 job.progress(add=1, message=f"打包 {written}/{total} 首")
     if job is not None:
         job.finish(f"已导出 {written} 首")
+    return {"path": out, "abs": out, "files": written, "missing": missing}
+
+
+def _voice_label(uid) -> str:
+    """音声文件夹名：角色名 → 没有就 ``#编号``（与立绘页同名口径，不写「角色N」）。"""
+    from . import names as nameutil
+    try:
+        cid = int(str(uid).lstrip("0") or "0")
+    except (TypeError, ValueError):
+        cid = None
+    nm = (nameutil.all_names().get(cid) or "").strip() if cid is not None else ""
+    return nm or ("#" + str(uid))
+
+
+def export_voice(job, items: list[list] | None = None) -> dict:
+    """把角色音声（一段段 m4a）打包成 zip。
+
+    ``items`` = ``[[角色编号, "media/audio/voice/1/voice_x.m4a"], …]``，由原声集页
+    按当前**勾选**给出（一段语音一个条目；一个角色几十到几百段）。
+
+    **只接受 ``media/audio/voice/`` 下的路径**：这些路径来自前端，必须当外部输入
+    处理，不给它读任意本机文件的机会。
+
+    目录：``<角色名或 #编号>/<文件名>.m4a``；不压缩（m4a 本来就压过）。
+    """
+    rows: list[tuple[str, str]] = []
+    for it in (items or []):
+        if not isinstance(it, (list, tuple)) or len(it) < 2:
+            continue
+        rel = str(it[1] or "").replace("\\", "/").lstrip("/")
+        if not rel.startswith("media/audio/voice/"):
+            continue
+        rows.append((str(it[0]), rel))
+
+    total = len(rows)
+    if job is not None:
+        job.set_total(total, "段")
+        job.set_items(total)
+    if not total:
+        return {"path": "", "files": 0, "note": "没有选中语音"}
+
+    labels: list[str] = []
+    for uid in sorted({r[0] for r in rows}):
+        lb = _voice_label(uid)
+        if lb not in labels:
+            labels.append(lb)
+    if len(labels) == 1:
+        tag = labels[0] + "_音声"
+    elif len(labels) <= 3:
+        tag = "、".join(labels) + "_音声"
+    else:
+        tag = f"{labels[0]}等{len(labels)}个_音声"
+    from . import names as nameutil
+    out = _unique_path(nameutil.safe(tag, 70))
+
+    written = missing = 0
+    used: dict[str, set] = {}
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+        for uid, rel in rows:
+            if job is not None and job.cancelled:
+                break
+            src = paths.web_path(rel)
+            if not os.path.exists(src):
+                missing += 1
+                if job is not None:
+                    job.progress(add=1)
+                continue
+            folder = _san(_voice_label(uid))
+            have = used.setdefault(folder, set())
+            fn = os.path.basename(src)
+            if fn in have:      # 同名（不同包里重名的流水号）加编号区分，别互相覆盖
+                stem, ext = os.path.splitext(fn)
+                fn = f"{stem}_{written}{ext}"
+            have.add(fn)
+            z.write(src, f"{folder}/{fn}")
+            written += 1
+            if job is not None:
+                job.progress(add=1, message=f"打包 {written}/{total} 段")
+    if job is not None:
+        job.finish(f"已导出 {written} 段语音")
     return {"path": out, "abs": out, "files": written, "missing": missing}
 
 

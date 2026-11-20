@@ -413,23 +413,27 @@ def process_group(task):
 
     # —— 类型 B：包里根本没有表情图层，底图本身就是完整立绘
     if not faces:
+        # ``--all-packs``（faces_wanted is None）时包内一个 code 都拿不到：
+        # 以前这里循环 0 次 → 一张都不写 → 整组在立绘页里直接消失（见 FALLBACK_FACE）。
+        # 剧本模式不动：它的 faces_wanted 是剧本真实引用到的 code。
+        if not faces_wanted:
+            faces_wanted = [FALLBACK_FACE]
         if force or gain > 1.001 or not _all_images_exist(num, cloth, faces_wanted):
             for code in faces_wanted:
                 fn = f"stand_{num}_{cloth}_{code}.webp"
                 base.save(os.path.join(WEBS, fn), "WEBP", quality=86, method=4)
-        return (num, cloth, None, {}, "无表情图层-直接用底图", "", None, trim)
+        return (num, cloth, None, {c: [] for c in faces_wanted},
+                "无表情图层-直接用底图", "", None, trim)
 
     # —— 类型 C：底图是空画布，差分图层本身就是整幅画面（CG/半身图）
     if base_opaque == 0:
-        if force or gain > 1.001 or \
-                not _all_images_exist(num, cloth, [c for c in faces_wanted if c in faces]):
-            for code in faces_wanted:
-                f = faces.get(code)
-                if f is None:
-                    continue
+        codes_c = [c for c in faces_wanted if c in faces]
+        if force or gain > 1.001 or not _all_images_exist(num, cloth, codes_c):
+            for code in codes_c:
                 fn = f"stand_{num}_{cloth}_{code}.webp"
-                f.save(os.path.join(WEBS, fn), "WEBP", quality=86, method=4)
-        return (num, cloth, None, {}, "空底图-差分即整图", "", None, trim)
+                faces[code].save(os.path.join(WEBS, fn), "WEBP", quality=86, method=4)
+        return (num, cloth, None, {c: [] for c in codes_c},
+                "空底图-差分即整图", "", None, trim)
 
     # —— 首选：游戏官方 base_info 给出的落点（ExpressionCutRect），零误差
     slot = None
@@ -471,13 +475,12 @@ def process_group(task):
             best[code] = (x, y, v)
         if not votes:
             # 再退路：底图内容极少 / 比差分图层还小 —— 「差分图层」本身就是整幅画面
-            for code in faces_wanted:
-                f = faces.get(code)
-                if f is None:
-                    continue
+            codes_s = [c for c in faces_wanted if c in faces]
+            for code in codes_s:
                 fn = f"stand_{num}_{cloth}_{code}.webp"
-                f.save(os.path.join(WEBS, fn), "WEBP", quality=86, method=4)
-            return (num, cloth, None, {}, "底图过小-差分即整图", "", None, trim)
+                faces[code].save(os.path.join(WEBS, fn), "WEBP", quality=86, method=4)
+            return (num, cloth, None, {c: [] for c in codes_s},
+                    "底图过小-差分即整图", "", None, trim)
         # 众数落点；并列时取「该落点上总 SSD 最小」的一组
         top = max(votes.values())
         cands = [k for k, v in votes.items() if v == top]
@@ -537,6 +540,54 @@ def process_group(task):
         out[code] = list(slot)
     return (num, cloth, list(slot), out,
             (f"缺表情:{','.join(missing)}" if missing else ""), src, q, trim)
+
+
+def _safe_process(task):
+    """``process_group`` 的兜底包装：单组失败只算这一组失败，不炸整批。
+
+    为什么必须要有：整批 120 个编号是用 ``ProcessPoolExecutor.map`` 跑的，
+    任何一个 worker 抛异常（某个包解不开 / 原生层崩了）都会让 ``map`` 整体
+    中断 —— 剩下几十套服装一张图都不写，而脚本的退出码又被上层当成"跑完了"，
+    于是「全部立绘」会出现"装过了却整组缺张"（2026-11-20 用户反馈）。
+    """
+    try:
+        return process_group(task)
+    except Exception as e:                                     # noqa: BLE001
+        return (task[0], task[1], None, {},
+                f"合成异常:{type(e).__name__}:{str(e)[:60]}", "", None, 0)
+
+
+def _extra_path() -> str:
+    return os.path.join(BASE, "_archive", EXTRA_FILE)
+
+
+def load_extra_groups() -> dict:
+    """读「全部立绘」的组登记表：``{"编号_服装": {"n": 表情数, "pack": 源包字节}}``。"""
+    try:
+        with open(_extra_path(), encoding="utf-8") as f:
+            d = json.load(f) or {}
+        g = d.get("groups")
+        return g if isinstance(g, dict) else {}
+    except Exception:                                          # noqa: BLE001
+        return {}
+
+
+def save_extra_groups(old: dict, done: dict, sizes: dict) -> None:
+    """把本次**真的按全套表情合成过**的组并进登记表（不是整份覆盖）。"""
+    merged = dict(old or {})
+    for key, codes in done.items():
+        merged[key] = {"n": len(codes), "pack": int(sizes.get(key) or 0),
+                       "codes": list(codes)[:24]}
+    p = _extra_path()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump({"v": 1, "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "groups": merged}, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except OSError:
+        pass
 
 
 def collect_tasks():
@@ -601,6 +652,24 @@ STAND_FIX_VER = 3
 #: 「源素材层问题」名单：重写也改不好的组（官方矩形/贴图本身对不上底图）。
 #: 记下来下次体检跳过，避免每次点按钮都白重做一遍、还连带重做高清图。
 SUSPECT_FILE = "stand_src_suspect.json"
+
+#: 「全部立绘」每套服装**是否真的按包内全套表情合成过**的登记表。
+#:
+#: 为什么要它：安装链路以前判「已就绪」只看 ``stand_extra_done.json`` 里的
+#: **源包数**，而合成是按 1002 个编号分 120 个一批跑的 —— 某一批的子进程非 0
+#: 退出（原生崩溃 / 某个包解不开）时，那一批的服装就停在"剧本引用过的那几张"，
+#: 标记却照样写「已就绪」，用户装遍全部剧情 + 全部立绘仍然看到整组缺张
+#: （2026-11-20 反馈：部分角色只有 3~4 组、每组 3~7 张）。
+#: 所以由**真正跑过的组**自己上报（编号_服装 + 表情数 + 源包字节数），
+#: 安装链路拿它跟清单对账：没登记的 = 还要合成；源包换了（字节数变）= 重做。
+EXTRA_FILE = "stand_extra_groups.json"
+
+#: 包里没有表情层（底图即完整立绘）时给这套服装用的表情名。
+#: 这类包 ``ImageGroup.ExpressionImages`` 是空的 → ``--all-packs`` 模式拿不到
+#: 任何 code，以前一张都不写、整组在立绘页里直接消失（2026-11-20 排查 77 号时
+#: 发现两组 0 张）。底图本身就等于任何表情，用「基本」这个最常用的 code 命名即可；
+#: 剧本真引用了别的 code 时，剧本模式本来就会按引用的 code 另写一份。
+FALLBACK_FACE = "8AEE967B"
 
 #: 进度上报行前缀：``@PROG <百分比> <在做什么>``。
 #:
@@ -1240,6 +1309,7 @@ if __name__ == "__main__":
     # 每组「用哪个分层包」必须留痕：立绘串成另一套（stand_36 被 036 的包覆盖）
     # 这类问题，光看「合成 N 套成功」永远发现不了。
     fell = []
+    pkg_size = {}          # 编号_服装 -> 源包字节数（组登记表用它判断"包换过"）
     for (num, cloth) in sorted(groups):
         p = _find_pkg(num, cloth)
         if not p:
@@ -1247,6 +1317,10 @@ if __name__ == "__main__":
                   f"（{len(groups[(num, cloth)] or [])} 个表情没有图）", flush=True)
             continue
         b = os.path.basename(p)
+        try:
+            pkg_size[f"{num}_{cloth}"] = os.path.getsize(p)
+        except OSError:
+            pkg_size[f"{num}_{cloth}"] = 0
         tok = b.split("_")[3] if b.count("_") >= 3 else ""
         if tok and tok != str(num):
             fell.append((num, cloth, tok))
@@ -1257,9 +1331,12 @@ if __name__ == "__main__":
     if fell:
         print(f"  ⚠ 共 {len(fell)} 组用了不同补零宽度的包："
               + "、".join(f"{n}/{c}->{t}" for n, c, t in fell[:8]), flush=True)
+    old_extra = load_extra_groups() if all_packs else {}
+    wrote_groups = {}      # 编号_服装 -> 已写出的表情 code（写组登记表用）
+    failed_groups = []     # 解析/合成失败（真失败的组，不是"类型 B/C"特殊素材）
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as ex:
-        for num, cloth, slot, out, msg, src, q, trim in ex.map(process_group, tasks, chunksize=4):
+        for num, cloth, slot, out, msg, src, q, trim in ex.map(_safe_process, tasks, chunksize=4):
             done += 1
             if src:
                 srcs[re.sub(r"\(.*\)", "", src)] += 1
@@ -1275,9 +1352,17 @@ if __name__ == "__main__":
                     qc.append((float(q), f"{num}_{cloth}", slot))
             if msg:
                 warns.append(f"{num}/{cloth}: {msg}")
+            if not out and (msg == "缺分层包" or msg.startswith("合成异常")):
+                failed_groups.append(f"{num}/{cloth}: {msg}")
+            elif out:
+                wrote_groups[f"{num}_{cloth}"] = sorted(out)
             if done % 50 == 0 or done == len(tasks):
                 el = time.time() - t0
                 print(f"  [{done}/{len(tasks)}] {el:.0f}s  预计剩余 {el/done*(len(tasks)-done):.0f}s", flush=True)
+    if all_packs:
+        # 「全部立绘」的组登记表：只有真正写出成品的组才登记，
+        # 安装链路据此判断"这一套服装到底合成过没有"（见 EXTRA_FILE 的说明）。
+        save_extra_groups(old_extra, wrote_groups, pkg_size)
     with open(slot_path, "w", encoding="utf-8") as f:
         json.dump(slots, f, ensure_ascii=False, separators=(",", ":"))
     print(f"\n完成，用时 {time.time()-t0:.0f}s，落点记录 {len(slots)} 组，特殊类型 {special} 组 -> web/data/stand_slot.json")
@@ -1330,3 +1415,13 @@ if __name__ == "__main__":
               "→ python _scripts/apply_x2.py")
     with open(ver_path, "w", encoding="utf-8") as f:
         f.write(str(GEN_VER))
+
+    # —— 真失败的组要让调用方知道：退出码非 0 之前被上层当成"跑完了"，
+    # 「全部立绘」于是可能盖着「已就绪」却缺组（见 EXTRA_FILE 的说明）。
+    # 只对 ``--all-packs`` 生效：剧本模式里「缺分层包」是正常现象（剧本引用了
+    # 本机没下的包），不能因此把一次正常安装判成失败。
+    if all_packs and failed_groups:
+        print(f"\n⚠ 有 {len(failed_groups)} 套服装没合成成功（重跑只会补这些）：", flush=True)
+        for f in failed_groups[:20]:
+            print("   ", f, flush=True)
+        sys.exit(2)

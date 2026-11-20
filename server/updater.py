@@ -9,19 +9,23 @@ Electron 更新器）都是同一套：
 1. 下载新版本到**临时目录**
 2. 拉起一个独立的"更新器"进程（脱离本进程）
 3. 本进程退出，腾出文件锁
-4. 更新器按**白名单**把新文件覆盖到程序目录
+4. 更新器把暂存区里的文件**全量覆盖**到程序目录
 5. 更新器拉起新版本，然后自己消失
 
-白名单是关键 —— 只覆盖程序文件：
+暂存区在 :func:`stage` 解压时已经筛过（``_is_program``），只含程序文件；
+所以覆盖端不再维护第二份白名单 —— 覆盖只作用于暂存区里实际存在的文件，
+打包/解压没放进去的用户数据（译文、装过的剧情、userdata/）根本不会被碰。
 
-    server/**  web/*.html  web/assets/**  tools/*.py  docs/**  VERSION
-    README.md  NOTICE.md  LICENSE  requirements.txt  start.bat / start.sh
+**现在只有一份清单**：``server/update_manifest.json``，由本模块、打包脚本
+``tools/pack_app.ps1``（安装/便携包）与 ``tools/pack_update.ps1``（纯代码更新包）
+共用。新增程序文件改 JSON 一处即可；清单缺失/写坏时本模块退回下面那组内置
+常量兜底，保证已发布用户的更新不会因为一个坏文件卡死。
 
 ``web/media/**``、``web/data/**``、``userdata/**`` 默认不会被碰，所以更新不会丢
-资源、不会丢译文、不会丢配置。例外是**程序产出的几个索引**（见
-:data:`WEB_DATA_UPDATABLE`）：它们是程序逻辑的产物，不刷新的话老用户永远停在
-旧数据上 —— 而且这几个要和本机现状**合并**后再覆盖，逻辑在
-:mod:`server.index_merge`。
+资源、不会丢译文、不会丢配置。例外是清单 ``data_files`` 里 ``update=true`` 的
+程序产出索引（charmeta / names / cgmap / index / advindex / stand_box / i18n/ui.json）：
+不刷新的话老用户永远停在旧数据上 —— 其中几个还要和本机现状**合并**后再覆盖，
+逻辑在 :mod:`server.index_merge`。
 """
 
 from __future__ import annotations
@@ -39,6 +43,12 @@ import zipfile
 
 from . import facts, mirrors, net, paths
 
+# ---------------------------------------------------------------- 清单
+# 真正的清单在 ``server/update_manifest.json``（打包 tools/pack_app.ps1、
+# tools/pack_update.ps1 与这里共用同一份）。下面这几个常量**只在清单读不到/写坏时
+# 兜底**用 —— 高可用要求：一个坏 JSON 不能让已发布用户的更新卡死。
+# 新增程序文件请改 JSON；只有"兜底规则也要跟着变"时才动这里（并由 CI 的
+# manifest_problems 自检把关安全边界）。
 #: 允许被更新覆盖的路径前缀（相对项目根）
 WHITELIST = (
     "server/", "web/assets/", "tools/", "docs/",
@@ -583,62 +593,134 @@ def _hit(rel: str, pat: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- 清单
+#: 清单文件（随包分发）。打包侧 :file:`tools/pack_app.ps1` 读同一份。
+MANIFEST_NAME = "update_manifest.json"
+_MANIFEST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), MANIFEST_NAME)
+_MANIFEST_CACHE: dict = {"key": None, "rules": None}
+
+#: 清单里必须出现的字段；缺任何一个都视为"清单不可用"→退回内置常量
+_MANIFEST_KEYS = ("program_dirs", "program_files", "data_files", "protected_dirs")
+
+
+def manifest_rules() -> dict | None:
+    """读清单并归一成内部规则；读不到/格式不对返回 ``None``。
+
+    归一后的结构（全部小写、``/`` 分隔）::
+
+        {"allow": (...), "files": (...), "data": (...), "protected": (...)}
+
+    为什么要有这层：清单是打包/更新共用的单一数据源，但它也是新增的
+    单点。**读失败必须能退回内置常量**（:data:`WHITELIST` 等），否则一个
+    写坏的 JSON 就能让所有用户的更新卡死。用 (mtime, size) 缓存，
+    ``stage()`` 遍历上千个 zip 条目时不会重复读盘。
+    """
+    try:
+        st = os.stat(_MANIFEST_PATH)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    if _MANIFEST_CACHE["key"] == key:
+        return _MANIFEST_CACHE["rules"]
+    try:
+        with open(_MANIFEST_PATH, encoding="utf-8-sig") as f:
+            d = json.load(f)
+        if not isinstance(d, dict) or d.get("_schema") != 1:
+            raise ValueError("schema")
+        if any(k not in d for k in _MANIFEST_KEYS):
+            raise ValueError("缺字段")
+        data = d["data_files"]
+        if not isinstance(data, dict):
+            raise ValueError("data_files 不是对象")
+        extra = list(d.get("update_only_files") or [])   # 只放行更新，打包侧不查
+        rules = {
+            "allow": tuple(str(x).replace("\\", "/").lower()
+                           for x in list(d["program_dirs"]) + list(d["program_files"]) + extra),
+            "files": tuple(str(x).replace("\\", "/").lower() for x in d["program_files"]),
+            "data": tuple(str(k).replace("\\", "/").lower() for k, v in data.items()
+                          if isinstance(v, dict) and v.get("update")),
+            "protected": tuple(str(x).replace("\\", "/").lower() for x in d["protected_dirs"]),
+        }
+    except Exception:                                          # noqa: BLE001
+        return None
+    _MANIFEST_CACHE.update(key=key, rules=rules)
+    return rules
+
+
+def _fallback_rules() -> dict:
+    return {"allow": tuple(WHITELIST), "files": tuple(WHITELIST),
+            "data": tuple(WEB_DATA_UPDATABLE) + tuple(WEB_ASSETS_UPDATABLE),
+            "protected": tuple(BLACKLIST)}
+
+
+def _rules() -> dict:
+    """当前生效规则：清单优先，不可用时退回内置常量（高可用兜底）。"""
+    return manifest_rules() or _fallback_rules()
+
+
+def manifest_problems() -> list[str]:
+    """清单自检（CI 用）。返回问题列表，正常应为空。
+
+    只查**安全边界**，不强制与内置常量逐项相等 —— 否则又变成"改两处"。
+    兜底常量是最后一道防线，清单坏掉时它仍然保证不碰用户数据。
+    """
+    r = manifest_rules()
+    if not r:
+        return [f"{MANIFEST_NAME} 缺失或无法解析（schema/字段不对？）"]
+    out = []
+    # 用户数据目录绝不能出现在放行清单里（data/ 的例外由 data_files 承担）
+    for bad in ("userdata/", "web/data/", "web/media/"):
+        if any(x == bad or x.startswith(bad) for x in r["allow"]):
+            out.append(f"program_dirs/program_files 不该放行用户数据目录：{bad}")
+    for need in ("userdata/", "web/data/", "web/media/"):
+        if not any(x == need for x in r["protected"]):
+            out.append(f"protected_dirs 必须包含：{need}")
+    # i18n 只放行 ui.json（用户译文在 protected 里，放行清单里不能有 <lang>/）
+    for x in r["allow"]:
+        if x.startswith("web/assets/i18n/"):
+            out.append(f"program_dirs/files 不该放行 i18n 用户译文目录：{x}")
+    for rel in r["data"]:
+        if rel.startswith("web/assets/i18n/") and rel != "web/assets/i18n/ui.json":
+            out.append(f"data_files 只允许 i18n/ui.json，发现：{rel}")
+    if not r["data"]:
+        out.append("data_files 里没有任何 update=true 的项（更新将不刷新任何索引）")
+    return out
+
+
 def _is_program(name: str) -> bool:
     low = name.replace("\\", "/").lower()
     if low.startswith(("__macosx", ".")):
         return False
-    if any(low.endswith(p) for p in WEB_DATA_UPDATABLE):
-        return True                       # 例外：这几个索引要能随更新刷新
-    if any(low.endswith(p) for p in WEB_ASSETS_UPDATABLE):
-        return True                       # 例外：界面文案是程序文件（见上面的说明）
-    for b in BLACKLIST:
+    r = _rules()
+    # 顺序即优先级：程序索引/界面文案的例外 > 用户数据拦截 > 程序路径放行。
+    if any(low.endswith(p) for p in r["data"]):
+        return True
+    for b in r["protected"]:
         if low.startswith(b) or f"/{b}" in low:
             return False
-    return any(_hit(low, w) for w in WHITELIST)
+    return any(_hit(low, w) for w in r["allow"])
 
 
 def allowed(relpath: str) -> bool:
     low = relpath.replace("\\", "/").lower()
-    if low in WEB_DATA_UPDATABLE:
-        return True                       # 同上：索引例外
-    if low in WEB_ASSETS_UPDATABLE:
-        return True                       # 同上：界面文案例外
-    if any(low.startswith(b) for b in BLACKLIST):
+    r = _rules()
+    if any(low.endswith(p) for p in r["data"]):
+        return True                       # 同上：索引/界面文案例外
+    if any(low.startswith(b) for b in r["protected"]):
         return False
-    return any(_hit(low, w) for w in WHITELIST)
+    return any(_hit(low, w) for w in r["allow"])
 
 
 UPDATER_PY = r'''# -*- coding: utf-8 -*-
-"""独立更新器：等主程序退出 → 覆盖白名单文件 → 重启。"""
+"""独立更新器：等主程序退出 → 全量覆盖暂存区 → 重启。
+
+暂存区由 server/updater.py::stage 解压并筛过（_is_program），里面只有
+程序文件；覆盖端不再维护第二份清单，也不再重复实现一次 hit()。
+"""
 import os, shutil, subprocess, sys, time
 
 ROOT, STAGING, PID = sys.argv[1], sys.argv[2], sys.argv[3]
-WHITELIST = sys.argv[4].split("|")
 LOG = os.path.join(ROOT, "userdata", "logs", "update.log")
-
-def hit(rel, pat):
-    """与 server/updater.py::_hit 同源，改一处必须改两处。
-
-    ``server/`` 是前缀；``web/*.html`` 的 ``*`` 只吃一段不带斜杠的路径。
-    """
-    rel = rel.replace("\\", "/").lower()
-    pat = pat.replace("\\", "/").lower()
-    head, star, tail = pat.partition("*")
-    start = 0
-    while start <= len(rel):
-        i = rel.find(head, start)
-        if i < 0:
-            return False
-        if i == 0 or rel[i - 1] == "/":
-            if not star:
-                return True
-            rest = rel[i + len(head):]
-            if rest.endswith(tail):
-                body = rest[:len(rest) - len(tail)]
-                if "/" not in body:
-                    return True
-        start = i + 1
-    return False
 
 def log(msg):
     os.makedirs(os.path.dirname(LOG), exist_ok=True)
@@ -665,9 +747,12 @@ for dire, _dirs, files in os.walk(STAGING):
     for fn in files:
         src = os.path.join(dire, fn)
         rel = os.path.relpath(src, STAGING).replace("\\", "/")
-        if not any(hit(rel, w) for w in WHITELIST):
-            continue
+        # 暂存区里的路径来自 stage()：已剥掉外层目录、做过越界检查。
+        # 这里再兜一道底，防止畸形 staging 写穿到程序目录之外。
         dst = os.path.join(ROOT, rel.replace("/", os.sep))
+        if not os.path.abspath(dst).startswith(os.path.abspath(ROOT) + os.sep):
+            log(f"跳过越界路径 {rel}")
+            continue
         try:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
@@ -713,11 +798,9 @@ def apply_update(staging: str, job=None) -> dict:
     script = os.path.join(d, "apply_update.py")
     with open(script, "w", encoding="utf-8", newline="\n") as f:
         f.write(UPDATER_PY)
-    # 独立更新器只认这份清单，所以把索引 / 界面文案例外也并进去
-    # （否则它会跳过 charmeta.js、i18n/ui.json）
-    allow = tuple(WHITELIST) + tuple(WEB_DATA_UPDATABLE) + tuple(WEB_ASSETS_UPDATABLE)
-    args = [sys.executable, script, paths.ROOT, staging,
-            str(os.getpid()), "|".join(allow)]
+    # 不再传第 4 个参数（清单）：暂存区已在 stage() 里筛过，更新器照单全收。
+    # 更新器的 sys.argv = [脚本, ROOT, STAGING, PID]。
+    args = [sys.executable, script, paths.ROOT, staging, str(os.getpid())]
     flags = 0x00000008 if os.name == "nt" else 0
     subprocess.Popen(args, cwd=paths.ROOT,
                      creationflags=flags, start_new_session=(os.name != "nt"),

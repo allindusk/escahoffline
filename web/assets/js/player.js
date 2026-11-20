@@ -254,11 +254,16 @@ function syncFsLift() {
     const cr = ctl.getBoundingClientRect();
     if (sr.height > 0 && cr.height > 0) {
       const scale = sr.width / 1280 || 1;
-      const msgBottom = sr.bottom - (Number(SET.msgY) || 0) * scale;
+      /* 用实际生效的底距（长句把框顶上去时 layoutMsgChrome 会把它压小），
+         否则工具栏弹出时按设置值算会多顶一截。 */
+      const yEff = ST.msgYEff != null ? ST.msgYEff : (Number(SET.msgY) || 0);
+      const msgBottom = sr.bottom - yEff * scale;
       const overlap = msgBottom - cr.top + 8;      // 留 8px 缝，别贴死
       if (overlap > 0) lift = overlap / scale;
-      // 别把对话框顶出画面：最多留 12px 上边距
-      const maxLift = Math.max(0, 720 - (Number(SET.msgH) || 150) - 12);
+      // 别把对话框顶出画面：按**实际框高**留 12px 上边距（长句比 msgH 高）
+      const winEl = document.getElementById('msgWindow');
+      const boxH = winEl && winEl.offsetHeight ? winEl.offsetHeight : (Number(SET.msgH) || 150);
+      const maxLift = Math.max(0, 720 - boxH - 12);
       lift = Math.min(lift, maxLift);
     }
   }
@@ -3366,6 +3371,31 @@ function avSpeakerId(raw) {
   }
   return null;
 }
+/** 话者名是否真的指这个角色。套用「画面归属角色」的头像之前必须先过这一关：
+ *  第5段这种 H 场景 CG 归 ハルカ，说话的人却可能是 トキサダ / 男Ａ / コマンダー，
+ *  直接拿 cgmap 的 c 就变成「时贞的台词顶着遥的头像」（2026-11-19 用户反馈）。
+ *  判定与 autoTalk 同一把尺子：官方名/立绘组名互相包含（简称），
+ *  或换名同人（「エスカリバース」↔「ブライドエスカレイヤー・リバース」，公共子串 ≥3）。 */
+function avNameIsId(raw, id) {
+  const nm = avNorm(raw);
+  const sid = String(Number(id));
+  if (!nm || !sid) return false;
+  const hit = full => {
+    const f = avNorm(full);
+    return !!f && (avScore(f, nm) >= 500 || commonSub(f, nm) >= 3);
+  };
+  const data = window.__AVNAMES || null;
+  const spk = (data && data.spk) || {};
+  for (const k in spk) {
+    if (spk[k] != null && String(Number(spk[k])) === sid && avNorm(k) === nm) return true;
+  }
+  const gid = (data && data.gid) || {};
+  for (const k in gid) {
+    if (gid[k] != null && String(Number(gid[k])) === sid && hit(k)) return true;
+  }
+  const full = (window.__NAMES || {})[sid];
+  return !!full && hit(full);
+}
 function avResolve(raw) {
   const nm = avNorm(raw);
   if (!nm) return null;
@@ -3381,9 +3411,12 @@ function avResolve(raw) {
     + '|' + String(cgChar || '') + '|' + side;
   if (AV_ID_CACHE.has(cacheKey)) return AV_ID_CACHE.get(cacheKey);
   let id = null;
-  /* 当前 CG 在 cgmap 里能查到正数 c（角色 id）时，优先用该角色的头像。
+  /* 当前 CG 在 cgmap 里能查到正数 c（角色 id）时，优先用该角色的头像 ——
+     但**只有话者本人就是这张 CG 的角色**才套。CG 上是ハルカ、说话的是トキサダ 时
+     套 CG 归属角色就变成「时贞的台词顶着遥的头像」（2026-11-19 用户反馈：
+     超昂閃忍ハルカ 第5段 第143句）。名字对不上就往下走话者映射，全都不中就不要头像。
      negative c 是 NPC/主线 CG 桶，不能强行套角色。 */
-  if (cgChar) {
+  if (cgChar && avNameIsId(raw, cgChar)) {
     const entry = avMainEntry(cgChar, side);
     const picked = avPickEntry(entry, side);
     if (picked) id = picked;
@@ -3465,7 +3498,7 @@ function syncAvColorInputs() {
 function avApplyStyle() {
   const st = $('#stage'), av = $('#msgAvatar');
   if (!st || !av) return;
-  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 54));
+  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 96));
   st.style.setProperty('--avSize', size + 'px');
   st.style.setProperty('--avPlate', avToneColor());
   av.classList.remove('avShape-circle', 'avShape-rounded', 'avShape-square');
@@ -3477,30 +3510,153 @@ function avApplyStyle() {
   const show = SET.avShow !== false && !!ST.curRawName && ST.curAvatarId != null;
   av.classList.toggle('on', show);
 }
+/* ---------- 对话框 / 名条 / 头像的摆位 ----------
+   舞台固定 1280×720（外层整体 transform 缩放），所以这里一律用舞台逻辑 px 算，
+   跟屏幕分辨率无关。三条硬约束（2026-11-19 用户要求"不能再调到画面外"）：
+     1) 框宽度 = 占舞台宽的百分比，居中或贴左/贴右，两边各留 EDGE，出不去；
+     2) 框的垂直位置 = 离底边多少 px；滑块上限跟着「高度」收，这里再用
+        **实测高度**夹一次 —— 长句和大字号会让框比 msgH 高，只靠 CSS 的
+        min() 兜不住（min-height 只是下限）；
+     3) 名条与头像的微调同样按舞台边界夹：拖到头只会贴边，不会消失。
+   以前这三处都是"想给多少给多少"，滑块能一路拖到画外，所以显得不成熟。 */
+const STAGE_W = 1280, STAGE_H = 720, EDGE = 4;   // EDGE = 离画面边缘的安全距离
+const MSG_W_DEF = 60;                            // 宽度默认值（恢复默认也是它）
+function clampPx(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+const numOr = (v, d) => (Number.isFinite(+v) ? +v : d);
+
+/** 框宽度（舞台 px）：设置里存的是「可用宽度」的百分比 40~100。
+ *  按可用宽度（舞台宽减左右两个 EDGE）算，这样 100% = 铺满且两边仍留 EDGE，
+ *  用户看到的百分比和实际占位一致，不会出现「100% 却还差 8px」的怪事。 */
+function msgBoxWidth() {
+  const pct = clampPx(numOr(SET.msgW, MSG_W_DEF), 40, 100);
+  return Math.round((STAGE_W - EDGE * 2) * pct / 100);
+}
+/** 垂直位置滑块的上限：框贴住画面顶部（留 EDGE）时还剩多少 */
+function msgYMax() {
+  const h = clampPx(numOr(SET.msgH, 150), 90, 340);
+  return Math.max(0, STAGE_H - h - EDGE);
+}
+/** 水平位置：0~100 = 在「左右可挪动的余量」里靠右多少。
+ *  0 贴左边、50 居中、100 贴右边，中间任意取值（「靠右但别贴死」就取 80）。
+ *  宽度 100% 时余量为 0，这个滑块会置灰。 */
+function msgPosPct() {
+  return clampPx(numOr(SET.msgPos, 50), 0, 100);
+}
+function msgBoxX(w) {
+  const slack = Math.max(0, (STAGE_W - EDGE * 2) - w);
+  return Math.round(EDGE + slack * msgPosPct() / 100);
+}
+
+/** 控件范围跟着实际布局收：
+ *   · 垂直位置的上限由「高度」决定（框高 340 时不可能再推到画面顶外）；
+ *   · 宽度铺满时「水平位置」没有可挪的余地，直接变灰（比拖了没反应诚实）。
+ *  同时把越界的旧值夹回来，滑块和标签始终显示真正生效的数字。 */
+function syncMsgRanges() {
+  const yEl = $('#setMsgY');
+  const max = msgYMax();
+  const v = clampPx(numOr(SET.msgY, 0), 0, max);
+  if (v !== Number(SET.msgY)) SET.msgY = v;
+  if (yEl) {
+    if (+yEl.max !== max) yEl.max = max;
+    if (+yEl.value !== v) yEl.value = v;
+  }
+  const pct = Math.round(clampPx(numOr(SET.msgW, MSG_W_DEF), 40, 100));
+  if (Number(SET.msgW) !== pct) SET.msgW = pct;
+  const wEl = $('#setMsgW');
+  if (wEl && +wEl.value !== pct) wEl.value = pct;
+  const posEl = $('#setMsgPos');
+  const pos = Math.round(msgPosPct());
+  if (Number(SET.msgPos) !== pos) SET.msgPos = pos;
+  if (posEl) {
+    if (+posEl.value !== pos) posEl.value = pos;
+    const off = (STAGE_W - EDGE * 2) - msgBoxWidth() < 8;
+    if (posEl.disabled !== off) posEl.disabled = off;
+  }
+  if ($('#valMsgW')) $('#valMsgW').textContent = pct + '%';
+  if ($('#valMsgPos')) $('#valMsgPos').textContent = pos + '%';
+  if ($('#valMsgY')) $('#valMsgY').textContent = Math.round(SET.msgY) + 'px';
+  /* 正文水平位置（--msgTX）：范围跟滑块一致，脏值夹回来，标签显示真正生效的值 */
+  const tx = Math.round(clampPx(numOr(SET.msgTextX, 14), -24, 240));
+  if (Number(SET.msgTextX) !== tx) SET.msgTextX = tx;
+  const txEl = $('#setMsgTextX');
+  if (txEl && +txEl.value !== tx) txEl.value = tx;
+  if ($('#valMsgTextX')) $('#valMsgTextX').textContent = tx + 'px';
+}
+
+/* 摆位唯一入口：框 → 名条 → 头像。幂等，切句/改设置/resize 都能直接调。 */
+let _chromeBusy = false;
+function layoutMsgChrome() {
+  const win = $('#msgWindow');
+  if (!win || _chromeBusy) return;
+  _chromeBusy = true;
+  try {
+    const w = msgBoxWidth();
+    const x = msgBoxX(w);
+    const want = clampPx(Number(SET.msgY) || 0, 0, msgYMax());
+    if (win.style.width !== w + 'px') win.style.width = w + 'px';
+    if (win.style.left !== x + 'px') win.style.left = x + 'px';
+    win.style.right = 'auto';
+    if (win.style.bottom !== want + 'px') win.style.bottom = want + 'px';
+    /* 真实高度比 msgH 高时整框往下压，保证上沿不出画面（极端长句才会触发） */
+    const h = win.offsetHeight || 0;
+    const eff = Math.min(want, Math.max(0, STAGE_H - h - EDGE));
+    if (eff !== want) win.style.bottom = eff + 'px';
+    ST.msgYEff = eff;
+    placeMsgName(win);
+    avPlace();
+  } finally { _chromeBusy = false; }
+}
+
+/** 名条：水平 = 对齐基准 + 微调，垂直 = 微调；两头都夹在舞台内。
+ *  以前水平靠 CSS 的 left/right + transform，居中时还得在 avPlace 里反推
+ *  -nw/2，量不准也夹不住；现在统一由这里写确定的 px。 */
+function placeMsgName(win) {
+  const nm = $('#msgName');
+  if (!nm || !nm.classList.contains('on')) return;
+  const bw = win.clientWidth, nw = nm.offsetWidth, nh = nm.offsetHeight;
+  const al = SET.nameAlign === 'center' ? 'center'
+    : (SET.nameAlign === 'right' ? 'right' : 'left');
+  const base = al === 'center' ? (bw - nw) / 2 : (al === 'right' ? bw - 22 - nw : 22);
+  const bx = win.offsetLeft, by = win.offsetTop;
+  const loX = EDGE - bx, hiX = Math.max(loX, STAGE_W - EDGE - bx - nw);
+  const loY = EDGE - by, hiY = Math.max(loY, STAGE_H - EDGE - by - nh);
+  const x = clampPx(base + (Number(SET.nameX) || 0), loX, hiX);
+  const y = clampPx(-15 + (Number(SET.nameY) || 0), loY, hiY);
+  nm.style.left = Math.round(x) + 'px';
+  nm.style.right = 'auto';
+  nm.style.top = Math.round(y) + 'px';
+  nm.style.transform = 'none';
+}
+
 /** 头像位置：名条会左/中/右对齐 + nameX/nameY 位移，所以按实际布局盒算 */
 function avPlace() {
   const av = $('#msgAvatar'), nm = $('#msgName'), win = $('#msgWindow');
   if (!av || !nm || !win || !av.classList.contains('on') || !nm.classList.contains('on')) return;
-  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 54));
+  const size = Math.max(20, Math.min(140, Number(SET.avSize) || 96));
   const x = Number(SET.avX) || 0;
   const y = Number(SET.avY) || 0;
-  const pos = AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'left';
+  const pos = AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'box-tl';
   let left = 0, top = 0;
   if (pos.indexOf('box-') === 0) {
+    /* 框角：**头像的中心**正对对话框的角（2026-11-20 用户口径）。
+       以前是往外探出一点（-0.18 / -0.42 个尺寸），四个角看着都偏；
+       现在一律偏半个尺寸，头像被角对半切开，方/圆两种形状都是对称的。 */
     const W = win.clientWidth, H = win.clientHeight;
-    const out = size * .18;
-    left = (pos === 'box-tl' || pos === 'box-bl') ? -out : W - size + out;
-    top = (pos === 'box-tl' || pos === 'box-tr') ? -size * .42 : H - size * .58;
+    left = (pos === 'box-tl' || pos === 'box-bl') ? -size / 2 : W - size / 2;
+    top = (pos === 'box-tl' || pos === 'box-tr') ? -size / 2 : H - size / 2;
   } else {
-    let nl = nm.offsetLeft, nt = nm.offsetTop;
+    const nl = nm.offsetLeft, nt = nm.offsetTop;
     const nw = nm.offsetWidth, nh = nm.offsetHeight;
-    if (nm.classList.contains('align-center')) nl = nl - nw / 2 + (Number(SET.nameX) || 0);
     const gap = Number(SET.avGap) || 0;
     left = pos === 'right' ? nl + nw + gap : nl - size - gap;
     top = nt + (nh - size) / 2;
   }
-  av.style.left = Math.round((left + x) * 10) / 10 + 'px';
-  av.style.top = Math.round((top + y) * 10) / 10 + 'px';
+  /* 名条可以挪到框外，头像跟着名条走也不能出画面：按舞台坐标夹 */
+  const bx = win.offsetLeft, by = win.offsetTop;
+  const sx = clampPx(bx + left + x, EDGE, Math.max(EDGE, STAGE_W - EDGE - size));
+  const sy = clampPx(by + top + y, EDGE, Math.max(EDGE, STAGE_H - EDGE - size));
+  av.style.left = Math.round((sx - bx) * 10) / 10 + 'px';
+  av.style.top = Math.round((sy - by) * 10) / 10 + 'px';
 }
 function avPaint() {
   const av = $('#msgAvatar');
@@ -3559,8 +3715,10 @@ function avShow(raw, display) {
   ST.curAvatarId = id;
   avApplyStyle();
   if (changed) avPaint();
-  avPlace();
-  requestAnimationFrame(avPlace);
+  /* 名条刚 setMsgName 过、正文还没铺开：先按当前几何摆一次，
+     真正的框高由下面的 ResizeObserver 在文字落定后再补一次。 */
+  layoutMsgChrome();
+  requestAnimationFrame(layoutMsgChrome);
   if (changed) {
     av.classList.remove('avSwap');
     void av.offsetWidth;
@@ -3577,9 +3735,11 @@ function setMsgName(who, raw) {
   else { n.textContent = ''; n.classList.remove('on'); }
   avShow(raw || '', who || '');
 }
-window.addEventListener('resize', avPlace);
+window.addEventListener('resize', layoutMsgChrome);
+/* 框高会随句子长度/字号变（见 layoutMsgChrome 注释）：一变就重摆一次，
+   名条和头像才不会停在上一句的位置上。 */
 if (window.ResizeObserver) {
-  try { new ResizeObserver(avPlace).observe($('#msgWindow')); } catch (e) { }
+  try { new ResizeObserver(layoutMsgChrome).observe($('#msgWindow')); } catch (e) { }
 }
 
 function showWindow(m) {
@@ -4106,11 +4266,15 @@ const PAGE_SIZE = 40;
 
 function buildLineIndex() {
   const out = [];
-  let name = '';
+  let name = '', rawName = '';
   ST.methods.forEach((m, i) => {
-    if (m.Method === 'ShowMessageWindow') name = spkName(m);
-    else if (m.Method === 'ShowMessage') {
-      out.push({ midx: i, who: name, text: lineText(m) });
+    if (m.Method === 'ShowMessageWindow') {
+      name = spkName(m);
+      /* 头像映射认的是剧本原名（日文），who 是本地化后的显示名。分享图按 who
+         去 avResolve 会查不到角色 —— 所以这里把原名一并留着。 */
+      rawName = m.Name || '';
+    } else if (m.Method === 'ShowMessage') {
+      out.push({ midx: i, who: name, raw: rawName, text: lineText(m) });
     }
   });
   ST.allLines = out;
@@ -5107,18 +5271,27 @@ const DEFAULTS = { alpha: 90, fs: 21, typeRate: 1, showWin: true,
               sortBy: 'date-desc', rarSel: '', useX2: true,
               msgBg: '10,14,22', msgColor: '#f2f5fb',
               msgFont: 'sans', msgLH: 1.62, msgStroke: 1.2,
-              msgH: 150, msgY: 26,          // 对话框高度 / 垂直位置（都是 px）
-              msgX: 0, msgAlign: 'left',
+              /* 对话框：msgW = 占可用宽的百分比（40~100，默认 60），msgH = 最小高度 px，
+                 msgY = 离画面底边多少 px，msgPos = 水平位置 0~100（0 贴左 / 50 居中 / 100 贴右）。
+                 四个值都由 layoutMsgChrome() 夹在舞台内，滑块拖到头也不会出画面。 */
+              msgW: 60, msgH: 150, msgY: 26, msgPos: 50,
+              msgAlign: 'left',
+              /* msgTextX = 正文离框左边的额外距离（px，加在框的 padding-left 上）。
+                 负值可以贴到边框上。默认 14（正文左缘 26+14=40）—— 比名条（52）
+                 再靠左一点，是用户 2026-11-20 目测定下来的量。 */
+              msgTextX: 14,
               msgBox: 'box',                // 文本框外观：box / soft / bare
-              nameX: 0, nameY: 0, nameAlign: 'left',
-              // 角色头像：默认关闭，设置项也默认折叠；勾选后才展开。
-              // avUserOn 才是用户真正的开关意愿，avShow 只由它推导；
-              // 这样旧配置/旧云端里的 avShow:true 不会把默认关闭覆盖掉。
-              avShow: false, avUserOn: false, avPos: 'left', avShape: 'circle',
+              /* nameX 默认 30：名条左缘 22 + 30 = 52，落在左上角头像
+                 （96px，中心对准框角，右缘 48）的右边，又不至于离得太远。 */
+              nameX: 30, nameY: 0, nameAlign: 'left',
+              /* 角色头像：默认开、96px、钉在对话框左上角（2026-11-20 用户口径：
+                 恢复默认就是「96px + 左上角 + 名条/正文让到头像右边」这套）。
+                 avUserOn 才是用户真正的开关意愿，avShow 只由它推导。 */
+              avShow: true, avUserOn: true, avPos: 'box-tl', avShape: 'circle',
               // avColor / avColor2 = 「自定义」渐变的两端色
               avRing: 'gold', avTone: 'dialog',
               avColor: '#2f6fd0', avColor2: '#8fd3f4',
-              avSize: 54, avGap: 2, avX: 0, avY: 0,
+              avSize: 96, avGap: 2, avX: 0, avY: 0,
               /* 全屏 / 手机点按与手势（桌面鼠标不受影响）。
                  默认单击「下一句」：一点就翻页，工具栏交给双击（暂停/继续时一起弹）。 */
               tapOnce: 'next', tapTwice: 'pause', holdAct: 'rush', swipeX: 'line',
@@ -5146,15 +5319,15 @@ function applySettings() {
   st.style.setProperty('--msgBg', SET.msgBg || '10,14,22');
   st.style.setProperty('--msgColor', SET.msgColor || '#f2f5fb');
   st.style.setProperty('--msgLH', SET.msgLH ?? 1.62);
-  // 对话框高度与垂直位置（用户嫌挡住立绘时可以往上/往下挪）
+  /* 文本框尺寸/位置：--msgH 只作为 CSS 的 min-height（下限），
+     宽/左/底、名条、头像全部由 layoutMsgChrome() 按舞台边界落成 px。 */
   st.style.setProperty('--msgH', (SET.msgH ?? 150) + 'px');
-  st.style.setProperty('--msgY', (SET.msgY ?? 26) + 'px');
   st.style.setProperty('--msgStroke', (SET.msgStroke ?? 1.2) + 'px');
   st.style.setProperty('--msgFont', FONT_MAP[SET.msgFont] || FONT_MAP.sans);
-  st.style.setProperty('--msgX', (SET.msgX || 0) + 'px');
   st.style.setProperty('--msgAlign', SET.msgAlign || 'left');
-  st.style.setProperty('--nameX', (SET.nameX || 0) + 'px');
-  st.style.setProperty('--nameY', (SET.nameY || 0) + 'px');
+  /* 正文的水平位置：只是框内文字的左内边距（CSS 里 #msgText 的 padding-left），
+     不会把文字推出框外 —— 折行宽度跟着一起收，所以再大的值也只是换个换行点。 */
+  st.style.setProperty('--msgTX', Math.round(clampPx(numOr(SET.msgTextX, 14), -24, 240)) + 'px');
   const nmEl = $('#msgName');
   if (nmEl) {
     nmEl.classList.remove('align-left', 'align-center', 'align-right');
@@ -5164,7 +5337,10 @@ function applySettings() {
      不碰<img>，所以没有"每次拖滑块都重跑画布"的问题。 */
   avApplyStyle();
   syncAvToneRow();
-  avPlace();
+  /* 「与名字间距」只对「名条左侧 / 名条右侧」有意义：框角模式头像钉在对话框的角上，
+     跟名条没有关系 → 直接置灰（跟无框字幕时的背景色同一套处理），免得拖了没反应。 */
+  if ($('#setAvGap')) $('#setAvGap').disabled = String(SET.avPos || '').indexOf('box-') === 0;
+  layoutMsgChrome();          // 框宽/左右/垂直 + 名条 + 头像，一次摆完
   /* 文本框外观：box=有边框 / soft=无框+柔和底衬 / bare=无框+纯文字（只剩字幕）。
      用 class 而不是内联样式，CSS 那边全靠 #msgWindow.wb-* 覆盖，改动集中在一处。 */
   const wEl = $('#msgWindow');
@@ -5195,12 +5371,12 @@ function applySettings() {
   $('#valType').textContent = Math.round(ST.typeRate * 100) + '%';
   $('#valLH').textContent = (SET.msgLH ?? 1.62).toFixed(2);
   if ($('#valMsgH')) $('#valMsgH').textContent = (SET.msgH ?? 150) + 'px';
-  if ($('#valMsgY')) $('#valMsgY').textContent = Math.round(SET.msgY ?? 26) + 'px';
   $('#valStroke').textContent = (SET.msgStroke ?? 1.2) + 'px';
-  $('#valMsgX').textContent = (SET.msgX || 0) + 'px';
   $('#valNameX').textContent = (SET.nameX || 0) + 'px';
   $('#valNameY').textContent = (SET.nameY || 0) + 'px';
-  if ($('#valAvSize')) $('#valAvSize').textContent = Math.round(SET.avSize ?? 54) + 'px';
+  /* 宽度/垂直位置的滑块范围与标签：以被夹过的实际值为准（会顺手把 SET 夹回范围） */
+  syncMsgRanges();
+  if ($('#valAvSize')) $('#valAvSize').textContent = Math.round(SET.avSize ?? 96) + 'px';
   if ($('#valAvGap')) $('#valAvGap').textContent = Math.round(SET.avGap ?? 2) + 'px';
   if ($('#valAvX')) $('#valAvX').textContent = Math.round(SET.avX || 0) + 'px';
   if ($('#valAvY')) $('#valAvY').textContent = Math.round(SET.avY || 0) + 'px';
@@ -5236,13 +5412,13 @@ function syncSettingControls() {
   $('#setNameAlign').value = SET.nameAlign || 'left';
   if ($('#setAvShow')) $('#setAvShow').checked = SET.avUserOn === true;
   syncAvPanel();
-  if ($('#setAvPos')) $('#setAvPos').value = SET.avPos || 'left';
+  if ($('#setAvPos')) $('#setAvPos').value = SET.avPos || 'box-tl';
   if ($('#setAvShape')) $('#setAvShape').value = SET.avShape || 'circle';
   if ($('#setAvRing')) $('#setAvRing').value = SET.avRing || 'gold';
   if ($('#setAvTone')) $('#setAvTone').value = SET.avTone || 'dialog';
   if ($('#setAvColor')) $('#setAvColor').value = avToneHex();
   syncAvColorInputs();
-  if ($('#setAvSize')) $('#setAvSize').value = Math.round(SET.avSize ?? 54);
+  if ($('#setAvSize')) $('#setAvSize').value = Math.round(SET.avSize ?? 96);
   if ($('#setAvGap')) $('#setAvGap').value = Math.round(SET.avGap ?? 2);
   if ($('#setAvX')) $('#setAvX').value = Math.round(SET.avX || 0);
   if ($('#setAvY')) $('#setAvY').value = Math.round(SET.avY || 0);
@@ -5280,9 +5456,10 @@ function syncSettingControls() {
   $('#setMsgFont').value = SET.msgFont || 'sans';
   $('#setLH').value = Math.round((SET.msgLH ?? 1.62) * 100);
   if ($('#setMsgH')) $('#setMsgH').value = SET.msgH ?? 150;
-  if ($('#setMsgY')) $('#setMsgY').value = Math.round(SET.msgY ?? 26);
+  if ($('#setMsgW')) $('#setMsgW').value = Math.round(clampPx(numOr(SET.msgW, MSG_W_DEF), 40, 100));
+  if ($('#setMsgPos')) $('#setMsgPos').value = Math.round(msgPosPct());
+  syncMsgRanges();                     // 垂直位置上限/水平位置可用性
   $('#setStroke').value = Math.round((SET.msgStroke ?? 1.2) * 10);
-  $('#setMsgX').value = SET.msgX ?? 0;
   $('#setAlign').value = SET.msgAlign || 'left';
   $('#sortBy').value = SET.sortBy || 'id';
   const rarArr = (SET.rarSel || '').split(',');
@@ -5391,7 +5568,8 @@ const SET_PAGE_FIELDS = {
            'kPlay', 'kNext', 'kPrev', 'kRush',
            'kSettings', 'kFullscreen', 'kLang', 'kSidebar'],
   window: ['msgBox', 'msgBg', 'msgColor', 'msgFont', 'msgAlign',
-           'alpha', 'fs', 'msgLH', 'msgH', 'msgY', 'msgStroke', 'msgX'],
+           'alpha', 'fs', 'msgLH', 'msgStroke', 'msgTextX',
+           'msgW', 'msgH', 'msgPos', 'msgY'],
   name:   ['nameX', 'nameY', 'nameAlign',
            'avShow', 'avUserOn', 'avPos', 'avShape', 'avRing',
            'avTone', 'avColor', 'avColor2', 'avSize', 'avGap', 'avX', 'avY'],
@@ -5412,9 +5590,10 @@ function syncAvToneRow() {
 }
 
 function loadSettings() {
+  let rawCfg = null;
   try {
-    const s = JSON.parse(localStorage.getItem('escah_set') || '{}');
-    Object.assign(SET, s);
+    rawCfg = JSON.parse(localStorage.getItem('escah_set') || '{}');
+    Object.assign(SET, rawCfg || {});
   } catch (e) { }
   if (!SET.fit) SET.fit = '1x';   // 旧配置升级：默认改为不放大
   // 音量默认值从 70/90/100 降到 50：老用户 localStorage 里存着旧默认值的，
@@ -5424,6 +5603,37 @@ function loadSettings() {
   if (typeof SET.msgY === 'number' && SET.msgY > 0 && SET.msgY < 10) {
     SET.msgY = Math.round(SET.msgY / 100 * 720);
   }
+  /* 文本框几何（2026-11-19）：缺键用默认，手改过的脏值夹回范围。
+     msgX（旧的「框内文字整体右移」）已取消 —— 它能把文字推出框外，职责改由
+     「宽度 + 水平位置」接管，旧键直接丢掉，免得视频导出脚本还以为它有意义。
+     SET_VER 2：宽度默认从 92% 降到 60%，msgAlignX（居中/靠左/靠右三选一）
+     换成 msgPos（0~100 任意位置）—— 用户要的是「靠右但别贴死」，三选一做不到。 */
+  delete SET.msgX;
+  if (SET.setVer !== 2) {
+    if (SET.msgW === 92) SET.msgW = MSG_W_DEF;      // 92 是上一版写进去的自动默认值
+    if (!Number.isFinite(+SET.msgPos)) {
+      SET.msgPos = SET.msgAlignX === 'left' ? 0
+        : SET.msgAlignX === 'right' ? 100 : 50;
+    }
+    delete SET.msgAlignX;
+    SET.setVer = 2;
+  }
+  /* SET_VER 3：「文字水平位置」（msgTextX）是新键，出厂默认 14px 是按
+     「头像 96px 钉在对话框左上角」这套排版留的。老配置里没有这个键，
+     不能凭空给它们加缩进（文字会莫名其妙往右跳），一律按 0 起步；
+     想换成新默认就去设置页点「恢复本页默认设置」。 */
+  if (SET.setVer !== 3) {
+    const hadCfg = !!(rawCfg && typeof rawCfg === 'object' && Object.keys(rawCfg).length);
+    if (hadCfg && !('msgTextX' in rawCfg)) SET.msgTextX = 0;
+    SET.setVer = 3;
+  }
+  SET.msgW = Math.round(clampPx(numOr(SET.msgW, MSG_W_DEF), 40, 100));
+  SET.msgPos = Math.round(clampPx(numOr(SET.msgPos, 50), 0, 100));
+  SET.msgH = clampPx(numOr(SET.msgH, 150), 90, 340);
+  SET.msgY = clampPx(numOr(SET.msgY, 0), 0, msgYMax());
+  /* 名条微调：范围与滑块一致（真正的边界由 placeMsgName() 按实测尺寸夹） */
+  SET.nameX = clampPx(Number(SET.nameX) || 0, -300, 300);
+  SET.nameY = clampPx(Number(SET.nameY) || 0, -60, 40);
   if (SET.bgmVol === 0.7 && SET.seVol === 0.9 && SET.voiceVol === 1) {
     SET.bgmVol = 0.5;
     SET.seVol = 0.5;
@@ -5452,7 +5662,7 @@ function loadSettings() {
     const v = Number(SET[k]);
     SET[k] = Number.isFinite(v) ? Math.min(mx, Math.max(mn, v)) : def;
   };
-  avNum('avSize', 20, 140, 54);
+  avNum('avSize', 20, 140, 96);
   avNum('avGap', -30, 60, 2);
   avNum('avX', -200, 200, 0);
   avNum('avY', -80, 80, 0);
@@ -5460,7 +5670,7 @@ function loadSettings() {
      只由新键 avUserOn 推导 —— 旧 localStorage / 旧云端里的 avShow:true 一律当没勾选。 */
   SET.avUserOn = SET.avUserOn === true;
   SET.avShow = SET.avUserOn;
-  if (!AV_POS_LIST.includes(SET.avPos)) SET.avPos = 'left';
+  if (!AV_POS_LIST.includes(SET.avPos)) SET.avPos = 'box-tl';
   if (!AV_SHAPE_LIST.includes(SET.avShape)) SET.avShape = 'circle';
   if (!AV_RING_LIST.includes(SET.avRing)) SET.avRing = 'gold';
   /* 抠图 / 融合两套旧方案已经整块删除（老配置里残留的 avBg/avKey/avTint
@@ -5888,18 +6098,31 @@ function syncKeyHints() {
   syncKeyButtons();
 }
 
-/** 设置页里「改键」按钮上的键名：一个动作一个框，几个键就几个框（竖线分隔） */
+/** 设置页里「改键」按钮上的键名：一个动作一个框，几个键就几个框（竖线分隔）。
+ *  **框的数量不随绑定减少**：某个键被改键「挪」到别的动作后，这里留一个**空格子**
+ *  （虚线框），而不是把那一格删掉 —— 否则用户只会看到「下一句怎么只剩回车」，
+ *  既看不出少的是哪一格，也不知道点哪儿能补回来（2026-11-20 用户要求）。
+ *  空格子点一下就是"给这一格绑一个键"，与改键走同一条路径。 */
 function syncKeyButtons() {
   document.querySelectorAll('#settings .kkeys').forEach(host => {
     const a = host.dataset.k;
     if (!a) return;
     // 正在等按键的那个框别动，否则"请按键…"会被立刻覆盖掉
-    const waiting = host.querySelector('.kbind.wait');
-    if (waiting) return;
+    if (host.querySelector('.kbind.wait')) return;
     const slots = keySlots(a);
-    host.innerHTML = slots.map((c, i) =>
-      `<button type="button" class="kbind" data-k="${a}" data-i="${i}">`
-      + `${esc(keyLabelOf(c))}</button>`).join('<i class="ksep" aria-hidden="true"></i>');
+    const defN = String(DEFAULT_KEYS[a] || '').split(',').filter(s => s.trim()).length;
+    const n = Math.max(slots.length, defN);      // 至少按默认的格数摆，缺的留空
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (i) out.push('<i class="ksep" aria-hidden="true"></i>');
+      const c = slots[i];
+      out.push(c
+        ? `<button type="button" class="kbind" data-k="${a}" data-i="${i}">`
+          + `${esc(keyLabelOf(c))}</button>`
+        : `<button type="button" class="kbind empty" data-k="${a}" data-i="${i}"`
+          + ` aria-label="${esc(L10N.t('set.keyEmpty', '未设置，点击绑定'))}"></button>`);
+    }
+    host.innerHTML = out.join('');
   });
 }
 
@@ -6205,7 +6428,47 @@ $('#setLH').oninput = e => { SET.msgLH = +e.target.value / 100; applySettings();
 $('#setMsgH').oninput = e => { SET.msgH = +e.target.value; applySettings(); };
 $('#setMsgY').oninput = e => { SET.msgY = +e.target.value; applySettings(); };
 $('#setStroke').oninput = e => { SET.msgStroke = +e.target.value / 10; applySettings(); };
-$('#setMsgX').oninput = e => { SET.msgX = +e.target.value; applySettings(); };
+if ($('#setMsgW')) $('#setMsgW').oninput = e => { SET.msgW = +e.target.value; applySettings(); };
+if ($('#setMsgPos')) $('#setMsgPos').oninput = e => { SET.msgPos = +e.target.value; applySettings(); };
+if ($('#setMsgTextX')) $('#setMsgTextX').oninput = e => { SET.msgTextX = +e.target.value; applySettings(); };
+/* 「文本框 / 话者」这两页调的全是面板底下那块东西（框、名条、头像），
+   面板不透明就完全挡住了 → 拖滑块 / 改下拉时临时半透明，松手立刻恢复。
+   只在这两页生效：别的页（音量、节奏）没什么可看的，没必要让面板闪。 */
+(function initSetPeek() {
+  const box = $('#settings');
+  if (!box) return;
+  const need = () => SET_PAGE === 'window' || SET_PAGE === 'name';
+  let on = false, until = 0, timer = null;
+  const set = v => {
+    if (v === on) return;
+    on = v;
+    box.classList.toggle('peek', v);
+  };
+  /* ms>0：自己亮 ms 毫秒再收（下拉框改完留一眼看结果）；
+     ms=0：亮着等松手/失焦（拖滑块）。 */
+  const hold = ms => {
+    until = Date.now() + ms;
+    set(true);
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (ms > 0) {
+      timer = setTimeout(() => { timer = null; until = 0; set(false); }, ms + 30);
+    }
+  };
+  const release = () => {
+    if (until > Date.now()) return;      // 还在保留窗口里，交给上面的定时器收
+    set(false);
+  };
+  const isRange = t => !!(t && t.matches && t.matches('input[type=range]'));
+  box.addEventListener('pointerdown', e => { if (need() && isRange(e.target)) hold(0); });
+  box.addEventListener('focusin', e => { if (need() && isRange(e.target)) hold(0); });
+  box.addEventListener('focusout', release);
+  box.addEventListener('change', e => {
+    if (!need() || !e.target || !e.target.matches || !e.target.matches('select')) return;
+    hold(700);
+  });
+  ['pointerup', 'pointercancel'].forEach(t => window.addEventListener(t, release, true));
+  window.addEventListener('blur', () => { until = 0; set(false); });
+})();
 $('#setAlign').onchange = e => { SET.msgAlign = e.target.value; applySettings(); };
 $('#setBgm').oninput = e => { SET.bgmVol = +e.target.value / 100; applySettings(); };
 $('#setSe').oninput = e => { SET.seVol = +e.target.value / 100; applySettings(); };
@@ -8285,8 +8548,8 @@ function shareMsgStyle() {
   if (!win || !txt || !stage) return null;
   const cw = getComputedStyle(win), ct = getComputedStyle(txt);
   const nm = $('#msgName'), cn = nm ? getComputedStyle(nm) : null;
+  const avEl = $('#msgAvatar'), avCs = avEl ? getComputedStyle(avEl) : null;
   const n = (v, d) => { const x = parseFloat(v); return isFinite(x) ? x : d; };
-  const mtx = /matrix\(([^)]+)\)/.exec(ct.transform || '');
   return {
     mode: win.classList.contains('wb-bare') ? 'bare'
       : win.classList.contains('wb-soft') ? 'soft' : 'box',
@@ -8300,7 +8563,8 @@ function shareMsgStyle() {
     size: n(ct.fontSize, 21), lineH: n(ct.lineHeight, 34),
     color: ct.color, align: ct.textAlign || 'left',
     stroke: n(getComputedStyle(stage).getPropertyValue('--msgStroke'), 1.2),
-    shiftX: mtx ? (parseFloat(mtx[1].split(',')[4]) || 0) : 0,
+    /* 正文的水平位置 = #msgText 的 padding-left（设置里的「文字水平位置」） */
+    textX: n(ct.paddingLeft, 0),
     nameColor: cn ? cn.color : '#ffe9b8',
     nameSize: cn ? n(cn.fontSize, 16.8) : 16.8,
     nameWeight: cn ? cn.fontWeight : 700,
@@ -8309,27 +8573,47 @@ function shareMsgStyle() {
     // 名字的三档对齐（设置里的「话者名 → 对齐」）
     nameAlign: (nm && nm.classList.contains('align-center')) ? 'center'
       : (nm && nm.classList.contains('align-right')) ? 'right' : 'left',
-    // 话者头像（分享图也按播放器里的位置/大小/间距画，保持所见即所得）
+    // 名条的左右/上下微调（设置 → 话者名），出图要跟着走
+    nameX: Number(SET.nameX) || 0,
+    nameY: Number(SET.nameY) || 0,
+    // 话者头像：位置照 SET 算，外观（画框/底板/画框厚度）直接读播放器当前样式，
+    // 这样换头像背景色、画框、形状之后分享图跟着变，不用再改一处硬编码。
     avShow: SET.avShow !== false,
-    avPos: AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'left',
+    avPos: AV_POS_LIST.includes(SET.avPos) ? SET.avPos : 'box-tl',
     avShape: AV_SHAPE_LIST.includes(SET.avShape) ? SET.avShape : 'circle',
-    avSize: n(getComputedStyle(stage).getPropertyValue('--avSize'), 54),
+    avSize: n(getComputedStyle(stage).getPropertyValue('--avSize'), 96),
     avGap: n(SET.avGap, 2),
     avX: n(SET.avX, 0),
     avY: n(SET.avY, 0),
+    avPlate: getComputedStyle(stage).getPropertyValue('--avPlate') || '#0b1220',
+    avRingBg: avCs ? avCs.backgroundImage : '',
+    avRingColor: (avCs && avCs.backgroundColor !== 'rgba(0, 0, 0, 0)')
+      ? avCs.backgroundColor : '#c99b45',
+    avRingNone: !!(avCs && avCs.backgroundImage === 'none'
+      && avCs.backgroundColor === 'rgba(0, 0, 0, 0)'),
+    avPad: avCs ? n(avCs.paddingTop, 2) : 2,
+    avOfficial: !!(avEl && avEl.querySelector('.avImg')
+      && avEl.querySelector('.avImg').classList.contains('avOfficial')),
   };
 }
 
-/** 纯文本按宽度断行（首句走播放器样式时用，名字另画名条，不混进正文） */
-function shareWrapPlain(meas, text, maxW, font) {
+/** 纯文本按宽度断行。
+ *  keepBreaks=true：播放器样式用 —— 台上 #msgText 是 white-space:pre-wrap，
+ *    剧本里的换行必须原样保留（三行就是三行），空格也不能合并；
+ *  keepBreaks=false：海报样式用 —— 沿用 shareJoin 把"排版用换行"合并掉。 */
+function shareWrapPlain(meas, text, maxW, font, keepBreaks) {
   meas.font = font;
+  const src = keepBreaks
+    ? String(text == null ? '' : text).replace(/\r\n?/g, '\n')
+    : shareJoin(text);
   const out = [];
   let cur = '';
-  for (const ch of shareJoin(text)) {
+  for (const ch of src) {
+    if (keepBreaks && ch === '\n') { out.push(cur); cur = ''; continue; }
     if (cur && meas.measureText(cur + ch).width > maxW) { out.push(cur); cur = ch; }
     else cur += ch;
   }
-  if (cur) out.push(cur);
+  out.push(cur);
   return out.length ? out : [''];
 }
 
@@ -8344,35 +8628,73 @@ function shareRoundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
-/** 分享图里画一枚圆形/圆角头像；位置由调用方按播放器设置算好 */
-function shareDrawAvatar(g, im, ax, ay, size, shape, scale) {
+/** CSS 里 avatar 的底板 / 画框都可能是渐变串（--avPlate 或 background-image），
+ *  canvas 不认 CSS 字符串，这里抽颜色转成 canvas 渐变；纯色就直接返回。 */
+function sharePaintOf(g, css, fallback, x, y, w, h) {
+  const v = String(css || '').trim();
+  const m = /linear-gradient\((.*)\)/.exec(v);
+  if (m) {
+    const colors = m[1].match(/rgba?\([^)]*\)|#[0-9a-fA-F]{3,8}/g);
+    if (colors && colors.length) {
+      const grd = g.createLinearGradient(x, y, x + w, y + h);
+      colors.forEach((c, i) => grd.addColorStop(colors.length === 1 ? 0 : i / (colors.length - 1), c));
+      return grd;
+    }
+  }
+  return /^(rgb|#)/.test(v) ? v : fallback;
+}
+
+/** 分享图里画头像：画框 / 底板 / 官方头像外扩全部照播放器那套属性来，
+ *  只有位置仍由调用方按设置算好。 */
+function shareDrawAvatar(g, im, ax, ay, size, st, scale) {
   if (!im || !size) return;
   const k = scale;
+  const pad = (st.avPad || 0) * k;
+  const shape = st.avShape;
   const radius = shape === 'rounded' ? size * .2 : shape === 'square' ? 2 * k : size / 2;
-  const shapePath = () => {
-    g.beginPath();
-    if (shape === 'circle') g.arc(ax + size / 2, ay + size / 2, size / 2, 0, Math.PI * 2);
-    else shareRoundRect(g, ax, ay, size, size, radius);
+  const shapePath = (x, y, w, h, r) => {
+    if (shape === 'circle') {
+      g.beginPath(); g.arc(x + w / 2, y + h / 2, w / 2, 0, Math.PI * 2);
+    } else shareRoundRect(g, x, y, w, h, r);
   };
+  // 外圈画框（「无描边」模式没有这一层）
+  if (!st.avRingNone) {
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,.62)'; g.shadowBlur = 18 * k; g.shadowOffsetY = 6 * k;
+    shapePath(ax, ay, size, size, radius);
+    g.fillStyle = sharePaintOf(g, st.avRingBg, st.avRingColor || '#c99b45',
+      ax, ay, size, size);
+    g.fill();
+    g.restore();
+  }
+  // 内框：底板颜色（跟随播放器的头像背景色）+ 图片
+  const ix = ax + pad, iy = ay + pad, iw = Math.max(0, size - pad * 2);
+  if (iw <= 0) return;
+  const ir = Math.max(0, radius - pad);
   g.save();
-  shapePath();
+  shapePath(ix, iy, iw, iw, ir);
   g.clip();
-  g.fillStyle = '#0b1220';
-  g.fillRect(ax, ay, size, size);
-  const iw = im.naturalWidth, ih = im.naturalHeight;
-  if (iw && ih) {
-    const s = Math.max(size / iw, size / ih);
-    const dw = iw * s, dh = ih * s;
-    g.drawImage(im, ax + (size - dw) / 2, ay + (size - dh) / 2, dw, dh);
+  g.fillStyle = sharePaintOf(g, st.avPlate, '#0b1220', ix, iy, iw, iw);
+  g.fillRect(ix, iy, iw, iw);
+  const official = (im.dataset && im.dataset.escaOfficial != null)
+    ? im.dataset.escaOfficial === '1' : !!st.avOfficial;
+  const iw0 = im.naturalWidth, ih0 = im.naturalHeight;
+  if (iw0 && ih0) {
+    const s = Math.max(iw / iw0, iw / ih0) * (official ? 1.125 : 1);
+    const dw = iw0 * s, dh = ih0 * s;
+    g.drawImage(im, ix + (iw - dw) / 2, iy + (iw - dh) / 2, dw, dh);
   }
   g.restore();
+  // CSS #msgAvatar::after 的斜向高光
   g.save();
-  shapePath();
-  g.lineWidth = Math.max(1, 2 * k);
-  g.strokeStyle = '#e6c283';
-  g.shadowColor = 'rgba(245,205,130,.55)';
-  g.shadowBlur = 6 * k;
-  g.stroke();
+  shapePath(ix, iy, iw, iw, ir);
+  g.clip();
+  const hl = g.createLinearGradient(ix, iy, ix + iw, iy + iw);
+  hl.addColorStop(0, 'rgba(255,255,255,.16)');
+  hl.addColorStop(.36, 'rgba(255,255,255,0)');
+  hl.addColorStop(1, 'rgba(0,0,0,.12)');
+  g.fillStyle = hl;
+  g.fillRect(ix, iy, iw, iw);
   g.restore();
 }
 
@@ -8385,7 +8707,11 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale, avImg) {
   const fs = st.size * k, lh = st.lineH * k;
   const font = st.weight + ' ' + fs.toFixed(1) + 'px ' + st.family;
   const meas = document.createElement('canvas').getContext('2d');
-  const lines = shareWrapPlain(meas, text, boxW - padX * 2, font);
+  /* 折行宽度要扣掉「文字水平位置」（= #msgText 的 padding-left），
+     否则导出的首句会比屏幕上多挤进几个字。 */
+  const textX = (st.textX || 0) * k;
+  /* 播放器样式不能合并剧本换行：屏幕上 pre-wrap 显示三行，这里也得是三行 */
+  const lines = shareWrapPlain(meas, text, Math.max(40 * k, boxW - padX * 2 - textX), font, true);
   const textH = lines.length * lh;
   const boxH = Math.max(st.minH * k, textH + padTop + Math.round(18 * k));
   const boxY = imgH - st.bottom * k - boxH;
@@ -8418,7 +8744,9 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale, avImg) {
     : st.align === 'right' ? boxX + boxW - padX : boxX + padX;
   g.textAlign = st.align === 'center' ? 'center' : st.align === 'right' ? 'right' : 'left';
   g.textBaseline = 'middle';
-  const shift = st.shiftX * k;
+  /* 跟 CSS 的 padding-left 同口径：左对齐整体右移 textX；居中只移一半
+     （宽度少了一段，中心跟着走一半）；右对齐不动。 */
+  const shift = st.align === 'center' ? textX / 2 : st.align === 'right' ? 0 : textX;
   lines.forEach((t, i) => {
     const y = boxY + padTop + i * lh + lh / 2;
     if (st.stroke > 0.15) {
@@ -8441,34 +8769,45 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale, avImg) {
     g.font = font2;
     g.textAlign = 'left';
     g.textBaseline = 'middle';
-    const nw = g.measureText(who).width;
-    const padN = 16 * k, pillH = nfs + 10 * k;
-    // 名条位置跟「设置 → 话者名 → 对齐」一致：左/中/右三档
+    /* CSS 的 #msgName 有 letter-spacing:1px：有 letterSpacing 就交给 canvas，
+       没有就手算补宽，不然名条会比台上的窄一截，右对齐时整体偏位。 */
+    const hasLS = 'letterSpacing' in g;
+    if (hasLS) g.letterSpacing = (1 * k) + 'px';
+    const nw = g.measureText(who).width + (hasLS ? 0 : who.length * k);
+    const padN = 16 * k, pillH = nfs * 1.2 + 4 * k;   // CSS: font-size + 上下各 2px padding
     const pillW = nw + padN * 2;
-    const nx = st.nameAlign === 'center' ? boxX + (boxW - pillW) / 2
-      : st.nameAlign === 'right' ? boxX + boxW - 22 * k - pillW
-        : boxX + 22 * k;
-    const ny = boxY - (15 * k) - pillH / 2;
+    /* 名条盒的位置照 placeMsgName() 的口径来：
+       名条挂在**框的内缘**（含 1px 边框）、top 是 -15 + nameY，基准 22px 加 nameX，
+       三档对齐按框的 padding box 宽度算，最后跟播放器一样夹在画面内。
+       旧代码把 ny 当成名条中心又多减了半个名条高，所以整块往上偏了近一个名条。 */
+    const bw = boxW - st.borderW * k * 2;
+    const bx = boxX + st.borderW * k, by = boxY + st.borderW * k;
+    const base = st.nameAlign === 'center' ? (bw - pillW) / 2
+      : st.nameAlign === 'right' ? bw - 22 * k - pillW : 22 * k;
+    const clampV = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+    const nx = clampV(bx + base + (st.nameX || 0) * k, 4 * k, W - 4 * k - pillW);
+    const ny = clampV(by - 15 * k + (st.nameY || 0) * k, 4 * k, imgH - 4 * k - pillH);
+    const nyMid = ny + pillH / 2;
     // 头像先画在名条下层（播放器里 #msgAvatar 的 z-index 也比 #msgName 低）
     if (avImg && st.avShow) {
-      const avS = Math.max(20, Math.min(140, st.avSize || 54)) * k;
+      const avS = Math.max(20, Math.min(140, st.avSize || 96)) * k;
       const gap = (st.avGap || 0) * k;
       let ax = 0, ay = 0;
       if (st.avPos.indexOf('box-') === 0) {
-        const out = avS * .18;
-        ax = (st.avPos === 'box-tl' || st.avPos === 'box-bl') ? boxX - out : boxX + boxW - avS + out;
-        ay = (st.avPos === 'box-tl' || st.avPos === 'box-tr') ? boxY - avS * .42 : boxY + boxH - avS * .58;
+        /* 框角：头像**中心**对准对话框的角（跟 avPlace() 同口径） */
+        ax = (st.avPos === 'box-tl' || st.avPos === 'box-bl') ? boxX - avS / 2 : boxX + boxW - avS / 2;
+        ay = (st.avPos === 'box-tl' || st.avPos === 'box-tr') ? boxY - avS / 2 : boxY + boxH - avS / 2;
       } else {
         ax = st.avPos === 'right' ? nx + pillW + gap : nx - avS - gap;
-        ay = ny - avS / 2;
+        ay = nyMid - avS / 2;
       }
-      shareDrawAvatar(g, avImg, ax + st.avX * k, ay + st.avY * k, avS, st.avShape, k);
+      shareDrawAvatar(g, avImg, ax + st.avX * k, ay + st.avY * k, avS, st, k);
     }
     if (st.namePill) {
-      const grd = g.createLinearGradient(0, ny - pillH / 2, 0, ny + pillH / 2);
+      const grd = g.createLinearGradient(0, ny, 0, ny + pillH);
       grd.addColorStop(0, '#f0d090');
       grd.addColorStop(1, '#c99b45');
-      shareRoundRect(g, nx, ny - pillH / 2, nw + padN * 2, pillH, 5 * k);
+      shareRoundRect(g, nx, ny, pillW, pillH, 5 * k);
       g.fillStyle = grd;
       g.fill();
       g.fillStyle = '#1a1206';
@@ -8476,10 +8815,11 @@ function shareDrawPlayerMsg(g, W, imgH, st, who, text, scale, avImg) {
       g.lineWidth = Math.max(1, (st.stroke + 1) * 2 * k);
       g.lineJoin = 'round';
       g.strokeStyle = 'rgba(0,0,0,.92)';
-      g.strokeText(who, nx + padN, ny);
+      g.strokeText(who, nx + padN, nyMid);
       g.fillStyle = st.nameColor;
     }
-    g.fillText(who, nx + padN, ny);
+    g.fillText(who, nx + padN, nyMid);
+    if (hasLS) g.letterSpacing = '0px';
   }
 }
 
@@ -8617,16 +8957,20 @@ function shareCanvasBlob(cv, type, quality) {
   return new Blob([buf], { type: m[1] });
 }
 
-/** 分享长图里的头像：按话者名解析一次，图片加载好后再重画预览 */
+/** 分享长图里的头像：按话者原名解析一次，图片加载好后再重画预览。
+ *  raw 是剧本里的日文原名（显示名 who 可能是译文，映射表认不出来）。 */
 const SHARE_AV_IMG = new Map();
-function shareAvatarImg(who, onReady) {
-  if (!who) return null;
-  const id = avResolve(who);
+function shareAvatarImg(who, onReady, raw) {
+  const keyName = raw || who;
+  if (!keyName) return null;
+  const id = avResolve(keyName);
   if (id == null) return null;
   if (SHARE_AV_IMG.has(id)) return SHARE_AV_IMG.get(id);
   const cands = avatarCands(id);
   if (!cands.length) { SHARE_AV_IMG.set(id, null); return null; }
   const im = new Image();
+  // 官方 d/b/n/e 头像四周有透明留白，出图要跟播放器一样按 1.125 外扩再裁
+  im.dataset.escaOfficial = /^[dbne]\d+$/i.test(String(id)) ? '1' : '0';
   SHARE_AV_IMG.set(id, null);
   let i = 0;
   const next = () => {
@@ -8757,7 +9101,18 @@ function openShare() {
     const own = q('#shOwn') ? q('#shOwn').value === '1' : false;   // 默认海报样式
     const fsBase = q('#shFs') ? +q('#shFs').value : 24;
     const first = lines[picks[0]] || {};
-    const avImg = own ? shareAvatarImg(first.who || '', paint) : null;
+    /* 头像：当前句直接复用屏幕上那张（连解析结果都和播放器一致，不会画出别人），
+       别的句子才按剧本原名现解析；关掉头像功能时两张都不取。 */
+    let avImg = null;
+    if (own && SET.avShow !== false) {
+      const domAv = $('#msgAvatar .avImg');
+      if (picks[0] === ST.curLine && ST.curAvatarId != null
+          && domAv && domAv.classList.contains('ready') && domAv.naturalWidth) {
+        avImg = domAv;
+      } else {
+        avImg = shareAvatarImg(first.who || '', paint, first.raw || '');
+      }
+    }
     const cv = shareCompose(shot, picks, outW, own, fsBase, avImg);
     if (!cv) {
       holder.innerHTML = '<div class="shEmpty">这几句拼不出来，换几句试试</div>';

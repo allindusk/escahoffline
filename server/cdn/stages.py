@@ -1820,7 +1820,7 @@ def compose_stands(nums) -> None:
     _compose([str(n) for n in sorted(nums)], nums)
 
 
-def compose_stands_all_packs(nums=None) -> None:
+def compose_stands_all_packs(nums=None) -> int:
     """按**已下载的立绘源包**把每套服装的全套表情合成出来（含剧本从未用到的）。
 
     为什么要单独一条路：装剧情只下载该剧情引用到的源包，合成也只做
@@ -1830,15 +1830,20 @@ def compose_stands_all_packs(nums=None) -> None:
     （不重写），所以重复点「补全」不会白跑。
 
     ``nums`` 给了就只跑这些编号（调用方分批调用，进度条才有变化）。
+
+    **返回子进程退出码**：非 0 = 有服装没合成成功（脚本会打印是哪几套）。
+    调用方必须当失败处理 —— 以前这里吞掉退出码，那一批的服装就永远缺着，
+    而完成标记照样写着「已就绪」（2026-11-20 反馈）。
     """
     chunk = [str(n) for n in sorted(nums or [])]
-    _compose(["--all-packs"] + chunk, chunk)
+    return _compose(["--all-packs"] + chunk, chunk)
 
 
-def _compose(args, nums) -> None:
+def _compose(args, nums) -> int:
     """跑一次 ``compose_stand_all.py`` 并做合并 / 质检（两条入口共用）。
 
     ``nums`` 为空 = 全量按包模式（``--all-packs``），此时质检不按编号过滤。
+    返回子进程退出码（0 = 全部成功）。
     """
     slot_path = os.path.join(DATA, "stand_slot.json")
     backup = None
@@ -1896,6 +1901,7 @@ def _compose(args, nums) -> None:
     # 画布落点表要跟着一起刷：漏了就会"新装的角色立绘比游戏里小一圈、还贴底"
     regen_stand_box()
     _say(f"  合成用时 {time.time() - t0:.0f}s")
+    return rc
 
 
 def clear_x2_pending() -> None:

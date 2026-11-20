@@ -164,12 +164,23 @@ class Painter:
         pad_x = 26 * S
         pad_y = 20 * S
         rad = 10 * S
-        x0, x1 = 52 * S, W - 52 * S
-        y1 = H - 26 * S
+        edge = 4 * S
+        # 几何与播放器的 layoutMsgChrome() 同一套口径：
+        # 宽度 = 可用宽度的百分比（默认 60）、水平位置 0~100%（0 贴左 / 50 居中 / 100 贴右）、
+        # 底距与最小高度都有上下限；长句让框比 msgH 高时整框上移并夹在画面内。
+        pct = min(100.0, max(40.0, float(self.st.get('msgW', 60) or 60)))
+        box_w = round((1280 - 8) * pct / 100) * S
+        pos = min(100.0, max(0.0, float(self.st.get('msgPos', 50) or 0)))
+        slack = max(0.0, W - 2 * edge - box_w)
+        x0 = edge + slack * pos / 100.0
+        x1 = x0 + box_w
+        min_h = min(340.0, max(90.0, float(self.st.get('msgH', 150) or 150))) * S
+        y_off = max(0.0, float(self.st.get('msgY', 26) or 26)) * S
         fnt = font(fs, False)
         wrapped = self.wrap(text, fnt, (x1 - x0 - 2 * pad_x))
         text_h = max(96 * S, len(wrapped) * lh)
-        box_h = max(150 * S, pad_y + text_h + 18 * S)
+        box_h = max(min_h, pad_y + text_h + 18 * S)
+        y1 = H - max(0.0, min(y_off, H - box_h - edge))
         y0 = y1 - box_h
         bg = parse_color(self.st['msgBg'])
         alpha = int(255 * self.st['alpha'] / 100)
@@ -201,7 +212,7 @@ class Painter:
         # 正文（四向黑描边近似）
         sw = max(1, round(self.st['msgStroke'] * S))
         msg = parse_color(self.st['msgColor'])
-        tx = x0 + pad_x + self.st['msgX'] * S
+        tx = x0 + pad_x
         ty = y0 + pad_y
         for ln in wrapped:
             d.text((tx, ty), ln, font=fnt, fill=msg, stroke_width=sw,

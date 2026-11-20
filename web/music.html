@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 原声集</title>
-<link rel="stylesheet" href="assets/css/music.css?v=1117o">
+<link rel="stylesheet" href="assets/css/music.css?v=1120b">
 <link rel="stylesheet" href="assets/css/mobile.css?v=1117g">
 <!-- 悬停说明气泡（14px）：原生 title 只有 12px，低于全站字号下限 -->
 <link rel="stylesheet" href="assets/css/tip.css?v=1116c">
@@ -46,10 +46,14 @@
         <option value="name">按曲名</option>
         <option value="dur">按时长</option>
       </select>
-      <button id="btnExport" title="把勾选的曲目打包到 userdata/export/；一首都没勾时会问要不要导出当前列表的全部">⬇ 导出勾选</button>
+      <button id="btnExport" title="把勾选的曲目 / 语音打包到 userdata/export/；一段都没勾时会问要不要导出当前列表的全部">⬇ 导出勾选</button>
     </div>
     <div id="bulkBar">
       <button id="bulkAll" title="选中当前列表里能播的全部曲目；再点一次清空勾选">全选</button>
+      <!-- 音声一个角色几十到几百段，「全选」会把整个列表都勾上。
+           这个只勾**已经展开的那些角色**：点开几个就勾几个，再点一次取消。 -->
+      <button id="bulkUnit" hidden
+              title="勾选已展开角色的全部语音；再点一次取消">全选本角色</button>
       <button id="bulkAdd" title="把勾选的曲目一次加进当前播放列表">＋ 加入列表</button>
       <button id="bulkDel" title="把勾选的曲目一次移出当前播放列表">－ 移出列表</button>
       <span id="bulkCount">已选 0 项</span>
@@ -118,6 +122,8 @@
 <audio id="au" preload="metadata"></audio>
 
 <script src="data/names.js?v=1115e"></script>
+<!-- 角色实装日期：音声列表的「按实装顺序」要用（charmeta.js 的 d 字段） -->
+<script src="data/charmeta.js" onerror="window.__CHARMETA=window.__CHARMETA||{}"></script>
 <!-- gallery.js / voicemap.js 是本机反复重新生成的数据（补全原声集/音声就会变），
      不写死 ?v=：由本地 http.server 的协商缓存按 mtime 失效，官方上新曲刷新即可见。 -->
 <script src="data/gallery.js" onerror="window.__GALLERY=window.__GALLERY||null"></script>
@@ -136,7 +142,7 @@
 <script src="assets/js/header.js?v=1130f"></script>
 <script src="assets/js/packstate.js?v=1103a"></script>
 <script src="assets/js/userdata.js?v=1115g"></script>
-<script src="assets/js/music.js?v=1118a"></script>
+<script src="assets/js/music.js?v=1120f"></script>
 <script src="assets/js/disclaimer.js?v=1117b"></script>
 <script src="assets/js/health.js?v=1117n"></script>
 <script src="assets/js/mobile.js?v=1117b"></script>

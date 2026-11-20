@@ -87,7 +87,7 @@ def merge(rel: str, old: list, new: list) -> list:
 def merge_into(staged: str, live: str | None = None, rel: str = "") -> dict:
     """把 ``staged``（出厂包里的那份）与 ``live``（本机现状）合并，**写回 staged**。
 
-    只改暂存区，不动本机文件 —— 真正落盘由独立更新器按白名单覆盖，
+    只改暂存区，不动本机文件 —— 真正落盘由独立更新器全量覆盖暂存区，
     这样"只下载不应用"也不会把本机数据改脏。
     """
     _prefix, key_of = SPECS[rel]

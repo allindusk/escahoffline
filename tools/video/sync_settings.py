@@ -94,7 +94,8 @@ def main():
     keys = {'alpha', 'fs', 'typeRate', 'showWin', 'bgmVol', 'seVol', 'voiceVol',
             'fit', 'instantText', 'pausePerChar', 'pauseBase', 'pauseAfterVoice', 'showPartial',
             'sortBy', 'rarSel', 'msgBg', 'msgColor', 'msgFont',
-            'msgLH', 'msgStroke', 'msgX', 'msgAlign', 'nameX', 'nameY', 'nameAlign'}
+            'msgLH', 'msgStroke', 'msgAlign', 'nameX', 'nameY', 'nameAlign',
+            'msgW', 'msgH', 'msgY', 'msgPos', 'msgTextX'}
     obj = {k: v for k, v in obj.items() if k in keys}
     # 播放器已经删掉「立绘尺寸 / 纵向位置 / 水平偏移」三项（改了只会偏离游戏原演出），
     # 成片一律按游戏原尺寸满高 720、落在官方锚点上：老 escah_set 里的旧值不参与。

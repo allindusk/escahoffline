@@ -1,0 +1,52 @@
+{
+  "_schema": 1,
+  "_说明": "程序自带文件的唯一清单。打包 tools/pack_app.ps1 与更新覆盖 server/updater.py 共用这一份；新增程序文件只改这里，别再改两处。更新器读不到本文件时退回 updater.py 里的内置常量（高可用兜底）。",
+  "program_dirs": [
+    "server/",
+    "tools/",
+    "docs/",
+    "web/assets/"
+  ],
+  "program_files": [
+    "VERSION",
+    "README.md",
+    "NOTICE.md",
+    "LICENSE",
+    "requirements.txt",
+    "start.sh",
+    "启动.bat",
+    "web/*.html"
+  ],
+  "_update_only_files说明": "只放行更新、不要求打包时存在的文件（旧版本的启动脚本名，仓库里已统一成 启动.bat）。",
+  "update_only_files": [
+    "start.bat",
+    "停止.bat"
+  ],
+  "_pack_only_dirs说明": "只进安装包、不参与更新覆盖的目录：glossary 是用户会自己维护的译名对照表，更新时不能覆盖本机那份。",
+  "pack_only_dirs": [
+    "glossary/"
+  ],
+  "data_files": {
+    "web/data/advindex.js":      { "pack": true, "update": true },
+    "web/data/app.json":         { "pack": true, "update": false },
+    "web/data/cgmap.js":         { "pack": true, "update": true },
+    "web/data/charmeta.js":      { "pack": true, "update": true },
+    "web/data/imgmap.js":        { "pack": true, "update": false },
+    "web/data/index.js":         { "pack": true, "update": true },
+    "web/data/names.js":         { "pack": true, "update": true },
+    "web/data/othereps.js":      { "pack": true, "update": false },
+    "web/data/packs.links.js":   { "pack": true, "update": false },
+    "web/data/stand_box.js":     { "pack": true, "update": true },
+    "web/data/stand_layers.json":{ "pack": true, "update": false },
+    "web/assets/i18n/ui.json":   { "pack": true, "update": true }
+  },
+  "protected_dirs": [
+    "web/media/",
+    "web/data/",
+    "web/assets/i18n/",
+    "userdata/",
+    ".git/",
+    ".github/"
+  ],
+  "_data_files说明": "pack=进安装包（新用户要有）；update=升级时允许覆盖（程序产出、能随版本刷新）。imgmap/othereps/stand_layers/packs.links 只进包不覆盖——本机那份由素材重新生成、比发布版新。app.json 只进包不覆盖——用户可能改过仓库地址。"
+}

@@ -31,6 +31,8 @@
   const GAL = window.__GALLERY || { tracks: [] };
   const VMAP = window.__VOICEMAP || { units: [] };
   const NAMES = window.__NAMES || {};
+  // 角色元信息（稀有度 / 职业 / **实装日期 d**）：音声的「按收录顺序」就是按它排的
+  const META = window.__CHARMETA || {};
   const MEDIA = window.__MEDIA || null;
   const UD = window.UD || null;
   const AU = $('#au');
@@ -278,8 +280,30 @@
       units = units.filter(u => (u.clips || []).concat(u.home || [])
         .some(c => keys.has(voiceKey(u, c))));
     }
+    /* 三种排序都要真的生效。以前只有「按曲名」写了排序：
+       「按收录顺序」直接用 voicemap 的 id 序 —— 400~403（2026/11/18 实装）
+       会排在 415（10/28）、416（11/04）前面，看着像日期取错了（2026-11-20 反馈）；
+       「按时长」更是完全没实现（选了没反应）。 */
+    const dateOf = id => String((META[id] || {}).d || '');
+    const durOf = u => (u.clips || []).concat(u.home || [])
+      .reduce((n, c) => n + (+c[2] || 0), 0);
     if (ST.sort === 'name') {
-      units.sort((a, b) => nameOf(a.id).localeCompare(nameOf(b.id), 'ja'));
+      units.sort((a, b) => nameOf(a.id).localeCompare(nameOf(b.id), 'ja') || (a.id - b.id));
+    } else if (ST.sort === 'dur') {
+      units.sort((a, b) => (durOf(b) - durOf(a)) || (a.id - b.id));
+    } else {
+      /* 「按实装顺序」= 角色实装日期（charmeta 的 d，与 CG 页"按实装日期"同源），
+         **新→旧**：刚实装的排最前面（2026-11-20 用户要求倒序）。
+         没日期的那 36 个是**开局就有的老角色**（charmeta 里 d 是空的，不是新角色），
+         所以按"最早"处理 → 倒序后自然沉到最后；但编号比所有有日期角色都大 =
+         只能是最新那批（CI 的 charmeta 偶尔晚一天才补上它），当成最新排最前。 */
+      const datedMax = units.reduce((m, u) => (dateOf(u.id) ? Math.max(m, u.id) : m), 0);
+      const keyOf = u => dateOf(u.id) || (u.id > datedMax ? '9999-99-99' : '');
+      units.sort((a, b) => {
+        const ka = keyOf(a), kb = keyOf(b);
+        if (ka !== kb) return ka > kb ? -1 : 1;   // 日期大（新）的在前
+        return b.id - a.id;                       // 同一天：编号大的（更晚）在前
+      });
     }
     ST.list = units;
     const rows = [];
@@ -362,6 +386,10 @@
     // 浮窗就挂在屏幕上不走（移除列表里最后一首歌时最明显：连别的行都没有，
     // 鼠标怎么移动都碰不到新的 onmouseenter）。所以重画前先收起来。
     hideHover();
+    /* 排序下拉的选项在两种来源下含义不同：曲目是官方收录顺序（包编号），
+       音声是角色实装顺序（charmeta 的 d）。文案跟着换，免得看着对不上。 */
+    const noOpt = $('#plSort') && $('#plSort').querySelector('option[value="no"]');
+    if (noOpt) noOpt.textContent = ST.src === 'voice' ? '按实装顺序' : '按收录顺序';
     build();
     const box = $('#plList');
     if (ST.src === 'voice') renderVoiceList(box);
@@ -399,6 +427,88 @@
     bindRows(box);
   }
 
+  /** 一个角色**展开后**的那些行（含「主页 / 其他语音」分隔条）。
+   *  整表重绘与「只插入这一组」共用同一份生成逻辑，别再写两套。
+   *  每行都带 ``data-uid``：收起时按它把这一组整块摘掉，不影响别的分组。 */
+  function voiceRowsHTML(u) {
+    const keys = listOnlyKeys();
+    const visClips = (u.clips || []).filter(c => !keys || keys.has(voiceKey(u, c)));
+    const visHome = (u.home || []).filter(c => !keys || keys.has(voiceKey(u, c)));
+    const out = [];
+    const push = c => {
+      const it = voiceItem(u, c);
+      const on = ST.curKey === it.key ? ' on' : '';
+      const fav = inList(it.key);
+      // 有 ASR 转写就显示台词，比流水号有用得多（label_voice.py 写进 c[4]）
+      const raw = (c[4] ? c[4].slice(0, 40) : '')
+        || c[0].replace(/^(voice|sys)_\d*_?/, '').replace(/^80000_\d{4}/, '');
+      const pick = ST.pick.has(it.key) ? ' checked' : '';
+      out.push('<div class="row vrow' + on + '" data-vkey="' + esc(it.key) +
+        '" data-uid="' + u.id + '">' +
+        '<input class="ck" type="checkbox" data-key="' + esc(it.key) + '"' + pick +
+        ' title="勾选后可批量加入播放列表">' +
+        '<span class="no"></span>' +
+        '<span class="nm">' + esc(c[3] || raw) +
+        '<i>' + esc(raw) + '</i></span>' +
+        '<span class="du">' + fmt(c[2]) + '</span>' +
+        '<span class="hf' + (fav ? ' on' : '') + '" data-fav="1" title="' +
+        (fav ? '从当前播放列表移除' : '加进当前播放列表') + '">' + HEART_SVG +
+        '</span></div>');
+    };
+    for (const c of visClips) push(c);
+    if (visHome.length) {
+      // 主页那批（取得 / 覚醒 / ホーム画面クリック / 放置 / タイトルコール）
+      // 在另一个包里，显示名只存在于服务端表 —— 先按序号列出来：能听、能收藏、
+      // 能进播放列表，等映射表拿到再改成游戏里的名字。
+      out.push('<div class="vsep" data-uid="' + u.id + '">主页 / 其他语音 · ' +
+        visHome.length + ' 段（包里无名，按序显示）</div>');
+      for (const c of visHome) push(c);
+    }
+    return out.join('');
+  }
+
+  /** 展开 / 收起一个角色：**只动这一组的 DOM**。
+   *
+   * 以前是 `renderList()` 整表重绘 —— 200 多个分组、已展开的行全部重建，
+   * 点一下整列会闪一下、滚动位置也可能跳（2026-11-20 用户反馈"列表会刷新一下"）。
+   * 这里只把这一组的行插到标题后面 / 摘掉，其余节点一个都不碰。 */
+  function toggleVoiceGroup(head) {
+    const id = +head.dataset.uid;
+    const u = ST.list.find(x => x.id === id) || VUNITS.find(x => x.id === id);
+    if (!u) return;
+    hideHover();
+    /* 插入几十行时浏览器会自动补偿 scrollTop（scroll anchoring），
+       表现成"点一下列表猛地滚了一下"。这一下先关掉补偿：标题留在原位、
+       新行从它下面展开；下一帧恢复默认行为，不影响别处的滚动。 */
+    const box = $('#plList');
+    const anchorPrev = box.style.overflowAnchor;
+    box.style.overflowAnchor = 'none';
+    const restoreAnchor = () => requestAnimationFrame(() => {
+      box.style.overflowAnchor = anchorPrev || '';
+    });
+    if (ST.open.has(id)) {
+      ST.open.delete(id);
+      // 把紧跟在标题后面的同一组的行 / 分隔条删掉（下一组标题的 data-uid 不同，自然停住）
+      let el = head.nextElementSibling;
+      while (el && el.dataset.uid === String(id)) {
+        const next = el.nextElementSibling;
+        el.remove();
+        el = next;
+      }
+      head.classList.remove('open');
+    } else {
+      ST.open.add(id);
+      const tmp = document.createElement('div');
+      tmp.innerHTML = voiceRowsHTML(u);
+      bindRows(tmp, true);                 // 先把事件绑在离屏节点上，再一次性插入
+      head.after(...Array.from(tmp.children));
+      head.classList.add('open');
+    }
+    prefSet('open', Array.from(ST.open));
+    paintBulk();                           // 「全选本角色」按展开状态启停
+    restoreAnchor();
+  }
+
   function renderVoiceList(box) {
     if (!ST.list.length) {
       box.innerHTML = '<div class="vempty">还没有导出角色音声。<br>' +
@@ -430,45 +540,11 @@
         '<span class="vc">' + visClips.length +
         (visHome.length ? ' + ' + visHome.length : '') + ' 段</span>' +
         '<span class="caret">▸</span></div>');
-      if (open) {
-        const push = c => {
-          const it = voiceItem(u, c);
-          const on = ST.curKey === it.key ? ' on' : '';
-          const fav = inList(it.key);
-          // 有 ASR 转写就显示台词，比流水号有用得多（label_voice.py 写进 c[4]）
-          const raw = (c[4] ? c[4].slice(0, 40) : '')
-            || c[0].replace(/^(voice|sys)_\d*_?/, '').replace(/^80000_\d{4}/, '');
-          const pick = ST.pick.has(it.key) ? ' checked' : '';
-          html.push('<div class="row vrow' + on + '" data-vkey="' + esc(it.key) + '">' +
-            '<input class="ck" type="checkbox" data-key="' + esc(it.key) + '"' + pick +
-            ' title="勾选后可批量加入播放列表">' +
-            '<span class="no"></span>' +
-            '<span class="nm">' + esc(c[3] || raw) +
-            '<i>' + esc(raw) + '</i></span>' +
-            '<span class="du">' + fmt(c[2]) + '</span>' +
-            '<span class="hf' + (fav ? ' on' : '') + '" data-fav="1" title="' +
-            (fav ? '从当前播放列表移除' : '加进当前播放列表') + '">' + HEART_SVG +
-            '</span></div>');
-        };
-        for (const c of visClips) push(c);
-        if (visHome.length) {
-          // 主页那批（取得 / 覚醒 / ホーム画面クリック / 放置 / タイトルコール）
-          // 在另一个包里，显示名只存在于服务端表 —— 先按序号列出来：能听、能收藏、
-          // 能进播放列表，等映射表拿到再改成游戏里的名字。
-          html.push('<div class="vsep">主页 / 其他语音 · ' +
-            visHome.length + ' 段（包里无名，按序显示）</div>');
-          for (const c of visHome) push(c);
-        }
-      }
+      if (open) html.push(voiceRowsHTML(u));
     }
     box.innerHTML = html.join('');
     $$('.vgrp', box).forEach(g => {
-      const id = +g.dataset.uid;
-      g.onclick = () => {
-        if (ST.open.has(id)) ST.open.delete(id); else ST.open.add(id);
-        prefSet('open', Array.from(ST.open));
-        renderList();
-      };
+      g.onclick = () => toggleVoiceGroup(g);
       // 触屏没有 mouseleave：tap 会先合成一个 mouseenter，卡片就永久赖在列表上
       // （2026-11-17 排查：曲目行早就挡掉了，分组横幅这里漏了）
       if (!TOUCH) {
@@ -920,16 +996,77 @@
     const n = currentPicks().length;
     const total = ST.queue.filter(i => i.src).length;
     const c = $('#bulkCount');
-    if (c) c.textContent = '已选 ' + n + ' 项';
+    if (c) {
+      c.textContent = '已选 ' + n + ' 项';
+      // 音声模式下「全选/清空」那一格换成了「全选本角色」→ 清空改挂在这行计数上
+      c.title = n ? '点一下清空勾选' : '';
+      c.style.cursor = n ? 'pointer' : '';
+    }
+    /* 音声模式把「全选」换成「全选本角色」，**占同一个位置**：
+       音声的「全选」= 整个列表一万八千多段（勾了也只能导出几个 GB），
+       实际没人要；而两个按钮同时在场会让这条批量条折成两行（侧栏 ~340px，
+       四个按钮 + 计数要 385px）。曲目模式仍只有「全选」。 */
     const all = $('#bulkAll');
     if (all) {
+      all.hidden = ST.src === 'voice';
       all.textContent = (total > 0 && n >= total) ? '清空' : '全选';
       all.disabled = !total;
+    }
+    /* 「全选本角色」只在音声模式下有意义：曲目模式一共才 165 首，
+       全选就够了；音声一个角色就有几十到几百段，按人勾才有用。 */
+    const bu = $('#bulkUnit');
+    if (bu) {
+      bu.hidden = ST.src !== 'voice';
+      const ids = expandedUnits();
+      bu.disabled = !ids.length;
+      /* 文案按展开数量切换，两种都是 5 个字 → 宽度不变，不会把这条挤换行。
+         名字放 title 里（名字长短不一会让按钮一宽一窄）。 */
+      bu.textContent = ids.length > 1 ? '全选已展开' : '全选本角色';
+      bu.title = !ids.length
+        ? '先点开一个角色的音声（点角色那一行展开），再点这里'
+        : '勾选「' + ids.slice(0, 3).map(nameOf).join('、')
+          + (ids.length > 3 ? ' 等 ' + ids.length + ' 个角色' : '')
+          + '」的全部语音；再点一次取消';
     }
     ['#bulkAdd', '#bulkDel'].forEach(s => {
       const b = $(s);
       if (b) b.disabled = !n;
     });
+  }
+
+  /** 「全选本角色」的作用范围 = **当前已经展开的那些角色**（2026-11-20 用户要求：
+   *  按展开判定，别再要求"正在播放"或"只展开一个"——展开就是因为要看/要选它）。
+   *  一个都没展开时没有目标，按钮置灰并提示先展开。 */
+  function expandedUnits() {
+    if (ST.src !== 'voice') return [];
+    return VUNITS.filter(u => ST.open.has(u.id)).map(u => u.id);
+  }
+
+  /** 某个角色当前**看得见**的语音 key（要尊重「查看当前列表」的过滤）。 */
+  function unitVoiceKeys(id) {
+    const u = VUNITS.find(x => x.id === id);
+    if (!u) return [];
+    const keys = listOnlyKeys();
+    return (u.clips || []).concat(u.home || []).map(c => voiceKey(u, c))
+      .filter(k => !keys || keys.has(k));
+  }
+
+  function selectUnit() {
+    const ids = expandedUnits();
+    if (!ids.length) { toast('先点开一个角色再点这里', true); return; }
+    const keys = [];
+    for (const id of ids) keys.push(...unitVoiceKeys(id));
+    if (!keys.length) { toast('这些角色还没有导出的语音', true); return; }
+    /* 全部已勾 → 这一下是"取消"：把展开的这些角色整批清掉；
+       否则一次勾上（混着勾过一半的情况也走"全勾上"，不会来回抖）。 */
+    const allOn = keys.every(k => ST.pick.has(k));
+    keys.forEach(k => allOn ? ST.pick.delete(k) : ST.pick.add(k));
+    // 和 toggleAll 一样只同步已画出来的勾选框（音声两万多段，整表重绘太慢）
+    $$('.ck').forEach(ck => { ck.checked = ST.pick.has(ck.dataset.key); });
+    paintBulk();
+    const who = ids.length === 1 ? '「' + nameOf(ids[0]) + '」' : ids.length + ' 个角色';
+    toast(allOn ? '已取消 ' + who + ' 的 ' + keys.length + ' 段'
+      : '已勾选 ' + who + ' 的 ' + keys.length + ' 段');
   }
 
   function toggleAll() {
@@ -994,34 +1131,28 @@
   }
 
   /* ---------------------------------------------------------------- 导出 */
-  async function doExport() {
-    if (!window.PACKSTATE || !PACKSTATE.online) {
-      await Dlg.alert('导出需要本地服务：请用「启动.bat」打开本页面。');
-      return;
+  /** 勾选里的语音 → `[[角色编号, 音频相对路径], …]`（服务端按这个打包）。 */
+  function voicePickedItems() {
+    const out = [];
+    for (const k of ST.pick) {
+      if (k[0] !== 'v') continue;
+      const it = itemByKey(k);
+      if (it && it.src) out.push([it.no, it.src]);
     }
-    if (ST.src === 'voice') {
-      await Dlg.alert('角色音声是一段段短语音（已解成 m4a），暂不支持打包导出。\n' +
-        '要拿源文件可以到 media/audio/voice/<角色编号>/ 目录里复制。');
-      return;
-    }
-    let picks = ostPickedNos();      // 勾选统一存 key，导出接口要的是曲目编号
-    if (!picks.length) {
-      const ok = ST.list.filter(i => i.src).map(i => i.no);
-      if (!ok.length) { await Dlg.alert('当前筛选里没有可导出的曲目。'); return; }
-      if (!(await Dlg.confirm('没有勾选任何曲目，是否导出当前列表的全部 ' + ok.length + ' 首？\n\n' +
-        '（先在行首勾选可以只导选中的那几首）\n\n继续？',
-        { anchor: $('#btnExport') }))) return;
-      picks = ok;
-    }
+    return out;
+  }
+
+  /** 打开发任务 + 轮询进度（原声集与音声共用；两者只是端点/参数不同）。 */
+  async function runExport(url, body) {
     const btn = $('#btnExport');
     btn.disabled = true;
     const old = btn.textContent;
     btn.textContent = '打包中…';
     try {
-      const r = await fetch('api/export/audio', {
+      const r = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: picks }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
@@ -1050,6 +1181,45 @@
       btn.disabled = false;
       btn.textContent = old;
     }
+  }
+
+  /** 音声导出：一个角色几十到几百段，按「勾选 → 打包」走，和原声集同一套交互。 */
+  async function exportVoice() {
+    let items = voicePickedItems();
+    if (!items.length) {
+      const ok = ST.queue.filter(i => i.src);
+      if (!ok.length) { await Dlg.alert('当前列表里没有可导出的语音。'); return; }
+      const nChar = new Set(ok.map(i => i.no)).size;
+      if (!(await Dlg.confirm('没有勾选任何语音，是否导出当前列表的全部 ' +
+        ok.length + ' 段（' + nChar + ' 个角色）？\n\n' +
+        '（行首可以勾选；展开一个角色后点「全选本角色」能一次勾上他的全部语音）\n\n继续？',
+        { anchor: $('#btnExport'), ok: '开始导出' }))) return;
+      items = ok.map(i => [i.no, i.src]);
+    } else {
+      const nChar = new Set(items.map(i => i[0])).size;
+      if (!(await Dlg.confirm('导出 ' + items.length + ' 段语音（' + nChar +
+        ' 个角色）到 userdata/export/？\n\n按角色分文件夹，文件名保持原样。\n\n继续？',
+        { anchor: $('#btnExport'), ok: '开始导出' }))) return;
+    }
+    await runExport('api/export/voice', { items: items });
+  }
+
+  async function doExport() {
+    if (!window.PACKSTATE || !PACKSTATE.online) {
+      await Dlg.alert('导出需要本地服务：请用「启动.bat」打开本页面。');
+      return;
+    }
+    if (ST.src === 'voice') { await exportVoice(); return; }
+    let picks = ostPickedNos();      // 勾选统一存 key，导出接口要的是曲目编号
+    if (!picks.length) {
+      const ok = ST.list.filter(i => i.src).map(i => i.no);
+      if (!ok.length) { await Dlg.alert('当前筛选里没有可导出的曲目。'); return; }
+      if (!(await Dlg.confirm('没有勾选任何曲目，是否导出当前列表的全部 ' + ok.length + ' 首？\n\n' +
+        '（先在行首勾选可以只导选中的那几首）\n\n继续？',
+        { anchor: $('#btnExport') }))) return;
+      picks = ok;
+    }
+    await runExport('api/export/audio', { tracks: picks });
   }
 
   /* ------------------------------------------------- 歌单抽屉 / 唱片模式
@@ -1119,12 +1289,12 @@
         $$('.pl-tabs button').forEach(x => x.classList.toggle('on', x === b));
         prefSet('src', ST.src);
         ST.group = '全部'; prefSet('group', ST.group);
-        $('#btnExport').style.display = ST.src === 'voice' ? 'none' : '';
         renderChips();
         renderList();
       };
     });
-    $('#btnExport').style.display = ST.src === 'voice' ? 'none' : '';
+    /* 导出按钮两个来源都留着：音声也能导出（2026-11-20 起），
+       只是打包成「按角色分文件夹」的 m4a 集合。 */
 
     $('#mode').textContent = modeText(ST.mode);
     $('#rate').textContent = (String(ST.rate).indexOf('.') < 0 ? ST.rate.toFixed(1) : ST.rate) + '×';
@@ -1310,6 +1480,15 @@
     if (window.ESC && ESC.searchClear) ESC.searchClear($('#mq'));
     $('#btnExport').onclick = doExport;
     $('#bulkAll').onclick = toggleAll;
+    $('#bulkUnit').onclick = selectUnit;
+    // 计数兼「清空」：音声模式没有「全选/清空」按钮了，这里补一个又不占宽度
+    $('#bulkCount').onclick = () => {
+      if (!currentPicks().length) return;
+      ST.pick.clear();
+      $$('.ck').forEach(ck => { ck.checked = false; });
+      paintBulk();
+      toast('已清空勾选');
+    };
     $('#bulkAdd').onclick = () => bulkList(true);
     $('#bulkDel').onclick = () => bulkList(false);
     paintBulk();
@@ -1568,7 +1747,6 @@
           $$('.pl-tabs button').forEach(function (b) {
             b.classList.toggle('on', b.dataset.src === ST.src);
           });
-          $('#btnExport').style.display = ST.src === 'voice' ? 'none' : '';
           renderChips(); renderList();
           break;
         case 'next': next(); break;

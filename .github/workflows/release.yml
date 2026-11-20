@@ -142,6 +142,18 @@ jobs:
           python -c "import server.api, server.media, server.exports, server.updater, server.packs, server.net, server.jobs, server.cdn.install, server.cdn.manifest, server.cdn.stages"
           if ($LASTEXITCODE -ne 0) { throw "server 包导入失败" }
 
+      # 清单安全边界自检：userdata / web/data / web/media / i18n 译文绝不能进
+      # 放行清单，data_files 里必须有 update=true 的索引。清单写坏了宁可构建失败，
+      # 也不要发一个"更新会覆盖用户数据"的版本出去。
+      - name: 更新清单自检
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+        run: |
+          python -c "import sys; from server import updater as u; p = u.manifest_problems(); print('\n'.join(p)); sys.exit(1 if p else 0)"
+          if ($LASTEXITCODE -ne 0) { throw "server/update_manifest.json 自检失败" }
+
       - name: 前端语法自检
         shell: pwsh
         run: |
@@ -182,61 +194,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "程序目录组装失败" }
 
       # 纯代码更新包：只含程序与文档，不含 Python / 依赖 / 素材。
-      # 程序内「检查程序更新」下的是它（3–5 MB），更新器按白名单覆盖即可。
+      # 程序内「检查程序更新」下的是它（3–5 MB）。
+      # 清单（server/update_manifest.json）驱动：拷哪些目录/文件、哪些索引随包走、
+      # 哪些只进安装包（glossary）——全在清单里，不在此处再抄一遍。
+      # 兜底种子（web/assets/seed/）也在脚本里生成，理由见 tools/pack_update.ps1。
       - name: 组装更新包（纯代码）
         shell: pwsh
         run: |
-          $src = "dist/ESCAH-Offline"
-          $dst = "dist/ESCAH-Offline-update"
-          if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path "$dst/web" | Out-Null
-
-          Copy-Item "$src/server", "$src/tools", "$src/docs" -Destination $dst -Recurse
-          # 超分引擎连同模型约 80 MB，不进「纯代码更新包」（3–5 MB 那个）
-          Remove-Item "$dst/tools/realcugan" -Recurse -Force -ErrorAction SilentlyContinue
-          # 启动脚本**要**带上：pack_app 拷进来的就是仓库根那一份（纯 ASCII、
-          # 优先 python\python.exe、带完整性自检），便携版和源码版通用。
-          # 以前这里故意不带，是因为当时便携版的 bat 由 CI 另外生成、和仓库这份
-          # 行为不一致（那份不带任何自检）；生成步骤已经删掉，现在只有一份。
-          # 更新器白名单也放行了「启动.bat」，老用户走"检查更新"就能拿到新版本。
-          Copy-Item "$src/VERSION", "$src/README.md", "$src/NOTICE.md", "$src/LICENSE",
-                    "$src/start.sh", "$src/启动.bat" -Destination $dst
-          # 注意：**不能**写 `Copy-Item "$src/web" -Filter *.html -Destination ...`
-          # —— -Filter 只作用于 -Path 的子项，而 -Path 是目录本身，PowerShell 会
-          # 把整个 web 目录拷进 $dst/web（生成 web/web/），html 一个都进不来。
-          # 实测 v1.0.0–v1.0.2 的 update 包里**没有任何 .html**，前端改动一直没送达。
-          Get-ChildItem "$src/web" -Filter *.html -File |
-            Copy-Item -Destination "$dst/web"
-          # 调试脚本（serve.py / stop_server.ps1 / dev-*.bat）不进更新包
-          Copy-Item "$src/web/assets" -Destination "$dst/web" -Recurse
-          # i18n 里**只带 ui.json**：它是程序自带的界面文案（ja / zh 两套，key 随版本
-          # 增删），不带的话老用户永远缺新 key；其余（<lang>/*.json、index.json）是
-          # 用户自己攒的译文，带上去会把用户后来的翻译覆盖回发布时的旧版。
-          Get-ChildItem "$dst/web/assets/i18n" -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ne 'ui.json' } |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item "$src/web/data" -Destination "$dst/web" -Recurse   # 只有索引，没有剧情正文
-
-          # 兜底种子：**执行覆盖的是升级前那版程序生成的更新器脚本**，它只认当时
-          # 那份白名单 —— v1.1.6 新增的 shell/stand/music.html、v1.1.3 才加的
-          # data/stand_box.js 全被挡掉，升级完自动打开的 /shell.html 直接 404
-          # （2026-11-16 实测）。这里把页面与关键程序索引以**相同相对路径**再放
-          # 一份进 web/assets/seed/，由新版本启动时补到缺失的位置
-          # （server/__main__.py::_heal_seed_files，只在目标不存在时写）。
-          # ui.json 是唯一「存在也要覆盖」的种子（程序文案，key 随版本增删）：
-          # 老更新器把它也挡在门外，只能靠新版启动自愈。**注意文件名**：种子路径里
-          # 不能出现 i18n 段，否则老版本的黑名单会在解压阶段就把它滤掉；
-          # 放成 extras/i18n-ui.json，由新版本按 _SEED_MAP 搬到 web/assets/i18n/ui.json。
-          $seed = "$dst/web/assets/seed/web"
-          New-Item -ItemType Directory -Force -Path "$seed/data", "$dst/web/assets/seed/extras" | Out-Null
-          Get-ChildItem "$src/web" -Filter *.html -File | Copy-Item -Destination $seed
-          Copy-Item "$src/web/data/stand_box.js" -Destination "$seed/data" -ErrorAction SilentlyContinue
-          Copy-Item "$src/web/assets/i18n/ui.json" -Destination "$dst/web/assets/seed/extras/i18n-ui.json" -ErrorAction SilentlyContinue
-          if (-not (Test-Path "$seed/shell.html")) { throw "种子目录没生成（缺 shell.html）" }
-          if (-not (Test-Path "$dst/web/assets/seed/extras/i18n-ui.json")) { throw "种子目录没生成（缺 i18n-ui.json）" }
-
-          $n = (Get-ChildItem $dst -Recurse -File | Measure-Object).Count
-          "更新包内容：$n 个文件"
+          pwsh tools/pack_update.ps1 -Src dist/ESCAH-Offline -Dst dist/ESCAH-Offline-update
+          if ($LASTEXITCODE -ne 0) { throw "更新包组装失败" }
 
 
       # ---------------- 超分引擎：Real-CUGAN (ncnn/Vulkan) ----------------

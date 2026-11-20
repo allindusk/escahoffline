@@ -5,11 +5,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>超昂大战 · 角色个人剧情（演出模式）</title>
-<link rel="stylesheet" href="assets/css/player.css?v=1118t">
+<link rel="stylesheet" href="assets/css/player.css?v=1120a">
 <link rel="stylesheet" href="assets/css/extras.css?v=1134a">
 <!-- 「自己动手翻」教程浮窗：与资源管理页共用同一份（assets/js/trans_tut.js） -->
 <link rel="stylesheet" href="assets/css/trans_tut.css?v=1103a">
-<link rel="stylesheet" href="assets/css/mobile.css?v=1117l">
+<link rel="stylesheet" href="assets/css/mobile.css?v=1119a">
 <!-- 悬停说明气泡（14px）：原生 title 只有 12px，低于全站字号下限 -->
 <link rel="stylesheet" href="assets/css/tip.css?v=1116c">
 </head>
@@ -140,9 +140,12 @@
   </section>
   <!-- 文本框 -->
   <section class="set-page" data-page="window" hidden>
-  <!-- 排序规则（用户 2026-11-11 要求）：同一节里**同类型的控件聚在一起**，
-       下拉框两项一行、滑块两项一行。某类剩下奇数个时，多的那个就留在
-       左列独占一行**一格**——不要为了"填满"把它拉成跨两列（用户明确反对）。 -->
+  <!-- 排序（2026-11-19 重排）：先「长什么样」→ 再「文字怎么显示」→ 最后「多大、摆在哪」。
+       位置放最后有两个理由：它要等宽/高定下来才有意义；用户也是改完外观才动位置。
+       类型规则（用户 2026-11-11 要求）仍然有效：同一节里同类型控件聚在一起，
+       下拉框两项一行、滑块两项一行；某类剩下奇数个时，多的那个留在左列独占一格，
+       用 .sp 把下一类顶到新行，不要为了"填满"把它拉成跨两列（用户明确反对）。 -->
+  <div class="set-group" data-i18n="sect.msgLook" data-i18n-title="set.peekTip" title="拖动滑块或切换下拉时，这块面板会临时变淡（方便看到画面上的变化），不是出问题，松手就恢复">外观<i class="qh" aria-hidden="true">?</i></div>
   <label class="ctlrow" title="无框模式下「背景不透明度 / 背景色」不生效：文字靠描边压在任何画面上" data-i18n-title="set.msgBoxNote" data-i18n="set.msgBox">文本框外观<i class="qh" aria-hidden="true">?</i>
     <select id="setMsgBox">
       <option value="box" data-i18n="opt.msgBox.box">有边框（默认）</option>
@@ -184,60 +187,72 @@
       <option value="justify" data-i18n="opt.align.justify">两端对齐</option>
     </select>
   </label>
-  <div class="sp" aria-hidden="true"></div>
-  <label data-i18n="set.alpha">背景不透明度 <span id="valA">90%</span>
-    <input type="range" id="setA" min="0" max="100" value="90">
-  </label>
+
+  <div class="set-group" data-i18n="sect.msgText">文字</div>
   <label data-i18n="set.fontSize">字号 <span id="valFS">21px</span>
     <input type="range" id="setFS" min="16" max="34" value="21">
   </label>
   <label data-i18n="set.lineHeight">行距 <span id="valLH">1.62</span>
     <input type="range" id="setLH" min="120" max="220" step="5" value="162">
   </label>
-  <label>对话框高度 <span id="valMsgH">150px</span>
-    <input type="range" id="setMsgH" min="90" max="340" step="10" value="150">
-  </label>
-  <label>对话框垂直位置 <span id="valMsgY">26px</span>
-    <input type="range" id="setMsgY" min="0" max="570" step="6" value="26">
-  </label>
   <label data-i18n="set.stroke">描边粗细 <span id="valStroke">1.2px</span>
     <input type="range" id="setStroke" min="0" max="30" step="2" value="12">
   </label>
-  <label data-i18n="set.msgX">水平位移 <span id="valMsgX">0px</span>
-    <input type="range" id="setMsgX" min="-300" max="300" step="5" value="0">
+  <label data-i18n="set.alpha">背景不透明度 <span id="valA">90%</span>
+    <input type="range" id="setA" min="0" max="100" value="90">
+  </label>
+  <!-- 文字的水平位置：文字离框左边的距离（负值可以贴到边框上）。
+       头像放对话框左上角时，用它把文字推到头像右侧，不会被挡住。 -->
+  <label data-i18n="set.msgTextX" data-i18n-title="set.msgTextXNote" title="文字离文本框左边的距离。把头像放在对话框左上角时，用它把文字推到头像右边；0 是原来的位置，负数能贴到边框上">文字水平位置 <span id="valMsgTextX">14px</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setMsgTextX" min="-24" max="240" step="1" value="14">
+  </label>
+
+  <div class="set-group" data-i18n="sect.msgSize">大小与位置</div>
+  <label data-i18n="set.msgW" data-i18n-title="set.msgWNote" title="占可用宽度的百分比。调窄以后用「水平位置」决定它停在哪一侧">宽度 <span id="valMsgW">60%</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setMsgW" min="40" max="100" step="2" value="60">
+  </label>
+  <label data-i18n="set.msgH" data-i18n-title="set.msgHNote" title="最小高度。句子长、字大时会自动往上长高，不会把字挤出画面">高度 <span id="valMsgH">150px</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setMsgH" min="90" max="340" step="10" value="150">
+  </label>
+  <label data-i18n="set.msgPos" data-i18n-title="set.msgPosNote" title="0% 贴左边、50% 居中、100% 贴右边；想「靠右但别贴死」就放 80% 左右。宽度拉到 100% 时没有可挪的余地，这一项会变灰">水平位置 <span id="valMsgPos">50%</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setMsgPos" min="0" max="100" step="1" value="50">
+  </label>
+  <label data-i18n="set.msgY" data-i18n-title="set.msgYNote" title="从画面底边往上抬多少。上限跟着「高度」自动收，拖到头也只会贴住画面顶部，不会跑到画面外">垂直位置 <span id="valMsgY">26px</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setMsgY" min="0" max="560" step="2" value="26">
   </label>
   </section>
   <!-- 话者 + 角色头像 -->
   <section class="set-page" data-page="name" hidden>
-  <label data-i18n="set.nameX">水平位移 <span id="valNameX">0px</span>
-    <input type="range" id="setNameX" min="-300" max="300" step="5" value="0">
-  </label>
-  <label data-i18n="set.nameY">垂直位移 <span id="valNameY">0px</span>
-    <input type="range" id="setNameY" min="-60" max="40" step="2" value="0">
-  </label>
-  <label class="ctlrow" data-i18n="set.nameAlign">对齐
+  <!-- 顺序：先定名条挂在哪（对齐）→ 再微调位置 → 最后才是头像（要不要、长什么样）。
+       名条与头像的微调都夹在舞台内：拖到头只会贴边，不会跑出画面。 -->
+  <div class="set-group" data-i18n="sect.nameBar" data-i18n-title="set.peekTip" title="拖动滑块或切换下拉时，这块面板会临时变淡（方便看到名条和头像的变化），不是出问题，松手就恢复">话者名条<i class="qh" aria-hidden="true">?</i></div>
+  <label class="ctlrow" data-i18n="set.nameAlign" data-i18n-title="set.nameAlignNote" title="名字贴在文本框上沿的哪一侧。选好之后再用下面两个滑块微调">对齐<i class="qh" aria-hidden="true">?</i>
     <select id="setNameAlign">
       <option value="left" data-i18n="opt.align.left">左对齐</option>
       <option value="center" data-i18n="opt.align.center">居中</option>
       <option value="right" data-i18n="opt.align.right">右对齐</option>
     </select>
   </label>
+  <div class="sp" aria-hidden="true"></div>
+  <label data-i18n="set.nameX" data-i18n-title="set.nameXNote" title="在对齐位置的基础上左右微调，1px 一跳；拖到头会自动贴住画面边缘，不会跑出画面。默认 30px 是为了让名字落在左上角头像的右边">左右微调 <span id="valNameX">30px</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setNameX" min="-300" max="300" step="1" value="30">
+  </label>
+  <label data-i18n="set.nameY" data-i18n-title="set.nameYNote" title="名字条压在文本框上沿，上下微调可以把它挪到框内或框外；出画面会自动贴边">上下微调 <span id="valNameY">0px</span><i class="qh" aria-hidden="true">?</i>
+    <input type="range" id="setNameY" min="-60" max="40" step="2" value="0">
+  </label>
+
+  <div class="set-group" data-i18n="sect.avatar">角色头像</div>
   <label class="row" data-i18n-title="set.avShowNote" title="勾选后启用角色头像，并展开下面的头像设置；取消勾选会关闭头像并隐藏这些设置">
-    <span data-i18n="set.avShow">角色头像<i class="qh" aria-hidden="true">?</i></span>
+    <span data-i18n="set.avShow">显示头像<i class="qh" aria-hidden="true">?</i></span>
     <input type="checkbox" id="setAvShow">
   </label>
 
   <div id="avSettings" class="av-settings" hidden>
     <!-- 分组标题：以前是 CSS 的 ::before content:'角色头像设置'，切语言时翻不了；
-         现在是一行真元素，走 ui.json（data-i18n="sect.avatar"）。 -->
-    <div class="av-title" data-i18n="sect.avatar">角色头像设置</div>
-    <label data-i18n="set.avX" data-i18n-title="set.avXNote" title="头像相对默认位置的左右微调">头像水平位移 <span id="valAvX">0px</span>
-      <input type="range" id="setAvX" min="-200" max="200" step="4" value="0">
-    </label>
-    <label data-i18n="set.avY" data-i18n-title="set.avYNote" title="头像相对默认位置的上下微调">头像垂直位移 <span id="valAvY">0px</span>
-      <input type="range" id="setAvY" min="-80" max="80" step="2" value="0">
-    </label>
-    <label class="ctlrow" data-i18n-title="set.avPosNote" data-i18n="set.avPos" title="左/右跟随名条一起移动；框角模式把头像钉在对话框的角上">位置
+         现在是一行真元素，走 ui.json（data-i18n="sect.avatarLook"）。
+         块内顺序：位置/形状 → 大小/间距 → 画框/底色 → 微调（先挑大方向，再细调）。 -->
+    <div class="av-title" data-i18n="sect.avatarLook">样子与位置</div>
+    <label class="ctlrow" data-i18n-title="set.avPosNote" data-i18n="set.avPos" title="左/右跟随名条一起移动；框角模式把头像的中心对准对话框的角">位置
       <select id="setAvPos">
         <option value="left" data-i18n="opt.avPos.left">名条左侧</option>
         <option value="right" data-i18n="opt.avPos.right">名条右侧</option>
@@ -253,6 +268,12 @@
         <option value="rounded" data-i18n="opt.avShape.rounded">圆角方形</option>
         <option value="square" data-i18n="opt.avShape.square">方形</option>
       </select>
+    </label>
+    <label data-i18n="set.avSize">头像大小 <span id="valAvSize">96px</span>
+      <input type="range" id="setAvSize" min="28" max="140" step="2" value="96">
+    </label>
+    <label data-i18n="set.avGap">与名字间距 <span id="valAvGap">2px</span>
+      <input type="range" id="setAvGap" min="-30" max="60" step="2" value="2">
     </label>
     <label class="ctlrow" data-i18n-title="set.avRingNote" data-i18n="set.avRing" title="金色描边取自名条同一套香槟金，默认细环 + 暗色外圈">画框
       <select id="setAvRing">
@@ -285,11 +306,11 @@
         </span>
       </span>
     </label>
-    <label data-i18n="set.avSize">头像大小 <span id="valAvSize">54px</span>
-      <input type="range" id="setAvSize" min="28" max="110" step="2" value="54">
+    <label data-i18n="set.avX" data-i18n-title="set.avXNote" title="在「位置」的基础上左右微调；拖到头会自动贴住画面边缘">左右微调 <span id="valAvX">0px</span><i class="qh" aria-hidden="true">?</i>
+      <input type="range" id="setAvX" min="-200" max="200" step="4" value="0">
     </label>
-    <label data-i18n="set.avGap">与名字间距 <span id="valAvGap">2px</span>
-      <input type="range" id="setAvGap" min="-30" max="60" step="2" value="2">
+    <label data-i18n="set.avY" data-i18n-title="set.avYNote" title="在「位置」的基础上上下微调；出画面会自动贴边">上下微调 <span id="valAvY">0px</span><i class="qh" aria-hidden="true">?</i>
+      <input type="range" id="setAvY" min="-80" max="80" step="2" value="0">
     </label>
   </div>
 
@@ -510,7 +531,7 @@
 <!-- 收藏夹 / 播放进度 / 设置：与 CG 页共用同一份 localStorage（assets/js/userdata.js） -->
 <script src="assets/js/userdata.js?v=1115g"></script>
 <script src="data/cgmap.js?v=1117d"></script>
-<script src="assets/js/player.js?v=1118v"></script>
+<script src="assets/js/player.js?v=1120h"></script>
 <script src="assets/js/trans_tut.js?v=1133b"></script>
 <script src="assets/js/transui.js?v=1136b"></script>
 <script src="assets/js/tour.js?v=1130a"></script>

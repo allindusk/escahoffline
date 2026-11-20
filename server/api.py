@@ -1778,6 +1778,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     j, chars=chars or None, groups=groups or None, whole=whole),
                 holds=hold)
             return self._json({"job": job.snapshot()})
+        if path == "/api/export/stand":
+            b = self._body()
+            groups = [[str(x[0]), str(x[1])] for x in (b.get("groups") or [])
+                      if isinstance(x, (list, tuple)) and len(x) >= 2]
+            try:
+                schars = sorted({int(x) for x in (b.get("chars") or [])})
+            except (TypeError, ValueError):
+                return self._err("角色参数不对")
+            # 立绘是本机从素材包合成出来的，导出期间别让人同时卸载剧情把图删了。
+            # 角色段（<4000）才有对应单元；「其他」里的 NPC / 敌人没有单元，
+            # 那就退回"占住所有已装角色"（和 CG 页的兜底一致）。
+            nums = {str(g[0]).lstrip("0") for g in groups}
+            hold = [f"char_{n}" for n in sorted(nums) if n.isdigit() and int(n) < 4000]
+            if not hold:
+                hold = _installed_char_units()
+            job = jobs.submit(
+                "export", "导出立绘",
+                lambda j: exports.export_stand(j, groups=groups or None,
+                                               chars=schars or None),
+                holds=hold)
+            return self._json({"job": job.snapshot()})
         if path == "/api/export/audio":
             b = self._body()
             try:
@@ -1787,6 +1808,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             job = jobs.submit(
                 "export", f"导出原声集 {len(tracks) or '全部'} 首",
                 lambda j: exports.export_audio(j, tracks=tracks or None))
+            return self._json({"job": job.snapshot()})
+        if path == "/api/export/voice":
+            b = self._body()
+            # 每项 = [角色编号, "media/audio/voice/<编号>/<文件>.m4a"]；
+            # 路径合法性在 exports.export_voice 里再白名单校验一次。
+            items = [[str(x[0]), str(x[1])] for x in (b.get("items") or [])
+                     if isinstance(x, (list, tuple)) and len(x) >= 2]
+            if not items:
+                return self._err("没有选中语音")
+            ids = sorted({str(x[0]).lstrip("0") for x in items
+                          if str(x[0]).lstrip("0").isdigit()})
+            # 语音文件跟着角色剧情装：导出期间别让人把那个角色卸了
+            hold = [f"char_{i}" for i in ids] or _installed_char_units()
+            job = jobs.submit(
+                "export", f"导出角色音声 {len(items)} 段",
+                lambda j: exports.export_voice(j, items=items),
+                holds=hold)
             return self._json({"job": job.snapshot()})
         # 旧版「浏览器上传已录制 webm」端点已删：上面 /api/export/video 是同一路径，
         # 先 return 后这段永远不可达；且 do_POST 已用 _body() 读光请求体，

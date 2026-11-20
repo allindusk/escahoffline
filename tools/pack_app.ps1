@@ -6,6 +6,14 @@
 `web/media/.gitkeep`、`userdata/.gitkeep`、app.json 仓库名替换和白名单硬自检 ——
 于是"现场组装"出来的包与真正发布的包不是一个东西，测出来的结论不可信。
 
+**清单从哪来**：`server/update_manifest.json`，与更新器（server/updater.py）
+共用同一份。以前这里是手写的 `$INDEX_FILES`，那边是手写的
+`WEB_DATA_UPDATABLE`，新增文件要改两处、漏一处就出事故（shell.html 404、
+cgmap 分组不对、stand_box 气泡错位都是这么来的）。现在只改清单一处。
+
+读不到清单**直接失败**（打包不能靠猜）；更新器那边则退回内置常量，
+保证"清单坏掉"不会卡死已发布用户的升级。
+
 用法：
     pwsh tools/pack_app.ps1 -Dst dist/ESCAH-Offline -Repo allindusk/escahoffline
     pwsh tools/pack_app.ps1 -Dst D:\x\ESCAH-Offline          # 不替换仓库名
@@ -17,51 +25,87 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 程序自带的索引（**白名单**：新增文件默认不进包，要进必须在这里加一行）。
-# 以前是黑名单，结果把本机产物一起打包了：imgmap.x2.js（超分记录）、
-# imgmap.base.js（WebP 覆盖层）、sfxmap.js/json、stand_slot.json、*.orig。
-$INDEX_FILES = @(
-    'advindex.js', 'app.json', 'cgmap.js', 'charmeta.js',
-    'imgmap.js', 'index.js', 'names.js', 'othereps.js',
-    'packs.links.js', 'stand_layers.json',
-    # stand_box.js = 立绘画布落点表（AlphaCutRect + ExpressionCutRect），
-    # 由 server/cdn/scripts/gen_stand_box.py 从 base_info 导出。**是程序表，不是用户数据**：
-    # 少了它播放器只能退回"贴底居中 + 62% 宽"的近似，立绘位置、表情气泡锚点全都不对
-    # （2026-11-10 用户实测：老安装里气泡跑到头的另一边）。新增文件默认不进包，
-    # 所以这里**必须显式列上**，否则发出去的包自己都缺一份。
-    'stand_box.js'
-)
+$Root = Split-Path $PSScriptRoot -Parent
+$ManifestPath = Join-Path $Root "server/update_manifest.json"
+if (-not (Test-Path $ManifestPath)) {
+    throw "缺少清单：server/update_manifest.json（打包必须有它，不能靠猜）"
+}
+# **必须显式按 UTF-8 读**：PS 5.1 的 Get-Content 会把无 BOM 的 UTF-8 当 ANSI，
+# 清单里的中文路径（启动.bat / 停止.bat）会变乱码，后面 Copy-Item 全部落空。
+$Manifest = [System.IO.File]::ReadAllText($ManifestPath, [System.Text.Encoding]::UTF8) |
+    ConvertFrom-Json
+if ($Manifest._schema -ne 1) {
+    throw "清单 schema 不是 1（$($Manifest._schema)），打包脚本不认识"
+}
+
+# 程序目录里的索引表（web/data 下），来自清单 data_files 的 pack=true 项
+$INDEX_FILES = @($Manifest.data_files.PSObject.Properties |
+    Where-Object { $_.Value.pack } |
+    ForEach-Object { Split-Path $_.Name -Leaf })
 
 New-Item -ItemType Directory -Force -Path $Dst | Out-Null
 New-Item -ItemType Directory -Force -Path "$Dst/web/data" | Out-Null
 
-Copy-Item server, tools, docs, glossary -Destination $Dst -Recurse
-# glossary（译名对照表）只进全量包，**不进纯代码更新包** —— 那是用户会自己
-# 维护的数据，更新时不该覆盖（release.yml 里只从 dist 拷 server/tools/docs）。
-Copy-Item VERSION, README.md, NOTICE.md, LICENSE, requirements.txt, start.sh `
-    -Destination $Dst
+# ---- 整目录：清单 program_dirs + pack_only_dirs ----------------------------
+# 注意嵌套目录（web/assets/）要拷到它的父目录下，否则会变成 $Dst/assets。
+foreach ($d in @($Manifest.program_dirs) + @($Manifest.pack_only_dirs)) {
+    if (-not $d) { continue }
+    $src = $d.TrimEnd('/').TrimEnd('\')
+    if (-not (Test-Path $src)) { throw "清单里的目录不存在：$src" }
+    $parent = Split-Path $src -Parent
+    $dest = if ($parent) { Join-Path $Dst $parent } else { $Dst }
+    # 父目录先建：否则嵌套目录（web/assets/）会被当成目标本体，内容铺到上一层。
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item $src -Destination $dest -Recurse
+}
+
+# ---- 单文件：清单 program_files -------------------------------------------
+foreach ($f in @($Manifest.program_files)) {
+    if (-not $f) { continue }
+    if ($f -match '[*?]') {
+        # 通配（web/*.html）：目标 = 它的父目录
+        $parent = Split-Path $f -Parent
+        Copy-Item $f -Destination (Join-Path $Dst $parent) -Force
+    } else {
+        if (-not (Test-Path $f)) { throw "清单里的文件不存在：$f" }
+        Copy-Item $f -Destination $Dst -Force
+    }
+}
+
 # 启动脚本按通配符拷，**不要写死中文文件名**：
 # Windows PowerShell 5.1 会把无 BOM 的 UTF-8 脚本按 ANSI 读，中文会变乱码，
 # 于是 Copy-Item 找不到 "启动.bat"。通配符没有这个问题。
 Get-ChildItem -Filter '*.bat' -File | Copy-Item -Destination $Dst
 
-# serve.py / stop_server.ps1 / dev-*.bat 是「纯前端预览」调试工具，只服务开发，
-# 不放进发布包 —— 否则用户会看到两个都叫「启动」的脚本。
-Copy-Item web/*.html -Destination "$Dst/web"
-Copy-Item web/assets -Destination "$Dst/web" -Recurse
-
-foreach ($f in $INDEX_FILES) {
-    $src = Join-Path 'web/data' $f
-    if (Test-Path $src) {
-        Copy-Item $src -Destination "$Dst/web/data"
+# ---- web/data 索引：清单 data_files 的 pack=true ---------------------------
+foreach ($p in $Manifest.data_files.PSObject.Properties) {
+    if (-not $p.Value.pack) { continue }
+    $rel = $p.Name.Replace('\', '/')
+    $destDir = Join-Path $Dst (Split-Path $rel -Parent)
+    New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+    if (Test-Path $rel) {
+        Copy-Item $rel -Destination $destDir -Force
     } else {
-        Write-Host "::warning::索引缺失：$f"
+        Write-Host "::warning::清单里的索引缺失：$rel"
     }
 }
 
-New-Item -ItemType Directory -Force -Path "$Dst/web/media", "$Dst/userdata" | Out-Null
-Set-Content -Path "$Dst/web/media/.gitkeep" -Value "" -NoNewline
-Set-Content -Path "$Dst/userdata/.gitkeep" -Value "" -NoNewline
+# ---- web/assets/i18n：只留清单里 pack=true 的程序文件 ----------------------
+# web/assets 是整目录拷的，会把用户自己攒的译文（<lang>/*.json）一起带进发布包。
+# 那是用户数据（.gitignore 里），绝不能出现在分发包里 —— 体积大、还等于把
+# 别人的翻译发给新用户。清单的 data_files 里只有 ui.json 是 pack=true。
+$i18n = Join-Path $Dst "web/assets/i18n"
+$keep = @($Manifest.data_files.PSObject.Properties |
+    Where-Object { $_.Value.pack -and $_.Name -like 'web/assets/i18n/*' } |
+    ForEach-Object { Split-Path $_.Name -Leaf })
+if (Test-Path $i18n) {
+    Get-ChildItem $i18n -Force |
+        Where-Object { $_.Name -notin $keep } |
+        Remove-Item -Recurse -Force
+    $drop = Get-ChildItem $i18n -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notin $keep }
+    if ($drop) { throw "web/assets/i18n 混进了非程序文件：$($drop.Name -join ', ')" }
+}
 
 # 清掉 Python 缓存：release.yml 的「后端导入自检」会先 import server.*，
 # runner 上于是有了 server/**/__pycache__/*.pyc，而上面是 -Recurse 整目录拷贝

@@ -212,8 +212,8 @@
     -webkit-overflow-scrolling: touch; }
   #tabStrip::-webkit-scrollbar { display: none; }
 
-  /* 对话框占满宽度，别让两侧留白把字挤成一条 */
-  #msgWindow { left: 4%; right: 4%; width: 92%; }
+  /* 对话框宽度/位置已由 player.js 按「舞台逻辑像素」落成内联 px（设置里的宽度
+     与水平位置），移动端不再单独覆盖 —— 两份规则打架时内联会赢，留着只会误导。 */
 
   /* ---------- CG 页 ---------- */
   /* 底部留够高度：左下角那个「☰ 角色列表」悬浮按钮会压住最后一张卡片的文字 */

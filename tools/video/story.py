@@ -30,7 +30,11 @@ DEFAULTS = {
     'pauseAfterVoice': 250, 'showPartial': False,
     'standY': 0, 'standOX': 0, 'msgBg': '10,14,22', 'msgColor': '#f2f5fb',
     'msgFont': 'sans', 'msgLH': 1.62, 'msgStroke': 1.2,
-    'msgX': 0, 'msgAlign': 'left',
+    # 文本框几何（与播放器 2026-11-19 的新口径一致）：宽度百分比（默认 60）/ 最小高度 /
+    # 距底 px / 水平位置 0~100%（0 贴左、50 居中、100 贴右）。
+    # 旧的 msgX（框内文字右移）与 msgAlignX（三选一）都已废弃。
+    'msgW': 60, 'msgH': 150, 'msgY': 26, 'msgPos': 50,
+    'msgAlign': 'left',
     'nameX': 0, 'nameY': 0, 'nameAlign': 'left',
 }
 

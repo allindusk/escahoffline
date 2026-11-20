@@ -942,6 +942,12 @@
        也拿不到。旧版把这些也当成"没打包的素材"，用户以为装完剧情就齐了。 */
     const extraVer = pubVer >= 13;
     const standExtraOk = extraVer ? !!pub.standExtraOk : true;
+    /* v14 起后端会给出"还有几套服装没合成"：包下齐了但某一批合成没跑成时，
+       以前界面照样写「已就绪」，用户装完仍看到整组缺张（2026-11-20 反馈）。 */
+    const extraMiss = pubVer >= 14 ? (pub.standExtraMissing || 0) : 0;
+    /* v15：这台机器还没用新口径核对过（老用户升级后第一次）时，缺的数量等于
+       "全部服装数"，写出来会把人吓一跳 —— 只提示点一次「补全」核对即可。 */
+    const extraChecked = pubVer >= 15 ? !!pub.standExtraChecked : true;
     const standImgTxt = '立绘 ' + (pub.standExtra || 0) + ' 张';
     /* 2026-11-16：NPC / 其他分类的音声不再下载/展示，可选区只剩原声集。 */
     const pubAll = ready && !pubStale && bgOk && backRefMiss === 0
@@ -1058,6 +1064,9 @@
                 ? '其中 ' + pub.standExtraOnly + ' 张不在任何剧情包里'
                   + '（立绘共 ' + (pub.standExtra || 0) + ' 张）'
                 : standImgTxt) +
+              (!extraChecked
+                ? ' · 需要点一次「补全」核对'
+                : (extraMiss ? ' · 还有 ' + extraMiss + ' 套服装要补' : '')) +
               '</span>' +
               (standExtraOk ? '<span class="st ok">已就绪</span>'
                 : '<button id="bpStandExtra" title="已有的会跳过，重复点不会重下">'
@@ -1129,7 +1138,8 @@
        这是唯一能拿到「剧情里从来不会出现」那些表情的入口。 */
     optBtn('#bpStandExtra', 'stand_extra', '全部立绘（含剧情里没用到的）',
       '官方立绘源包共 2623 个、约 589 MB，多数已随剧情下过，只补缺的；'
-      + '下载后要在本机合成表情（多出来的约 9.7 千张），要跑一阵子');
+      + '下载后要在本机合成表情（多出来的约 9.7 千张），要跑一阵子'
+      + '\n· 这次会按清单把每套服装逐套核对，之前没合成全的会一起补上');
     // 2026-11-16：NPC / 其他分类的 SD 与音声都不再下载，安装入口已删除
     // optBtn('#bpSdNpc', 'sd_npc', ...);
 
