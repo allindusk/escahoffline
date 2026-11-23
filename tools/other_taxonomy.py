@@ -82,7 +82,14 @@ import os
 import re
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
+# 切控制台编码只为「手动跑脚本」好看。**必须容错**：本模块会被服务进程
+# ``server/cdn/stages.sync_othereps()`` 在运行时 import，那时 sys.stdout 已被
+# ``log.capture_stdio()`` 换成日志流 —— 裸调用会在 import 阶段抛 AttributeError，
+# 整个归类功能静默失效（2026-11-24 用户：发布版「其他剧情 第80话」没归类）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:                                          # noqa: BLE001
+    pass
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "web", "data")
 
@@ -217,11 +224,15 @@ def plan():
             rows.append((no, 0, entry, f"{label}来襲 その{n}"))
             rows.append((no, 1, entry, f"{label}退場 その{n}"))
 
+    pp = pack_parts()
     for entry, no in WIDE_PACKS.items():
         label = WIDE_LABEL[entry]
         # 段数由数据决定（13/17/15/14/6），话名就是「戦士 1」「忍者 1」…
-        n = pack_parts()[no]
-        for i in range(n):
+        # **必须 .get**：本机没装 26/27/28/29/31 里的任何一个（用户只装了一部分
+        # 「其他」剧情是常态）时直接下标会 KeyError: 26，整棵 plan() 崩掉 ——
+        # sync_othereps 就只能退回逐包兜底（不能续号、也不排序）。2026-11-24
+        # 发布版「其他剧情 第80话」没归类的第二个原因就是这个。
+        for i in range(pp.get(no, 0)):
             rows.append((no, i, entry, f"{label} {i + 1}"))
 
     for no, n in STAMPEDE_PACKS.items():

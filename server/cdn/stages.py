@@ -597,7 +597,11 @@ def sync_advindex() -> int:
         key = fn[:-3]
         try:
             d = select.load_story(key)
-        except Exception:
+        except Exception as e:                             # noqa: BLE001
+            # 不能静默 continue：包坏了用户只看到「装了却没在列表里」，日志里啥也
+            # 没有，只能靠猜。记一条，排查时直接定位是哪个包、什么错。
+            _note("advindex：%s 读取失败，已跳过（%s: %s）"
+                  % (key, type(e).__name__, e), tag="adv")
             continue
         vdir = os.path.join(AUDIO, key)
         kind = d.get("kind") or key.split("_")[1]

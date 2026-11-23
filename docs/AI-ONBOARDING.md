@@ -24,7 +24,7 @@
 
 ```
 escalation_heroines/escahoffline/
-├─ VERSION                     语义化版本号，更新器比对用
+├─ VERSION                     版本号（三段各 0–9，满 9 进位；别写 1.1.10 这种两位数）
 ├─ 启动.bat / start.sh          用户入口：python -m server --open
 ├─ requirements.txt            只有 pillow（可选增强）
 ├─ server/                     ★ 本地服务端

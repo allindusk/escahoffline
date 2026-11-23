@@ -210,6 +210,8 @@ class _LogStream:
     def __init__(self, tag: str = "out", level: str = "INFO"):
         self.tag = tag
         self.level = level
+        self.encoding = "utf-8"
+        self.errors = "replace"
 
     # —— 文件对象的最小接口 ——
     def write(self, s) -> int:
@@ -251,13 +253,21 @@ class _LogStream:
     def seekable(self) -> bool:
         return False
 
-    @property
-    def encoding(self) -> str:
-        return "utf-8"
+    def reconfigure(self, **kw) -> None:
+        """兼容 ``TextIOWrapper.reconfigure()``（切 UTF-8 用）。
 
-    @property
-    def errors(self) -> str:
-        return "replace"
+        tools/ 下不少脚本顶层写着 ``sys.stdout.reconfigure(encoding="utf-8")``，
+        而服务进程 ``capture_stdio()`` 之后 sys.stdout 已经换成这个对象 —— 没有
+        这个方法就抛 ``AttributeError``，且是在 **import 时** 抛出，整个模块直接
+        载入失败（2026-11-24 用户：v1.1.10 里「其他剧情 第80话」没归类，日志是
+        ``[othereps] 无法载入归类规则（'_LogStream' object has no attribute
+        'reconfigure'），跳过`` —— other_taxonomy 第 85 行就是裸调用）。
+        写入本来就按 UTF-8 落地，这里只记住新值、不做编码切换。
+        """
+        for k in ("encoding", "errors"):
+            v = kw.get(k)
+            if isinstance(v, str) and v:
+                setattr(self, k, v)
 
     @property
     def buffer(self):
