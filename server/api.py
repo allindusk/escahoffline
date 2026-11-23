@@ -656,6 +656,17 @@ def _refresh_manifest(job) -> dict:
         job.items_done = i
 
     cdn_install.invalidate_units()
+    # 「更新剧情目录」= 把该更新的都更新：清单刷新之后，把本机已装剧情的
+    # 目录（标题 / 漫画标记 / 排序键）与「其他」分组也重建一遍 ——
+    # 这两份是安装期产物，不发版就永远停在旧状态（用户 2026-11-23：
+    # 活动第99话没名字、其他剧情第80话没归类，都是这一类）。
+    try:
+        n_adv = cdn_stages.sync_advindex()
+        n_oth = cdn_stages.sync_othereps(job=job)
+        job.log("剧情目录已刷新：%d 条%s" % (n_adv,
+                ("，其他剧情新归入 %d 话" % n_oth) if n_oth else ""))
+    except Exception as e:                                     # noqa: BLE001
+        job.log(f"剧情目录刷新失败（不影响安装）：{e}")
     after = cdn_install.list_units(job)
     alln = set(after["char"]) | set(after["adv"])
     new = sorted(alln - before)
@@ -702,6 +713,19 @@ def _auto_fill_public(job) -> dict:
     except Exception as e:                                     # noqa: BLE001
         job.log(f"（公共素材缺图检查跳过：{e}）")
         deficit = {}
+    # 章节横幅包"长大了"（官方加了一章 / 一个活动）→ 补进缺口，重下并重新导出。
+    # 只看包体积，不看"应有张数"登记：登记是上次导出时写的，永远不知道新章节
+    # （2026-11-23：活动第99话不显示横幅，就是这条漏了）。
+    try:
+        stale_bn = cdn_install.stale_story_topic_packs()
+    except Exception as e:                                     # noqa: BLE001
+        stale_bn = []
+        job.log(f"（章节横幅更新检查跳过：{e}）")
+    if stale_bn:
+        cur = list(deficit.get("banner") or [])
+        deficit["banner"] = cur + [n for n in stale_bn if n not in cur]
+        job.log(f"章节横幅有更新：{len(stale_bn)} 个包（官方加了新章节），"
+                "重新同步后新横幅才会出现")
     n_def = sum(len(v) for v in deficit.values())
     n_av_def = len(deficit.get("avatar") or [])
     n_bn_def = len(deficit.get("banner") or [])
@@ -728,11 +752,14 @@ def _auto_fill_public(job) -> dict:
         desc = "、".join(f"{k} +{v} 个" for k, v in bulk.items())
         job.log(f"公共素材有新增：{desc}，开始自动补下（已有的会跳过）…")
 
+    # 章节横幅的 stale 包有没有被顺手处理掉（精确补分支里已经塞进 deficit）
+    stale_done = False
     if n_def and n_def <= delta_cap:
         job.log(f"公共素材缺 {n_def} 个包（头像 {n_av_def} / 横幅 {n_bn_def}），"
                 "只补这几个…")
         try:
             got = cdn_install.install_public_delta(job, deficit)
+            stale_done = bool(stale_bn)
             job.log(f"公共素材已补齐（{got.get('packs')} 个包，"
                     f"头像 {got.get('avatars', 0)} / 横幅 {got.get('banners', 0)} 张）")
         except Exception as e:                                 # noqa: BLE001
@@ -760,6 +787,19 @@ def _auto_fill_public(job) -> dict:
             job.log("公共素材已补齐")
         except Exception as e:                                 # noqa: BLE001
             job.log(f"公共素材补下失败（不影响剧情列表）：{e}")
+    # 章节横幅「长大了」的兜底：包**数量**没变，new_public() 永远不报它，
+    # 所以既进不了精确补（deficit 是按"应有张数"登记核对的，登记也没变），
+    # 也不会因为"缺口很大"被整类重做覆盖 —— 以前只在日志里提示一句就过去了，
+    # 那几部活动于是永远没有横幅（2026-11-23 用户反馈的第99话）。
+    # 这里统一兜一次：只下这几个包（体积对不上才会真下），再重新导出横幅。
+    if stale_bn and not stale_done:
+        job.log(f"章节横幅有 {len(stale_bn)} 个包体积变了（官方加了新章节），"
+                "只补这几个…")
+        try:
+            got = cdn_install.install_public_delta(job, {"banner": stale_bn})
+            job.log(f"章节横幅已更新（{got.get('packs')} 个包）")
+        except Exception as e:                                 # noqa: BLE001
+            job.log(f"章节横幅更新失败（不影响剧情列表）：{e}")
     return add
 
 
@@ -2133,6 +2173,128 @@ class _QuietServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+#: 头像来源修复的内部修订号：改了修复逻辑就 +1，老用户升级后会重跑一次。
+#: rev 2（2026-11-23）：不再从立绘现裁 —— 官方没头像的一律删除、保持无头像。
+AVATAR_REPAIR_REV = 2
+
+
+def _avatar_dirs_sig() -> list:
+    """头像修复的短路指纹：版本 + 头像目录 / 立绘目录的 mtime 与文件数。
+
+    只要用户没装新素材、程序也没升级，就跳过整轮扫描（0 开销）；
+    装完新剧情（立绘目录变化）或升级后自动再查一次。
+    """
+    def one(d):
+        try:
+            st = os.stat(d)
+            return [int(st.st_mtime_ns), len(os.listdir(d))]
+        except OSError:
+            return [0, 0]
+    return ([paths.app_version()]
+            + one(os.path.join(cdn_stages.IMG, "avatar"))
+            + one(os.path.join(cdn_stages.IMG, "stand")))
+
+
+def _repair_avatar_sources() -> None:
+    """开服前修一次「旧版本导出的错误敌人头像」。
+
+    **为什么必须在这里做**：e5062 / e5072 这类错图是历史版本写进
+    ``web/media/img/avatar`` 的**用户目录生成物**，程序升级不会覆盖它，
+    只靠用户手动点「资源管理 → 补全」等于永远不修（2026-11-23 用户要求：
+    更新程序后旧资源也要能自动修好）。``fix_enemy_avatars`` 本身是幂等的，
+    按立绘指纹跳过已处理过的编号，所以放启动路径上很便宜。
+    """
+    try:
+        sp = os.path.join(cdn_stages.STATE_DIR, "avatar_repair.json")
+        sig = _avatar_dirs_sig()
+        try:
+            with open(sp, encoding="utf-8") as f:
+                old = json.load(f)
+        except Exception:                                      # noqa: BLE001
+            old = {}
+        if isinstance(old, dict) and old.get("rev") == AVATAR_REPAIR_REV \
+                and old.get("sig") == sig:
+            return
+        idx = cdn_install.config_manifest_index()
+        fixed = removed = 0
+        if idx:
+            fixed, removed = cdn_stages.fix_enemy_avatars(idx)
+        if fixed or removed:
+            # 头像文件变了 → 立绘组→头像的映射必须同步重建，否则前端还按旧表
+            # 去请求已被删掉的 e5072（404）或继续显示旧图。
+            cdn_stages.regen_avatarmap()
+            cdn_install.invalidate_units()
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as f:
+            json.dump({"rev": AVATAR_REPAIR_REV, "sig": sig,
+                       "fixed": fixed, "removed": removed},
+                      f, ensure_ascii=False)
+        if fixed or removed:
+            applog.info("头像来源校正：清理 %d 张官方没有头像的 e 图"
+                        "（旧版本错配 / 从立绘现裁的，保持无头像）" % removed,
+                        tag="boot")
+    except Exception as e:                                     # noqa: BLE001
+        applog.debug("头像来源校正跳过（不影响使用）：%s" % e, tag="boot")
+
+
+#: 目录类数据（advindex / othereps）的修复修订号：改了取标题、漫画判定、分组规则就 +1。
+#: rev 2（2026-11-24）：没有官方发表顺序的活动改为按相邻已知包号插值（原来是包号 +0.5）。
+CATALOG_REPAIR_REV = 2
+
+
+def _repair_catalog(job=None) -> None:
+    """启动时校正「目录类数据」：``advindex.js``（标题 / 漫画标记 / 排序键）与
+    ``othereps.js``（其他剧情的入口分组）。
+
+    为什么要在这里做：这两个文件都是"装剧情时才写"的产物 ——
+      · 老版本装过的剧情（或者那次 sync 崩了），条目会永远停在旧状态，用户看到的
+        就是「活动剧情 第99话」「其他剧情 第80话」这种没名字/没归类的行；
+      · 取材规则本身也会修（例如 2026-11-23 开始能从 ``_0`` 段与图片名里取标题、
+        能认出漫画活动），修完必须让老用户重新生成一次。
+    advindex 要读 200+ 个剧本（实测 1.3 秒），所以只在**修订号变了**或
+    「本机剧情文件数 ≠ 目录条目数」时重建；othereps 很便宜（没有新包 0.3 秒返回）。
+    """
+    try:
+        import glob as _glob
+        st = os.path.join(cdn_stages.STATE_DIR, "catalog_repair.json")
+        try:
+            with open(st, encoding="utf-8") as f:
+                old = json.load(f)
+        except Exception:                                      # noqa: BLE001
+            old = {}
+        # **本机剧情文件**，不能把 advindex.js 自己算进去（glob "adv_*.js" 会匹配到它，
+        # 一台没装剧情的机器于是永远显示"1 部本机剧情"）。
+        files = [p for p in _glob.glob(os.path.join(cdn_stages.DATA, "adv_*.js"))
+                 if os.path.basename(p) != "advindex.js"]
+        try:
+            idx = cdn_stages._read_js_list(
+                os.path.join(cdn_stages.DATA, "advindex.js"))
+        except Exception:                                      # noqa: BLE001
+            idx = []
+        need_adv = (not isinstance(old, dict)
+                    or old.get("rev") != CATALOG_REPAIR_REV
+                    or old.get("files") != len(files))
+        if need_adv and files:
+            n = cdn_stages.sync_advindex()
+            applog.info("剧情目录已重建：%d 条（标题 / 漫画标记 / 排序键）" % n,
+                        tag="boot")
+        elif need_adv:
+            # 一部剧情都没装：出厂 advindex 本身就是完整目录（233 条），重建只会
+            # 原样合并回去、白花 1.5 秒并改一次 mtime（→ /api/dataver 报"数据变了"）。
+            applog.debug("本机没有剧情文件，跳过剧情目录重建（出厂目录已完整）",
+                         tag="boot")
+        # 其他剧情分组：语义是"补齐没归类的包"，没有新东西时几乎零开销
+        m = cdn_stages.sync_othereps()
+        if m:
+            applog.info("其他剧情分组：新归入 %d 话" % m, tag="boot")
+        os.makedirs(os.path.dirname(st), exist_ok=True)
+        with open(st, "w", encoding="utf-8") as f:
+            json.dump({"rev": CATALOG_REPAIR_REV, "rows": len(idx),
+                       "files": len(files)}, f, ensure_ascii=False)
+    except Exception as e:                                     # noqa: BLE001
+        applog.debug("剧情目录校正跳过（不影响使用）：%s" % e, tag="boot")
+
+
 def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
     paths.ensure_dirs()
     # data/imgmap.x2.js 被三个页面无条件加载，缺它每次开页面都 404（刷日志 +
@@ -2156,6 +2318,16 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
                     _f.write(_body)
         except Exception:                                      # noqa: BLE001
             pass
+    # 旧版本导出的错误敌人头像（别人脸 / 活动宣传图）在这里校正一次：
+    # 用户目录里的生成物不会被程序升级覆盖，必须程序自己修（见函数注释）。
+    # 两块校正都跑在 ``capture_stdio()`` 之前（那一步要等横幅和地址打印完），
+    # 所以必须显式静音：里面的 ``print`` 会原样漏到启动窗口
+    # （实测漏出来过一句「advindex.js：0 部本机剧情 + 保留目录 233 条」）。
+    with applog.quiet_stdio("boot"):
+        _repair_avatar_sources()
+        # 剧情目录/其他分组：老用户装过的剧情要能自动补上标题、漫画标记与入口分组
+        # （否则「活动剧情 第99话」「其他剧情 第80话」这种没有名字的行永远不会变）。
+        _repair_catalog()
     # 本机媒体清单：每次启动按磁盘重扫头像/剧情横幅（两次 listdir，毫秒级）。
     # 前端只请求清单里有的图 —— 纯净包刚启动、官方新角色还没装素材时，
     # 那一行直接画首字色块，不再对不存在的图发请求刷 404。

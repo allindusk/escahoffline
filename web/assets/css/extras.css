@@ -15,6 +15,8 @@
 }
 .badge.nodl { background: #44232a; color: #ffb3ba; border: 1px solid #6d3740; }
 .badge.soft { background: #3d3320; color: #ffd79a; border: 1px solid #5e4c26; }
+/* 漫画式活动（零台词、逐格 CG 翻页）：详情里标出来，和安装状态徽标区分色 */
+.badge.manga { background: #231a33; color: #c9a6ff; border: 1px solid #4a3670; }
 
 /* ---------------- 控制条：新增「译文」后不允许挤成两行 ---------------- */
 #controls { gap: 7px; overflow-x: auto; scrollbar-width: none; }

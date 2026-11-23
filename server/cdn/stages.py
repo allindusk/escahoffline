@@ -441,10 +441,86 @@ def _part_title(parts: list) -> str:
         flat = _squash(longest)
         if len(uniq) > 3 or len(longest) > 60 or \
                 any(_squash(u) not in flat for u in uniq if u is not longest):
+            # 例外：**对句标题**。官方会把一个标题拆成两半分别念（标题段里没有
+            # 拼好的第三句），例如 adv_event_99_0 =
+            # 「包む夢」「抗う鼓動」→ 官方一览写「包む夢、抗う鼓動」。
+            # 判据收得很紧（2~3 句、每句都带引号、每句 ≤24 字、合计 ≤40 字），
+            # 正文（adv_other_1_0 那种 26 句不带引号的说明）不会误判成标题。
+            inner = [u.strip('「」『』"\' ') for u in uniq]
+            if (2 <= len(uniq) <= 3
+                    and all(re.fullmatch(r"[「『].+[」』]", u) for u in uniq)
+                    and all(2 <= len(x) <= 24 for x in inner)
+                    and sum(len(x) for x in inner) <= 40):
+                return "、".join(inner)
             return ""
         uniq = [longest]
     # 「A」「B」→ A B：多人各念半句的标题拼起来要留个分隔，别粘成一坨
     return re.sub(r"」\s*「", " ", uniq[0]).strip("「」\"' ")
+
+
+#: **漫画活动**的标题只存在于图片名里：``イベ_漫画_<漫画名>_<话>_<格>``。
+#: Live2D 立绘/CG 的名字是 cp932 的十六进制串（如 ``83438378`` = イベ），
+#: 解码后就能拿到「ゲーミング神騎」「ゆるかれ出張版」这类文字标题。
+MANGA_NAME_RE = re.compile(r"イベ[_\uff3f]漫画[_\uff3f]([^_\uff3f]+)")
+
+
+def _hex_jp(seg: str) -> str:
+    """把图片名里的一段十六进制按 cp932 解回日文；不是日文就原样返回。"""
+    if not seg or len(seg) % 2 or not re.fullmatch(r"[0-9A-Fa-f]+", seg):
+        return seg
+    try:
+        b = bytes.fromhex(seg)
+    except ValueError:
+        return seg
+    if not any(x >= 0x80 for x in b):           # 4011 / 0001 这种编号不算日文
+        return seg
+    out = []
+    i = 0
+    while i < len(b):
+        c = b[i]
+        if c < 0x80:
+            out.append(chr(c))
+            i += 1
+            continue
+        if i + 1 < len(b):
+            try:
+                out.append(b[i:i + 2].decode("cp932"))
+                i += 2
+                continue
+            except Exception:                                      # noqa: BLE001
+                pass
+        out.append("?")
+        i += 1
+    return "".join(out)
+
+
+def _dec_image_name(name: str) -> str:
+    """``83438378_969F89E6_...`` → ``イベ_漫画_...``（全角下划线归一成半角）。"""
+    s = str(name or "").replace("\uff3f", "_")
+    return "_".join(_hex_jp(x) for x in s.split("_"))
+
+
+def _manga_title(parts: list) -> str:
+    """从图片名里认出漫画活动的标题（最常出现的那个）。
+
+    为什么需要：漫画式活动（event_42/52 = ゲーミング神騎、59 = ゆるかれ出張版、
+    96 = ブレイジング戦士）整集**没有一句台词**、也没有 ``_0`` 标题段，官方把
+    标题只写在了图片资源的名字里。以前这类条目只能显示「活动剧情 第N话」，
+    被误当成"没名字的活动"（2026-11-23 用户反馈）。
+    同一个包里会混入共用背景（如 96 里也有一张 ゲーミング神騎 的背景），所以按
+    出现次数取最高，不取第一个。
+    """
+    cnt = {}
+    for p in parts or ():
+        for k in ("cg", "stand", "back", "full"):
+            for nm in p.get(k) or ():
+                for m in MANGA_NAME_RE.finditer(_dec_image_name(nm)):
+                    name = m.group(1).strip()
+                    if name:
+                        cnt[name] = cnt.get(name, 0) + 1
+    if not cnt:
+        return ""
+    return max(cnt.items(), key=lambda kv: (kv[1], len(kv[0])))[0]
 
 
 def load_story_titles() -> dict:
@@ -475,6 +551,42 @@ def sync_advindex() -> int:
     info = load_story_titles()
     titles = info["titles"]
     ev_order = info["event_order"]
+
+    #: 包号 → 官方发表顺序（从标题表的 ``_event_order`` 反解）。
+    #: 给"官方一览里根本没有"的活动（漫画活动等）**就地插值**用：只在相邻两个
+    #: 已知包号之间取中点。包号是 bundle 批次号，相邻批次基本同期，所以局部插值
+    #: 是可靠的；而"包号 + 0.5"是把批次号当发表序号用，两者不同源，一旦脱节
+    #: 就会把那部活动扔到与它无关的第 N 个活动位置上（2026-11-24 审计）。
+    _ev_pack: dict[int, float] = {}
+    for _k, _v in (ev_order or {}).items():
+        _m = re.fullmatch(r"adv_event_(\d+)", str(_k))
+        if _m and isinstance(_v, (int, float)):
+            _ev_pack[int(_m.group(1))] = float(_v)
+
+    def _event_order_guess(no) -> float:
+        """没有官方顺序时的排序键：夹在最近的已知前后包之间取中点。
+
+        两侧都有 → 中点；只有一侧 → 该侧 +0.5 / -0.5；表里一条都没有 → 包号 + 0.5。
+        返回值一定落在已知区间**内部**，不会跑到本类最前面或最后面去。
+        """
+        n = int(no)
+        lo = max([p for p in _ev_pack if p < n], default=None)
+        hi = min([p for p in _ev_pack if p > n], default=None)
+        if lo is not None and hi is not None:
+            a, b = _ev_pack[lo], _ev_pack[hi]
+            if b > a:
+                # 线性插值而不是死取中点：同一区间里有多部（实测 51 / 52 两包）
+                # 时各得各的位置，不会撞成同一个 order 只能靠 ID 兜底。
+                # 再夹进 (a, b) 开区间，保证不越到相邻已知活动的位置上。
+                t = (n - lo) / float(hi - lo)
+                return round(min(max(a + (b - a) * t, a + 0.01), b - 0.01), 3)
+            return a + 0.5            # 表本身非单调（人工校对的顺序）→ 跟在其后
+        if lo is not None:
+            return _ev_pack[lo] + 0.5
+        if hi is not None:
+            return _ev_pack[hi] - 0.5
+        return n + 0.5
+
     rows = []
     #: 本次判定为「空占位包」的 key（2 段 0 句，官方还没放内容）。合并旧目录时要把
     #: 它们剔掉，否则上次留在磁盘上的空条目会被原样保留（一行点不开的废条目）。
@@ -499,9 +611,23 @@ def sync_advindex() -> int:
         # 一句 ShowMessage，内容全在 ShowEventCg 逐格翻页里，那是能看的。
         # 只看台词会把它们当空包剔掉 → 资源管理显示「已安装」、播放器侧栏却永远
         # 没有它们（2026-11-06 用户遇到的矛盾：还附带一条"发现 5 部新剧情（未下载）"）。
-        if _count_lines(d["parts"]) == 0 and not _has_visual(d["parts"]):
+        _n_lines = _count_lines(d["parts"])
+        _visual = _has_visual(d["parts"])
+        if _n_lines == 0 and not _visual:
             skipped.add(key)
             continue
+        # 「漫画」判定：整集一句台词都没有、但有 CG 可看（官方漫画式活动，
+        # 内容全在 ShowEventCg 逐格翻页里）。前端据此把没有文字标题的条目
+        # 显示成「漫画剧情 第N话」，并在详情里挂「漫画剧情」标签
+        # （2026-11-23 用户要求；event_42/51/52/59/96 就是这一类，
+        #  官方资源里连标题都没有，只有横幅美术字）。
+        _manga = bool(_n_lines == 0 and _visual)
+        # 漫画活动没有 ``_0`` 标题段，标题只写在图片名里（イベ_漫画_<名>）。
+        # 能认出来就用「漫画 <名>」当标题，认不出就交给前端显示「漫画剧情 第N话」。
+        if _manga and not _title:
+            _m_sub = _manga_title(d["parts"])
+            if _m_sub:
+                _title = "漫画 " + _m_sub
         # 封面：章节标题横幅（游戏里标题本身就是图，没有文本资源）
         # 不用 int(n)：序章拆出来的编号是 0 / 0b / 0c，对应 main_0 / main_0b / main_0c.webp
         cover = ""
@@ -512,13 +638,14 @@ def sync_advindex() -> int:
         # 排序键。序章这类由数据手工指定（0 / 23.5 / 44.5 插在部与部之间），
         # 普通章节就是章号；活动例外 —— 官方一览的**发表顺序**才是用户认知的顺序，
         # adv_event_<n> 是 bundle 批次号（1、4、6、16、7… 跳着走），按它排列表是乱的。
-        # 还没接入标题表的新活动排到本类末尾（+1000），补上官方顺序后自动归位。
+        # 官方一览里没有的活动（漫画活动、还没登记的新活动）走 _event_order_guess：
+        # 按**相邻已知包号**插值，落在已知区间内部，补上官方顺序后自动归位。
         if d.get("order") is not None:
             order = d["order"]
         elif ev_order.get(key):
             order = ev_order[key]
         elif isinstance(n, (int, float)):
-            order = 1000 + n if kind == "event" else n
+            order = _event_order_guess(n) if kind == "event" else n
         else:
             order = 0
         rows.append({
@@ -533,7 +660,8 @@ def sync_advindex() -> int:
             "cover": cover,
             "first": _first_line(d["parts"]),
             "parts": len(d["parts"]),
-            "lines": _count_lines(d["parts"]),
+            "lines": _n_lines,
+            "manga": _manga,
             # voices = 剧本引用数；voiceRes = 本地实际可播的语音文件数。
             # 主线/活动目前拿不到语音资源（见 README），播放器据 voiceRes 决定
             # 要不要发 audio 请求，避免每句都 404。
@@ -568,6 +696,7 @@ def sync_advindex() -> int:
                     "part": i,                      # 从 op 包的第 i 段开始播
                     "title": title,
                     "order": order,
+                    "manga": False,
                     "cover": cover if os.path.exists(os.path.join(WEB, cover)) else "",
                     "first": _first_line([parts[i]]),
                     "parts": 1,
@@ -638,11 +767,16 @@ def sync_othereps(job=None) -> int:
     out = os.path.join(DATA, "othereps.js")
     groups = _read_js_list(out)
     covered = set()
+    ungrouped = set()          # 上次只归到「未归类」的包，规则补强后要重试
     for g in groups:
+        gno = g.get("no")
         for e in (g.get("eps") or []):
             k = str(e.get("k") or "")
             if k.startswith("adv_other_") and k[10:].isdigit():
-                covered.add(int(k[10:]))
+                no = int(k[10:])
+                covered.add(no)
+                if str(gno) == "-1":
+                    ungrouped.add(no)
     local = set()
     try:
         for fn in os.listdir(DATA):
@@ -651,7 +785,11 @@ def sync_othereps(job=None) -> int:
                 local.add(int(fn[10:-3]))
     except OSError:
         return 0
-    todo = sorted(local - covered)
+    # 只认了「未归类」的包也重算一遍：这些条目的名字是「新剧情 包NN 第i段」，
+    # 没有人工校对价值，规则补强后应该重新归位。
+    # 2026-11-23 用户反馈「其他剧情 第80话没被自动归类」，实际是 adv_other_80
+    # （6 周年）装在了 sync_othereps 上线之前，之后再没人给它归类。
+    todo = sorted((local - covered) | (local & ungrouped))
     if not todo:
         return 0                      # 常态：没有新包就不碰文件（零开销）
 
@@ -663,8 +801,25 @@ def sync_othereps(job=None) -> int:
     except Exception as e:                                     # noqa: BLE001
         print(f"  [othereps] 无法载入归类规则（{e}），跳过")
         return 0
-    # plan() 里已经包含"表里没有的包"的自动归类结果（_auto_rows → classify_pack）
-    rows = OT.plan()
+    # plan() 里已经包含"表里没有的包"的自动归类结果（_auto_rows → classify_pack）。
+    # plan() 整棵崩掉时（历史上 other_80 的 `_rank` KeyError 就是这样）退回**逐包**
+    # 判定：至少把这次要补的包归进去，剩下的宁可挂「未归类」也不能什么都不写。
+    try:
+        rows = OT.plan()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"  [othereps] 归类表计算出错（{type(e).__name__}: {e}），改为逐包判定")
+        rows = []
+        st = OT._state([])
+        for no in todo:
+            try:
+                parts = OT.read_js(os.path.join(OT.DATA, "adv_other_%d.js" % no))["parts"]
+                got, _conf, _why = OT.classify_pack(no, parts, st)
+            except Exception:                                  # noqa: BLE001
+                parts, got = [], None
+            if not got:
+                got = [(no, i, -1, "新剧情 包%d 第%d段" % (no, i + 1))
+                       for i in range(len(parts))]
+            rows += got
 
     parts_cache: dict = {}
 
@@ -683,6 +838,15 @@ def sync_othereps(job=None) -> int:
             and str(m["GroupId"]) != "タイトルロゴ")
         return (c.most_common(1) or [("", 0)])[0][0]
 
+    # 重算之前先把这些包的旧条目摘掉（否则会和这次新归的多出一条，同一话出现两遍）
+    if todo:
+        allset = set(todo)
+        for g in groups:
+            g["eps"] = [e for e in (g.get("eps") or [])
+                        if not (str(e.get("k") or "").startswith("adv_other_")
+                                and str(e["k"])[10:].isdigit()
+                                and int(str(e["k"])[10:]) in allset)]
+        groups = [g for g in groups if g.get("eps")]
     added = 0
     by_no = {g.get("no"): g for g in groups}
     for no, i, entry, title in rows:
@@ -705,10 +869,13 @@ def sync_othereps(job=None) -> int:
     if not added:
         return 0
 
-    order = list(OT.ORDER)
-    groups.sort(key=lambda g: order.index(g["no"]) if g["no"] in order
-                else len(order))
-    _write_js_obj(out, "__OTHER_EPS", groups)
+    # 排序用字典查：入口不在 ORDER 里时（自动归类引入了新入口）index() 会抛异常
+    oi = {e: i for i, e in enumerate(OT.ORDER)}
+    groups.sort(key=lambda g: oi.get(g.get("no"), len(oi)))
+    if not _write_js_obj(out, "__OTHER_EPS", groups):
+        # 内容没变（例如上一轮就只归到「未归类」、这次重算结果一样）：
+        # 不算新增、也不碰文件 mtime，避免 /api/dataver 一直报"数据变了"。
+        return 0
     names = "、".join(g["name"] for g in groups
                       if any(str(e.get("k") or "")[10:].isdigit()
                              and int(str(e["k"])[10:]) in todo
@@ -1295,17 +1462,13 @@ def export_avatar(cid, size: int = 170, force: bool = False,
 #   4xxx         = NPC / 活动图混编（只保留剧情 char_*.js 引用到的）
 #   5xxx         = 活动 / 皮肤头像，不拿来当剧情敌人头像
 #   2xxx         = 剧情敌人头像（立绘 5xxx - 3000）
-#   battle_character_icon 20001.. = 敌人战斗图标（无 2xxx 时兜底）
+#   battle_character_icon 200xx = **角色战斗图标**（20000 + 角色 ID），
+#                                 与 5xxx 剧情敌人编号无关，不产 e####
 #
 # 这一组函数只负责把官方贴图导成播放器用的命名：
 #   d### 日常 / b### 战斗 / n#### NPC / e#### 5xxx 编号敌人与场景 NPC
 # 立绘 -> 头像的选择在 ``avatarmap.js`` 里完成；纯爱/凌辱只决定优先取
 # daily 还是 battle，不改变官方素材本身。
-
-AVATAR_OFFICIAL_PREFIXES = (
-    "bundle_usericon_user_icon_",
-    "bundle_battle_character_icon_character_",
-)
 
 #: 剧情敌人立绘编号 5xxx 与官方 usericon 的对应关系。
 #: 5xxx 是立绘/剧情编号；2xxx 才是同一敌人的干净头像（5xxx - 3000）。
@@ -1314,19 +1477,19 @@ ENEMY_ICON_OFFSET = 3000
 
 
 def _enemy_avatar_bundles(cid: int) -> list[str]:
-    """敌人头像的官方包候选，按优先级排列。
+    """敌人头像的官方包候选（**只有** ``usericon_2xxx``）。
 
-    第一优先是 ``usericon_2xxx``；它才是剧情敌人头像。``usericon_5xxx``
-    是活动/皮肤头像，不能拿来当剧情敌人头像（会串成活动角色甚至角色头像）。
-    第二优先是战斗图标 20001+，只在没有 2xxx 时兜底。
+    5xxx 立绘编号 - 3000 = 2xxx 官方半身像，这是唯一可用的剧情敌人头像。
+    ``usericon_5xxx`` 是活动/皮肤图，不能当头像；``battle_character_icon``
+    200xx 是**角色战斗图标**（20000 + 角色 ID），与 5xxx 立绘编号不是一套
+    （2026-11-23 核对：20062 是黄发少女，而立绘 5062 是「一般老人Ｂ」），
+    旧代码拿它兜底会写出别人的脸，已彻底剔除。
     """
     cid = int(cid)
     icon = cid - ENEMY_ICON_OFFSET
-    out: list[str] = []
     if 2000 <= icon <= 2999:
-        out.append(f"bundle_usericon_user_icon_{icon:04d}")
-    out.append(f"bundle_battle_character_icon_character_{15000 + cid:05d}")
-    return out
+        return [f"bundle_usericon_user_icon_{icon:04d}"]
+    return []
 
 
 def official_avatar_key(kind: str, cid: int) -> str | None:
@@ -1354,11 +1517,10 @@ def _official_avatar_bundle(kind: str, cid: int) -> str | None:
     if kind == "enemy_user":
         return f"bundle_usericon_user_icon_{cid:04d}"
     if kind == "enemy_battle":
-        # 20001 -> 5001；官方敌人战斗图标统一是 15000+编号。
-        return f"bundle_battle_character_icon_character_{15000 + cid:05d}"
+        # 角色战斗图标（20000 + 角色 ID）与 5xxx 剧情敌人编号无关，不再产出 e####。
+        return None
     if kind == "enemy":
-        # 兼容旧调用：优先战斗图标，缺了再退回 usericon。
-        return f"bundle_battle_character_icon_character_{15000 + cid:05d}"
+        return f"bundle_usericon_user_icon_{cid - ENEMY_ICON_OFFSET:04d}"
     return None
 
 
@@ -1442,6 +1604,94 @@ def export_avatar_official(kind: str, cid: int, size: int = 96,
     return False
 
 
+def enemy_avatar_has_official(cid: int, index: dict) -> bool:
+    """这个 5xxx 编号在官方清单里有没有**能当头像的**来源。
+
+    只认 ``usericon 2xxx``（剧情敌人/NPC 的标准半身像，编号 = 5xxx - 3000）。
+    ``5xxx`` 是活动宣传图，带整张脸特写和活动 logo，不能当头像。
+
+    **``battle_character_icon_character_200xx`` 不能算**（2026-11-23 核对）：
+    实测 20046 是一位年轻女性、20062 是黄发少女、20072 是麋鹿装少女，而
+    剧情立绘 5046/5062/5072 分别是「一般老人」「一般老人Ｂ」「ハニー」——
+    那是**另一套编号**（角色战斗图标），与 5xxx 剧情敌人编号没有对应关系。
+    旧代码按 ``15000 + cid`` 去认，结果 e5062/e5072 被这些图标写成别人的脸，
+    而且让「敌人头像校正」认为"有官方来源"直接跳过 —— 老人乙顶着黄发少女、
+    ハニー顶着麋鹿少女，两个都是这条错误映射造成的。
+    """
+    if not index:
+        return False
+    return f"bundle_usericon_user_icon_{cid - 3000:04d}" in index
+
+
+def fix_enemy_avatars(index: dict | None = None) -> tuple[int, int]:
+    """清理来源不可靠 / 官方根本没有的 ``e####`` 敌人头像。
+
+    两类要清：
+      · 旧版本把 ``bundle_usericon_user_icon_5xxx``（活动/皮肤图标，其中夹着
+        整张脸特写 + 活动 logo 的宣传图）或 ``battle_character_icon_200xx``
+        （别的角色的战斗图标）写成了 e 头像 —— 那些是别人的脸；
+      · 历史上"从立绘现裁"兜底生成的头像 —— 官方本来就没给这个角色头像，
+        用户 2026-11-23 明确要求**保持无头像**（对话框宁可不显示头像）。
+
+    判据只有一条：官方 ``usericon 2xxx``（= 5xxx - 3000）存不存在。
+    存在的保留（那是标准半身像），不存在的一律删。幂等，可反复调用。
+    返回 ``(保留重导的 0, 删除数)``，第一个返回值只为兼容旧调用点。
+    """
+    adir = os.path.join(IMG, "avatar")
+    if not os.path.isdir(adir):
+        return 0, 0
+    if index is None:
+        try:
+            from .manifest import load_index
+            index = load_index()
+        except Exception:                                      # noqa: BLE001
+            index = {}
+    if not index:
+        return 0, 0
+    fixed = removed = 0
+    st_path = os.path.join(STATE_DIR, "stand_avatar.json")
+    try:
+        state = json.load(open(st_path, encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:                                          # noqa: BLE001
+        state = {}
+    dirty = False
+    for name in sorted(os.listdir(adir)):
+        m = re.match(r"^e(\d{4})\.png$", name)
+        if not m:
+            continue
+        cid = int(m.group(1))
+        if enemy_avatar_has_official(cid, index):
+            continue
+        # 官方**没有**这个头像 → 保持"无头像"。
+        # 2026-11-23 用户明确要求：官方原本就没头像的（如 5xxx 里的老人乙、
+        # ハニー这类怪物/NPC）不要从立绘裁一张顶上；只有"官方有头像但不符合
+        # 播放器要求"（例如非正方形，由 export_avatar_official 中心裁）才处理。
+        # 以前这里会给每个编号现裁一张，结果对话框里出现官方从没给过的头像。
+        try:
+            os.remove(os.path.join(adir, name))
+            x2 = os.path.join(IMG_X2, "avatar", name[:-4] + ".webp")
+            if os.path.exists(x2):
+                os.remove(x2)
+            state.pop(str(cid), None)
+            dirty = True
+            removed += 1
+        except OSError:
+            pass
+    if dirty:
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            with open(st_path, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+        except OSError:
+            pass
+    if fixed or removed:
+        _log(f"   敌人头像校正：清理 {removed} 张官方没有头像的 e 图"
+             "（保持无头像；只有官方 usericon 2xxx 才当头像）")
+    return fixed, removed
+
+
 def avatar_bundle_applicable(name: str) -> bool:
     """这个官方包是否属于本轮头像库（用于下载计划/进度分母）。"""
     if re.match(r"^bundle_chara_c-panel_\d+$", name):
@@ -1457,7 +1707,8 @@ def avatar_bundle_applicable(name: str) -> bool:
                 or 2001 <= n <= 2203 or 4001 <= n <= 4399)
     m = re.match(r"^bundle_battle_character_icon_character_(\d{5})$", name)
     if m:
-        return 20001 <= int(m.group(1)) <= 20200
+        # 角色战斗图标（20000 + 角色 ID）不是剧情头像，见 enemy_avatar_has_official。
+        return False
     return False
 
 
@@ -1499,9 +1750,9 @@ def export_avatar_bundle(name: str, force: bool = True,
 
     m = re.match(r"^bundle_battle_character_icon_character_(\d{5})$", name)
     if m:
-        n = int(m.group(1))
-        if 20001 <= n <= 20200:
-            return export_avatar_official("enemy_battle", n - 15000, force=force)
+        # 2026-11-23：这套编号是**角色战斗图标**（20000 + 角色 ID），
+        # 与剧情敌人 5xxx 立绘编号不是一套。旧代码按 n-15000 写 e####，
+        # 写出来的是别人的脸（e5062 = 黄发少女），已停止导出。
         return False
 
     return False
@@ -2221,13 +2472,25 @@ def _read_js_list(path: str) -> list:
         return []
 
 
-def _write_js_obj(path: str, marker: str, data: dict) -> None:
-    """按生成脚本的排版写回（紧凑、无空格），先写临时文件再替换。"""
-    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+def _write_js_obj(path: str, marker: str, data: dict) -> bool:
+    """按生成脚本的排版写回（紧凑、无空格），先写临时文件再替换。
+
+    **内容没变就不动文件**：这些表会被启动时的目录校正反复算一遍，如果每次都
+    重写，mtime 每次都变 → `/api/dataver` 一直报"数据变了" → 页面前后台不停
+    重载数据表（用户会看到列表闪、滚动位置丢）。
+    """
+    text = f"window.{marker}={json.dumps(data, ensure_ascii=False, separators=(',', ':'))};"
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return False
+    except OSError:
+        pass
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write(f"window.{marker}={body};")
+        f.write(text)
     os.replace(tmp, path)
+    return True
 
 
 def _note(msg: str, tag: str = "names") -> None:

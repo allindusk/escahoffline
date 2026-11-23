@@ -147,11 +147,24 @@ window.SL = (() => {
     // 播放器侧栏、控制台 ②③⑤、导出列表必须显示同一个名字。
     // 别名条目一定带 title（序章），优先用，避免三条序章显示成同一个名字。
     if (a) {
+      /* 横幅兜底：advindex 里的 cover 是**生成那一刻**按磁盘有无算的路径。
+         官方上新一章后，目录里这条可能还没有 cover（生成时图还没导出），
+         但图其实已经在本地了 —— 这时按约定路径拼一条，否则"有图也不显示"
+         （2026-11-23 用户反馈活动第99话没横幅）。bnrKeep 会再按本机清单核一遍，
+         没有这张就退回空串，不会留破图。 */
+      const cov = a.cover || ((a.no != null && a.kind
+        && a.kind !== 'tutorial' && a.kind !== 'op')
+        ? 'media/img/story/' + a.kind + '_' + a.no + '.webp' : '');
       return {
         name: (alias && a.title) ? a.title : ESC.storyTitle(key),
-        rar: '', date: '', cover: bnrKeep(a.cover || ''), adv: true,
+        rar: '', date: '', cover: bnrKeep(cov), adv: true,
         parts: a.parts || 0, lines: a.lines || 0,
-        order: String((a.order == null ? 999 : a.order)).padStart(4, '0'),
+        // 漫画式活动（零台词 + 有内容）：列表里挂「漫画」标签
+        manga: !!(a.manga || (a.lines === 0 && a.parts > 0)),
+        /* 排序键：order 可能是小数（活动没有官方顺序时用 包号+0.5 当时间代理），
+           统一 ×10 取整再补零，保证 sortItems 的字符串比较跟数值比较同序。 */
+        order: String(Math.round(((a.order == null) ? 9999 : a.order) * 10))
+          .padStart(6, '0'),
       };
     }
     // advindex 里没有（官方新上、还没装过）→ ESC.storyTitle 会加「（未接入）」。
@@ -160,17 +173,21 @@ window.SL = (() => {
     // onerror 会把横幅收起来，不会留破图；拼了才有"新活动一更新就带横幅"。
     // 排序：主线的编号**就是章序**，按它排；**活动/其他不行** —— adv_event_<n> 是
     // bundle 批次号，和官方发表顺序无关（实测 adv_event_4 是官方第 16 个活动），
-    // 按它排会插错位置，所以一律排到本类末尾（与 sync_advindex 的 1000+n 同口径）。
+    // 按它排会插错位置，所以一律用哨兵值排到本类末尾。
     const m2 = /^adv_(\w+?)(?:_(\d+))?$/.exec(key) || [];
     const kind2 = m2[1] || '';
     const no2 = m2[2] ? +m2[2] : null;
     const canBnr = no2 !== null && kind2 !== 'tutorial' && kind2 !== 'op';
+    /* 排序键必须和上面 advindex 分支**同宽**（.padStart(6)，×10 取整）：
+       sortItems 是对字符串比较的，混 4/6 位会让 '0012' > '000120'，
+       默认「最新在前」时把没装的新章节顶到已装章节上面（2026-11-24 审计）。 */
     return {
       name: ESC.storyTitle(key),
       rar: '', date: '',
       cover: canBnr ? bnrPath(kind2 + '_' + no2) : '',
       adv: true, parts: 0, lines: 0,
-      order: (kind2 === 'main' && no2 !== null ? String(no2) : '9999').padStart(4, '0'),
+      order: String(kind2 === 'main' && no2 !== null ? no2 * 10 : 99990)
+        .padStart(6, '0'),
     };
   }
 
@@ -244,10 +261,15 @@ window.SL = (() => {
             || String(k).toLowerCase().indexOf(s) >= 0;   // 允许按内部 ID 搜（只是搜，不上屏）
         });
       }
-      // 排序口径走 common.js，和播放器、CG 页、安装列表同一份实现
+      /* 排序口径走 common.js，和播放器、CG 页、安装列表同一份实现。
+         主线/活动没有实装日期，但 advindex 的 order 就是官方顺序
+         （主线=章号、活动=官方发表顺序）→ 当"日期"用，
+         这样「实装日期 新→旧」对它们等于「最新的一章/一个活动在最上面」
+         （2026-11-23 用户要求默认倒序，不然每次更新都要滚到底找新剧情）。 */
       return ESC.sortItems(keys, state.sort, k => {
         const i = info(k);
-        return { id: i.adv ? i.order : k, name: nameOf(k), date: i.date };
+        return { id: i.adv ? i.order : k, name: nameOf(k),
+                 date: i.adv ? i.order : i.date };
       });
     }
 
@@ -336,7 +358,24 @@ window.SL = (() => {
       const rr = bar.querySelector('.sl-rar');
       if (rr) rr.style.display = state.src === 'char' ? '' : 'none';
       const so = bar.querySelector('.sl-sort');
-      if (so && so.value !== state.sort) so.value = state.sort;
+      if (so) {
+        /* 排序选项的措辞随分类换：剧情没有「实装日期」可比，
+           用的是 advindex 的 order（主线=章号、活动=官方发表顺序）。 */
+        const adv = state.src !== 'char';
+        const kind = adv ? 'adv' : 'char';
+        if (so.dataset.kind !== kind) {
+          so.dataset.kind = kind;
+          const lb = adv
+            ? { 'date-desc': '最新在前', 'date-asc': '最早在前',
+              name: '按剧情名', id: '按剧情顺序' }
+            : { 'date-desc': '实装日期 新→旧', 'date-asc': '实装日期 旧→新',
+              name: '按名字', id: '按 ID' };
+          [...so.options].forEach(function (o) {
+            if (lb[o.value]) o.textContent = lb[o.value];
+          });
+        }
+        if (so.value !== state.sort) so.value = state.sort;
+      }
       const st = bar.querySelector('.sl-status');
       if (st && st.value !== state.status) st.value = state.status;
       bar.querySelectorAll('.sl-rar button').forEach(function (b) {
@@ -359,6 +398,12 @@ window.SL = (() => {
       else if (!i.adv) sub.push('<span>实装日期未收录</span>');
       if (i.adv && i.parts) {
         sub.push('<span>' + i.parts + ' 段 · ' + i.lines + ' 句</span>');
+      }
+      // 漫画式活动（零台词、逐格 CG）：详情里明确标出来，
+      // 免得用户以为"这段剧情没有台词是坏了"。
+      // 状态徽标已经写了「漫画（逐格 CG，无台词）」时不再重复挂一条。
+      if (i.manga && !(badge && /漫画/.test(String(badge.text || '')))) {
+        sub.push('<span class="sl-badge manga">漫画剧情</span>');
       }
       // 页面自带的额外信息（CG 导出用来报「N 组 · M 张」）
       const extra = (cfg.extra ? cfg.extra(key) : null) || [];

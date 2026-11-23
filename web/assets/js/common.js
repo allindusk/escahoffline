@@ -171,6 +171,10 @@
   const ADV_LABEL = {
     main: '主线剧情', event: '活动剧情', other: '其他剧情',
     tutorial: '新手教程', op: '开场动画',
+    // 漫画式活动（整集零台词、逐格 CG 翻页，官方资源里也没有文字标题）：
+    // 没有名字时显示「漫画剧情 第N话」，比「活动剧情 第N话」更准确
+    // （2026-11-23 用户要求）。
+    manga: '漫画剧情',
   };
   ESC.advLabel = ADV_LABEL;
 
@@ -200,6 +204,8 @@
     [61, 61, '第3部', '閑話3'],
   ];
 
+  const _mainWarned = new Set();     // 未登记章节只警告一次（切列表会反复调 storyTitle）
+
   ESC.mainSection = function (no) {
     const row = MAIN_SECTIONS.find(r => no >= r[0] && no <= r[1]);
     if (!row) return '';
@@ -225,8 +231,24 @@
     if (m[1] === 'main' && m[2] && /^\d+$/.test(m[2])) {
       const sec = ESC.mainSection(+m[2]);
       if (sec) return sec;
+      /* 超出核对过的章节表（MAIN_SECTIONS 只到 61）：部号只写在章节横幅图上，
+         剧本 JSON 里没有，硬猜（"接着上一部往下数"）猜错比不写更糟。
+         这里退回「主线 第N章」——术语对、不含部号，等横幅核对完再补表。 */
+      const k2 = 'main_' + m[2];
+      if (!_mainWarned.has(k2)) {
+        _mainWarned.add(k2);
+        try {
+          console.warn('[story] 主线新章节未在 MAIN_SECTIONS 里登记：' + k2
+            + '（部号需看章节横幅，见 common.js 的表）');
+        } catch (e) { /* 忽略 */ }
+      }
+      return '主线 第' + (+m[2]) + '章';
     }
-    const base = ADV_LABEL[m[1]] || m[1];
+    /* 漫画式活动：advindex 里有 manga 标记（服务端解析出来的），老数据没有
+       这个字段时按「零台词但有内容」推断 —— 这样不用等用户重装目录也能改名。 */
+    const manga = !!(adv && (adv.manga
+      || (adv.lines === 0 && adv.parts > 0)));
+    const base = (manga ? ADV_LABEL.manga : ADV_LABEL[m[1]]) || m[1];
     return (m[2] ? base + ' 第' + m[2] + '话' : base) + (adv ? '' : '（未接入）');
   };
 

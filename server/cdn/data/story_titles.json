@@ -103,7 +103,8 @@
     "adv_event_92": "降ってきた少女と夏のＵＦＯ",
     "adv_event_93": "ビヨンドワールド・ダイビング！",
     "adv_event_95": "ランスⅥ―学級崩壊―",
-    "adv_event_97": "本当は怖かったはずのグリム童話"
+    "adv_event_97": "本当は怖かったはずのグリム童話",
+    "adv_event_99": "包む夢、抗う鼓動"
   },
   "_event_order": {
     "adv_event_1": 1,
@@ -194,6 +195,7 @@
     "adv_event_92": 104,
     "adv_event_93": 105,
     "adv_event_95": 106,
-    "adv_event_97": 107
+    "adv_event_97": 107,
+    "adv_event_99": 108
   }
 }

@@ -824,6 +824,13 @@
   //  · 其他剧情：本来就没有语音轨 → 「无语音」
   //  · 活动剧情：官方没放出语音资源包，离线只能占位 → 「官方未提供资源包，占位符」
   function softMissingLabel(key) {
+    /* 漫画式活动（零台词、逐格 CG）本来就没有语音轨，也没有"资源包缺失"
+       这回事 —— 以前一律写「官方未提供资源包，占位符」，看着像装坏了
+       （2026-11-23 用户反馈：漫画活动被标成占位符）。 */
+    const a = (window.__ADV || []).find(function (x) { return x.key === key; });
+    if (a && (a.manga || (a.lines === 0 && a.parts > 0))) {
+      return '漫画（逐格 CG，无台词）';
+    }
     const m = /^adv_([a-z]+)/.exec(key);
     const kind = m ? m[1] : '';
     if (kind === 'event') return '官方未提供资源包，占位符';

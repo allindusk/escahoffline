@@ -1524,6 +1524,15 @@ def install_base(job=None, workers: int = 48, parts=None,
                 stages.cleanup_unused_npc_avatars()
             except Exception:                                  # noqa: BLE001
                 pass
+            # 敌人头像来源核验：官方 bundle_usericon_user_icon_5xxx 是活动/皮肤图标，
+            # 编号和剧情编号无关，里面还夹着周年之类的**宣传图**（整张脸特写 + 活动
+            # logo）。旧版本拿它当剧情敌人头像导出过一批，对话框里就出现"脸部特写"
+            # （2026-11-20 用户反馈 e5145/e5193）。有 2xxx / 15xxx 官方图标的编号一律
+            # 不动，其余从立绘按官方脸框重裁（幂等：立绘没变不重做）。
+            try:
+                stages.fix_enemy_avatars(getattr(mf, "index", None))
+            except Exception:                                  # noqa: BLE001
+                pass
             # imgmap.x2.js 是本地超分覆盖层，必须按 img_x2 磁盘重建；
             # 否则旧版本会留下指向已删文件的 src，页面继续 404。
             try:
@@ -1896,13 +1905,50 @@ def _official_avatar_output(name: str) -> str:
             return "n%04d" % n
         return ""
     if name.startswith("bundle_battle_character_icon_character_"):
-        try:
-            n = int(name.rsplit("_", 1)[-1])
-        except ValueError:
-            return ""
-        if 20001 <= n <= 20200:
-            return "e%04d" % (n - 15000)
+        # 2026-11-23：这是**角色战斗图标**（20000 + 角色 ID），和剧情敌人
+        # 5xxx 立绘不是一套编号，不产出 e####（否则补全会一直"缺图中"）。
+        return ""
     return ""
+
+
+#: 章节横幅所在的分包。这些包会**长大**：官方每上新一章 / 一个活动，
+#: 就往里加一张 ``topic_<kind>_<n>`` Sprite（包体积随之变化）。
+STORY_TOPIC_PREFIX = "bundle_image_story_"
+
+
+def stale_story_topic_packs() -> list[str]:
+    """本地已有、但和清单**体积对不上**的章节横幅包（= 官方加过新横幅）。
+
+    为什么需要：``public_deficit`` 核对横幅时用的是 ``story_banners.json``
+    里登记的"应有张数"，而那份登记是**上次导出时**写的。官方新上 ``event_99``
+    后，登记里根本没有这张 → 判定"不缺" → 横幅包永远不重下 → 列表里那条
+    活动永远没有横幅（2026-11-23 用户反馈：「更新剧情目录后第99话还是不显示
+    横幅」）。这里改成按包体积核对：只要包里多了东西就视为过期，重下一次
+    （5 个分包、几十 MB 以内），再由 ``export_story_topics`` 把新 Sprite 导出。
+
+    只收**本地已存在**的包：完全没下过横幅的用户不在自动补的范围内
+    （那属于"公共素材一点没装"，不该被这里悄悄拖几十 MB）。
+    """
+    idx = config_manifest_index()
+    if not idx:
+        return []
+    out = []
+    for n, e in idx.items():
+        if not n.startswith(STORY_TOPIC_PREFIX):
+            continue
+        try:
+            size = int((e or {}).get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        p = os.path.join(config.FILES_IMG, n)
+        if not os.path.exists(p):
+            continue
+        try:
+            if size and os.path.getsize(p) != size:
+                out.append(n)
+        except OSError:
+            continue
+    return sorted(out)
 
 
 def public_deficit() -> dict:
@@ -2972,6 +3018,9 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
             _warn_stand_output(job, nums)
         # 剧本引用了、但包里没有对应表情的立绘（表情码其实是文本）→ 素体顶替
         stages.fill_missing_stands(assets.get("stand") or (), job)
+        # 本剧出现的 NPC / 敌人也要有对话框头像（官方 2xxx 有就导；活动限定没有
+        # 2xxx 的，从刚合成好的立绘按官方脸框现裁）。
+        _install_story_avatars(mf, assets.get("stand") or (), job, workers)
 
     # 2026-11-16：SD 小人整体停用，原 ⑦ 步已删除
     # if image:
@@ -3015,6 +3064,114 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
     chk = _self_check(job, f"char_{cid}")
     return {"unit": f"char_{cid}", "seconds": round(time.time() - t0, 1),
             "stands": len(nums), "check": chk}
+
+
+def _install_story_avatars(mf, stand_ids, job=None, workers: int = 16) -> dict:
+    """把这部剧用到的**角色 / NPC / 敌人**头像补齐（``d/b`` / ``n`` / ``e``）。
+
+    需求来自剧本引用到的立绘编号（``stand_<编号>_...``）：
+      · ``1-416`` → ``d###`` / ``b###``（usericon 0001.. / 1001..，日常/战斗）
+      · ``4xxx`` → ``n####``（usericon 4xxx，剧情 NPC）
+      · ``5xxx`` → ``e####``：**只认官方 usericon 2xxx**（剧情敌人标准半身像）。
+        官方没有就保持无头像 —— 不从立绘现裁（用户 2026-11-23 要求：官方原本
+        没头像的（老人乙 / ハニー 这种）对话框里就不该出现头像）。
+    已存在的文件一律跳过（幂等），所以角色剧情（自己那张已由 ④ 步导好）不会重复。
+
+    为什么放在剧情安装里：以前只有「公共素材 → 补全」才会导这批图，新剧情里
+    一出新敌人，对话框头像就是空的，用户以为坏了（2026-11-20 要求自动化）。
+    体积很小（2xxx 包约 12 KB/个），已下过的包 fetch(skip=True) 不会重下；
+    任何异常都只记日志，绝不让剧情安装失败。
+    """
+    adir = os.path.join(config.IMG, "avatar")
+
+    def has(key: str) -> bool:
+        return os.path.exists(os.path.join(adir, key + ".png"))
+
+    want_c, want_n, want_e = set(), set(), set()
+    for raw in stand_ids or ():
+        m = re.match(r"^stand_(\d+)_", str(raw))
+        if not m:
+            continue
+        n = int(m.group(1))
+        if 1 <= n <= 416:                      # 角色：日常 / 战斗两张
+            if not (has(f"d{n:03d}") and has(f"b{n:03d}")):
+                want_c.add(n)
+        elif 4000 <= n <= 4399:                # 剧情 NPC
+            if not has(f"n{n:04d}"):
+                want_n.add(n)
+        elif 5000 <= n <= 5999:                # 剧情敌人 / 活动限定
+            if not has(f"e{n:04d}"):
+                want_e.add(n)
+    if not want_c and not want_n and not want_e:
+        return {"char": 0, "npc": 0, "enemy": 0, "cropped": 0}
+    pkgs = []
+    for n in sorted(want_c):
+        for name in (f"bundle_usericon_user_icon_{n:04d}",
+                     f"bundle_usericon_user_icon_{1000 + n:04d}"):
+            if name in mf.index:
+                pkgs.append(name)
+    for n in sorted(want_n):
+        name = f"bundle_usericon_user_icon_{n:04d}"
+        if name in mf.index:
+            pkgs.append(name)
+    for n in sorted(want_e):
+        # 只补官方 usericon 2xxx；battle_character_icon 200xx 是角色图标，
+        # 与 5xxx 剧情敌人无关（见 stages.enemy_avatar_has_official）。
+        name = f"bundle_usericon_user_icon_{n - 3000:04d}"
+        if name in mf.index:
+            pkgs.append(name)
+    pkgs = sorted(set(pkgs))
+    if pkgs:
+        if job is not None:
+            job.log(f"   剧情头像：{len(pkgs)} 个包（角色 {len(want_c)} / "
+                    f"NPC {len(want_n)} / 敌人 {len(want_e)}）")
+        try:
+            stages.fetch(_entries(mf, pkgs), workers, "剧情头像", skip=True,
+                         pause_event=_pe(job), job=job)
+        except Exception:                                      # noqa: BLE001
+            pass
+    c_ok = n_ok = e_ok = dropped = 0
+    for n in sorted(want_c):
+        for kind in ("daily", "battle"):
+            if has(f"d{n:03d}" if kind == "daily" else f"b{n:03d}"):
+                continue
+            try:
+                if stages.export_avatar_official(kind, n, force=False, regen=False):
+                    c_ok += 1
+            except Exception:                                  # noqa: BLE001
+                pass
+    for n in sorted(want_n):
+        try:
+            if stages.export_avatar_official("npc", n, force=True, regen=False):
+                n_ok += 1
+        except Exception:                                      # noqa: BLE001
+            pass
+    for n in sorted(want_e):
+        # 只导官方 usericon 2xxx；官方没有 → 这一位就保持没有头像。
+        try:
+            if stages.export_avatar_official("enemy", n, force=True, regen=False):
+                e_ok += 1
+        except Exception:                                      # noqa: BLE001
+            pass
+    # 顺带清掉"来源不可靠"的历史 e 头像（旧版把活动宣传图 / 别的角色的战斗
+    # 图标 / 从立绘现裁的图写成了 e####）：有官方 usericon 2xxx 的保留，
+    # 其余删掉、保持无头像（2026-11-23 用户要求）。
+    try:
+        _f2, dropped = stages.fix_enemy_avatars(mf.index)
+    except Exception:                                          # noqa: BLE001
+        dropped = 0
+    if c_ok or n_ok or e_ok or dropped:
+        try:
+            from .. import media
+            stages.regen_avatarmap()
+            stages.regen_mediaindex()
+            media.rebuild_x2_overlay()
+        except Exception:                                      # noqa: BLE001
+            pass
+        if job is not None:
+            job.log(f"   头像补齐：角色 {c_ok} 张、NPC {n_ok} 张、敌人 {e_ok} 张"
+                    + (f"、清理无官方来源 {dropped} 张" if dropped else ""))
+    return {"char": c_ok, "npc": n_ok, "enemy": e_ok, "cropped": 0}
 
 
 def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
@@ -3103,6 +3260,9 @@ def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
         else:
             # 非角色剧情也要章节横幅
             stages.export_story_topics()
+        # 本剧出现的 NPC / 敌人头像：官方 2xxx/15xxx 有就导，活动限定没有的就
+        # 从立绘按官方脸框现裁（2026-11-20：新剧情不再需要手动点「补全」）。
+        _install_story_avatars(mf, assets.get("stand") or (), job, workers)
 
     if upscale and image:
         _upscale_assets(job, assets, scale, engine)

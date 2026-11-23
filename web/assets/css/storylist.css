@@ -114,6 +114,8 @@
 .sl-badge.no { background: #2a1b1e; color: #ff9aa5; border: 1px solid #4d2a30; }
 .sl-badge.must { background: #26231a; color: #e5c98a; border: 1px solid #4a422c; }
 .sl-badge.have-tr { background: #16283c; color: #9fe0ff; border: 1px solid #2f5478; }
+/* 漫画式活动：紫色系，和"安装状态"那几种颜色区分开 */
+.sl-badge.manga { background: #231a33; color: #c9a6ff; border: 1px solid #4a3670; }
 
 .sl-act {
   flex: 0 0 auto; padding: 3px 10px; font-size: 14px; cursor: pointer;

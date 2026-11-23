@@ -221,8 +221,12 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 /* ---------- 舞台 ---------- */
 #stageWrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
   background:#000;position:relative;overflow:hidden}
-/* 全屏模式：铺满大屏，鼠标静止后隐藏 */
-#stageWrap.fs.hidecur{cursor:none}
+/* 全屏模式：铺满大屏，鼠标静止后隐藏。
+   必须连**子元素**一起压：按钮/进度条自己写了 cursor:pointer，
+   只给 #stageWrap 设 cursor:none 时，鼠标停在工具栏或对话框按钮上
+   依旧是箭头（2026-11-23 用户反馈「按 F 全屏鼠标不会自动消失」）。 */
+#stageWrap.fs.hidecur,
+#stageWrap.fs.hidecur *{cursor:none !important}
 #btnWin.off{opacity:.45;filter:grayscale(.7)}
 #dbgFit{position:absolute;right:8px;top:6px;font-size:14px;color:#6b7488;
   background:rgba(0,0,0,.5);padding:1px 7px;border-radius:8px;pointer-events:none;
@@ -239,8 +243,21 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
      （2026-11-10 用户反馈：第55句 邪気 起，鼠标移到控件就全黑）。
      布景本来就在 #stage 内部，隔离后照样能和背景/立绘混合。 */
   isolation:isolate}
-#stage.f-sepia{filter:sepia(.85)}
-#stage.f-gray{filter:grayscale(1)}
+/* 回忆/过去的滤镜（SetDrawModeSepia / SetDrawModeGrayscale）：
+   只作用于**画面三层**（背景 / 立绘 / CG），对话框、名条、头像保持原色。
+   游戏里 Sepia 是后处理：背景和立绘一起变成暖棕色，UI 完全不受影响；
+   以前挂在 #stage 上，等于连对话框和头像一起染黄，颜色也对不上
+   （2026-11-23 用户对比截图：回想场景应偏琥珀棕，播放器却发灰黄）。
+   颜色由游戏截图逐区域取色拟合：目标 ≈ 灰度 × (1.02, 0.72, 0.43)。
+   CSS 的 sepia()+saturate() 固有色偏调不到这个比例，所以滤镜节点
+   由 player.js 的 ensureDrawFilters() 写成 feColorMatrix（#fSepiaMode）。
+   滤镜是逐像素线性矩阵，分层施加与整幅后处理在数学上等价。 */
+#stage.f-sepia #bgLayer,
+#stage.f-sepia #standLayer,
+#stage.f-sepia #cgLayer{filter:url(#fSepiaMode)}
+#stage.f-gray #bgLayer,
+#stage.f-gray #standLayer,
+#stage.f-gray #cgLayer{filter:grayscale(1)}
 
 #bgLayer,#cgLayer,#fxLayer,#placeLayer,#flashLayer,#screffBack{position:absolute;inset:0}
 /* 明确图层顺序，避免立绘盖住文字窗 */
@@ -281,7 +298,13 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 #msgWindow{z-index:50}
 #vhint{z-index:60}
 #bgLayer img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-#bgLayer .half{position:absolute;top:0;height:100%;width:50%;object-fit:cover}
+/* 双背景（ShowDoubleBackground）：左图贴 left、右图贴 right，各占半幅。
+   **必须显式 left:auto/right:auto**：#bgLayer img 的 inset:0 会把左右都置 0，
+   而右图只写了 inline 的 right:0，left 仍是 0 —— 宽 50% 时 over-constrained
+   取 left、丢掉 right，于是两张图都挤在左半边，后画的那张（右图）盖住左图，
+   画面永远只显示右侧那张（2026-11-23 用户报「双背景跟游戏内都不一样」）。 */
+#bgLayer .half{position:absolute;top:0;height:100%;width:50%;object-fit:cover;
+  left:auto;right:auto}
 /* 用最朴素的绝对定位，避免 flex/object-fit 影响图片实际渲染尺寸 */
 /* --standY 纵向偏移（正数向上），避免缩放后整体显得贴底 */
 .stand{position:absolute;bottom:var(--standY,0px);transform-origin:50% 100%;
@@ -1002,6 +1025,19 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
   text-overflow:ellipsis}
 #charList .char-btn.bnr .info .nm .srcTag{flex:0 0 auto}
 
+/* 主线 / 活动：标题独占一行，段·句·语音折到第二行。
+   以前和角色一样"标题先被压成省略号"——「包む夢、抗う鼓動」只剩 4 个字，
+   等于还是"没有名字"（2026-11-23 用户要求）。行尾图标（⧉ / ☆）留在第一行。 */
+#charList .char-btn.adv.bnr:not(.hist) .info { flex-wrap: wrap; row-gap: 2px; }
+#charList .char-btn.adv.bnr:not(.hist) .info .nm {
+  flex: 1 1 0; min-width: 0; flex-shrink: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#charList .char-btn.adv.bnr:not(.hist) .info .sub {
+  order: 9; flex: 1 0 100%; white-space: nowrap;
+  overflow: hidden; text-overflow: clip;
+}
+
 /* 悬停横幅 → 信息浮窗（与剧情页、CG 页同一套观感） */
 #bnrTip{position:fixed;z-index:300;width:300px;background:#12161e;
   border:1px solid #3a4a5e;border-radius:9px;padding:9px 11px;font-size:14px;
@@ -1148,6 +1184,18 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 /* 伪全屏：iOS Safari 不支持 div 的 requestFullscreen，用 CSS 铺满视口顶上 */
 #stageWrap.fsp { position: fixed; inset: 0; z-index: 9990; }
 
+/* 网页全屏（body.wfs）：不向浏览器要原生全屏，只把本站的菜单全部收掉，
+   舞台铺满窗口 —— 顶栏、剧情列表、本段文本、段标签、外壳的常驻播放条
+   都不占位，适合一边看一边随手点别的窗口。
+   由「全屏」按钮双击 / Shift+单击，或 Shift+F 触发（不额外加按钮）。 */
+body.wfs > header{display:none !important}
+body.wfs #sidebar,
+body.wfs #history,
+body.wfs #tabs{display:none !important}
+body.wfs .layout{display:block}
+body.wfs main{height:100%;display:flex;flex-direction:column}
+body.wfs #mainBody{flex:1 1 auto;min-height:0}
+
 /* 全屏时 #controls 被 JS 搬进 #stageWrap（原生全屏只显示该元素本身），
    绝对定位压在底部；鼠标/手指静止 2.6s 后自动淡出。 */
 #stageWrap.fs #controls.in-fs {
@@ -1189,6 +1237,29 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
    不要挪到底部 —— 那里正好是对话框的位置，会压住右边的字。 */
 #stageWrap.fs.barTop #fsExit { top: 56px; bottom: auto; }
 
+/* 「全屏」按钮的悬停菜单：两个选项（全屏 / 网页全屏），出现在按钮上方，
+   上方放不下就翻到下面。fixed + JS 算坐标：控制条在全屏时会搬进 #stageWrap，
+   跟着父容器绝对定位容易被裁掉。 */
+.fsMenu {
+  position: fixed; z-index: 10060; min-width: 118px;
+  display: flex; flex-direction: column; gap: 2px; padding: 5px;
+  border-radius: 10px; background: rgba(14, 17, 24, .97);
+  border: 1px solid #3a4356; box-shadow: 0 8px 24px rgba(0, 0, 0, .55);
+}
+.fsMenu[hidden] { display: none; }
+.fsMenu button {
+  text-align: left; padding: 7px 11px; border: 0; border-radius: 7px;
+  background: transparent; color: #dfe6f2; font-size: 14px;
+  font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.fsMenu button:hover { background: #26314a; }
+/* 触屏：菜单是"点一下"打开的（没有 hover），按住区域要够大，快捷键那行
+   （Shift+F）也比桌面长一点，别挤成两行。 */
+@media (hover: none) {
+  .fsMenu { min-width: 168px; padding: 6px; }
+  .fsMenu button { padding: 11px 14px; min-height: 42px; font-size: 15px; }
+}
+
 /* 全屏观看时右上角不该有「1.00x 全屏」这种缩放指示文字 */
 #stageWrap.fs #dbgFit { display: none; }
 
@@ -1207,3 +1278,26 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-radius:3px;
 /* 工具栏里已经有「⛶ 退出」了：右上角这个就不显示（由 syncFsExitBtn 控制）。
    选择器要跟上面 `#stageWrap.fs #fsExit` 同级才压得住它。 */
 #stageWrap.fs #fsExit.redundant { display: none; }
+
+/* 窄屏（手机竖屏 / 小窗口）+ 全屏：390px 宽的单行工具栏必然塞不下 —— 选项组
+   会横向滚出屏幕，「⛶ 全屏/退出」直接点不到（用户 2026-11-24：「竖屏工具栏
+   位置有限」）。竖屏时舞台只占中间一条，底部大片黑边正好放得下多行，改成三行：
+   ① 播放控制  ② 倍速/自动/对话框/全屏  ③ 进度条。
+   用宽度判断而不是 `(hover:none)`：后者在桌面模拟/带触屏的笔记本上不可靠，
+   而"窄"才是真正决定塞不塞得下的条件。宽屏横屏保持原来的单行紧凑模式。 */
+@media (max-width: 720px) {
+  #stageWrap.fs #controls.in-fs {
+    flex-wrap: wrap; row-gap: 6px; padding: 6px 10px;
+  }
+  #stageWrap.fs #controls.in-fs .gPlay {
+    flex: 1 1 100%; order: 1; justify-content: center;
+  }
+  #stageWrap.fs #controls.in-fs .gOpt {
+    flex: 1 1 100%; order: 2; justify-content: center;
+    overflow: visible; flex-wrap: wrap;
+  }
+  #stageWrap.fs #controls.in-fs .gProgress {
+    flex: 1 1 100%; order: 3; min-width: 0;
+  }
+  #stageWrap.fs #controls.in-fs .ctl { flex: none; }
+}

@@ -24,6 +24,9 @@ body.show-page #fPage{z-index:3;opacity:1;pointer-events:auto}
 /* 没在放歌时不挂空条：要有播放会话才出现 */
 body.show-page.has-session #gBar{display:block}
 body.hide-bar #gBar{display:none !important}
+/* 播放器进入「网页全屏」时由 ui:wfs 消息挂上：常驻播放条也要收掉。
+   用独立 class，别复用 hide-bar（那是用户自己的设置，退出全屏时不能改它）。 */
+body.wfs-hide #gBar{display:none !important}
 #gBar.pos-left{left:18px;transform:none}
 #gBar.pos-right{left:auto;right:18px;bottom:88px;transform:none}
 #gBar.pos-center{left:50%;transform:translateX(-50%)}
@@ -356,6 +359,12 @@ body.hide-bar #gBar{display:none !important}
     if (m.t === 'ost:reload-music') { reloadMusic(); return; }
     if (m.t === 'ost:cfg') { applyCfg(m.d); return; }
     if (m.t === 'ost:storyplay') { if (cfg.pauseOnStory) send('pause'); return; }
+    /* 播放器的「网页全屏」只隐藏它自己 iframe 里的菜单，这条常驻播放条
+       画在外壳上，必须由外壳配合收掉（否则网页全屏时画面底部还浮着一条）。 */
+    if (m.t === 'ui:wfs') {
+      document.body.classList.toggle('wfs-hide', !!m.on);
+      return;
+    }
     if (m.t !== 'ost:state') return;
     S = m.d;
     paint();

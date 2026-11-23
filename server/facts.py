@@ -57,9 +57,11 @@ PUBLIC_PARTS = {
     # 前缀串必须**如实**列出全部来源：真正下哪些包由 stages.avatar_bundle_applicable()
     # 决定（cpanel 半身像也在里面 —— 播放器多形态角色还要用它的 170 头像），
     # 这里只写官方 d/b/n/e 会让下一个人以为 cpanel 已经不装了（2026-11-17 审计）。
+    # 2026-11-23：``bundle_battle_character_icon_character_200xx`` 是**角色战斗
+    # 图标**（20000 + 角色 ID），与剧情敌人 5xxx 立绘不是一套编号，已不再当头像
+    # 来源（会写出别人的脸），所以这里也不再列它。
     "avatar": ("角色/NPC/敌人头像",
-               "bundle_chara_c-panel_|bundle_usericon_user_icon_"
-               "|bundle_battle_character_icon_character_", 38),
+               "bundle_chara_c-panel_|bundle_usericon_user_icon_", 36),
     # 剧情横幅：角色剧情入口图 + 主线/活动/其他的章节横幅（播放器当标题用）
     "banner": ("剧情横幅", "bundle_episodeicons_episode_character_|bundle_image_story_", 40),
     # 演出特效：表情符号（汗/怒り/落ち込み…）与画面特效的原图集与逐帧参数表。

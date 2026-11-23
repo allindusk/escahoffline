@@ -249,7 +249,10 @@ def plan():
     known = {(r[0], r[1]) for r in rows} | dup
     rows += _auto_rows(rows, known)
     rows = [r for r in rows if (r[0], r[1]) not in dup]
-    rows.sort(key=lambda r: (ORDER.index(r[2]), _rank(*r)))
+    # ORDER.index 会 KeyError —— 自动归类引入了 ORDER 里没有的入口时，
+    # 整棵 plan() 会崩（同步直接放弃写入）。用字典兜底排序，未知入口排最后。
+    oi = {e: i for i, e in enumerate(ORDER)}
+    rows.sort(key=lambda r: (oi.get(r[2], len(ORDER)), _rank(*r)))
     return rows
 
 
@@ -407,9 +410,10 @@ def _state(rows):
         "raid": {e: len(p) for e, p in RAID_PACKS.items()},
         "stampede": max(STAMPEDE_PACKS.values(), default=0),
         "wide": {e: sum(1 for r in rows if r[2] == e) for e in WIDE_LABEL},
-        "honey_year": max(int(x) for x in HONEYDAY_PACKS.values()),
-        "april_year": max(int(t[:4]) for ts in APRIL_PACKS.values()
-                          for t in ts if t[:4].isdigit()),
+        # 表里可能被清空（或年份写法异常）→ 给个默认值，别让 max() 抛 ValueError
+        "honey_year": max([int(x) for x in HONEYDAY_PACKS.values()] or [2026]),
+        "april_year": max([int(t[:4]) for ts in APRIL_PACKS.values()
+                           for t in ts if t[:4].isdigit()] or [2026]),
     }
 
 
@@ -457,13 +461,25 @@ def _auto_rows(rows, known):
         if not missing:
             continue
         if no in by_pack:
-            extra = _append_parts(no, missing, by_pack[no], st)
+            try:
+                extra = _append_parts(no, missing, by_pack[no], st)
+            except Exception as e:                             # noqa: BLE001
+                # 单个包出问题不能把整棵 plan() 带崩（那会让 othereps 一个字都写不进去）
+                extra = [(no, i, -1, f"新剧情 包{no} 第{i + 1}段") for i in missing]
+                print(f"  [自动续号失败] other_{no}: {type(e).__name__}: {e}")
             out += extra
-            print(f"  [自动续号] other_{no} 多出 {len(missing)} 段 → "
-                  f"{ENTRIES.get(extra[0][2], '?')}：{extra[0][3]} …")
+            if extra:
+                print(f"  [自动续号] other_{no} 多出 {len(missing)} 段 → "
+                      f"{ENTRIES.get(extra[0][2], '?')}：{extra[0][3]} …")
             continue
-        parts = read_js(os.path.join(DATA, f"adv_other_{no}.js"))["parts"]
-        got, conf, why = classify_pack(no, parts, st)
+        # 同理：**逐包 try**。以后遇到新格式的包（新 BOSS、特殊合集…）顶多是它自己
+        # 落到「未归类」，不会像 2026-11-23 的 other_80 那样 `_rank` KeyError 把
+        # 所有包的分组一起搞崩。
+        try:
+            parts = read_js(os.path.join(DATA, f"adv_other_{no}.js"))["parts"]
+            got, conf, why = classify_pack(no, parts, st)
+        except Exception as e:                                 # noqa: BLE001
+            parts, got, conf, why = [], None, "低", f"归类出错（{type(e).__name__}: {e}）"
         if got:
             out += got
             print(f"  [自动归类·{conf}] other_{no}（{len(parts)}段）→ "
@@ -484,7 +500,13 @@ def _rank(no, part, entry, _title):
     if entry == 1000:
         if no in HONEYDAY_PACKS:
             return (0, int(HONEYDAY_PACKS[no]))
-        return (1, float(ANNIV_PACKS[no]))
+        if no in ANNIV_PACKS:
+            return (1, float(ANNIV_PACKS[no]))
+        # 自动归类的周年包（不在硬编码表里，例如 other_80 = 6 周年）：以前直接
+        # `ANNIV_PACKS[no]` 会 KeyError，整棵 plan() 崩掉 → sync_othereps 什么都
+        # 写不进去（2026-11-23 用户反馈「其他剧情 第80话没归类」的真因之一）。
+        # 按包号排在已知周年之后即可（顺带当"自动归类"的标记）。
+        return (1, 100 + float(no))
     return (0, no, part)
 
 

@@ -29,6 +29,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import threading
@@ -317,6 +318,29 @@ def capture_stdio() -> bool:
     except Exception:                                        # noqa: BLE001
         pass
     return True
+
+
+@contextlib.contextmanager
+def quiet_stdio(tag: str = "boot"):
+    """临时把 stdout 接进 app.log —— 启动阶段的 print 不该落到启动窗口里。
+
+    为什么需要：``capture_stdio()`` 必须等横幅与访问地址打印完才接管，而启动
+    校正（剧情目录重建、头像来源修正）跑在它前面；那段时间里历史脚本的
+    ``print`` 会直接写到窗口（实测漏出来的一句：``advindex.js：0 部本机剧情
+    + 保留目录 233 条``）。用局部上下文比把这些函数的 print 一条条改掉可靠 ——
+    以后新加进启动路径的旧函数也自动静音。
+    设 ``ESCAH_KEEP_CONSOLE=1``（开发模式）时不接管，照旧在窗口里看得到。
+    """
+    import sys
+    if os.environ.get("ESCAH_KEEP_CONSOLE"):
+        yield
+        return
+    old = sys.stdout
+    sys.stdout = _LogStream(tag)
+    try:
+        yield
+    finally:
+        sys.stdout = old
 
 
 def tail(n: int = 120) -> str:

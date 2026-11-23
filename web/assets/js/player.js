@@ -108,6 +108,15 @@ function timeMs(v, defMs, sentinelMs) {
 }
 
 /* ================= 舞台缩放 ================= */
+/* 触屏（没有 hover 的精确指针）判定。不能直接用文件后面那个常量 CAN_HOVER ——
+   fitStage 在启动阶段就会跑，那时它还没初始化（TDZ）。 */
+function _noHover() {
+  try {
+    if (new URLSearchParams(location.search).has('nohover')) return true;  // 测试钩子
+    return !(window.matchMedia
+      && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+  } catch (e) { return false; }
+}
 function fitStage() {
   const wrap = $('#stageWrap'), stage = $('#stage');
   if (!wrap || !stage) return;
@@ -115,8 +124,14 @@ function fitStage() {
   const w = wrap.clientWidth, h = wrap.clientHeight;
   const base = Math.min(w / 1280, h / 720);
   let s;
-  // 全屏：无视「1x 不放大」设定，直接铺满大屏（素材已超分，放大也清晰）
-  if (wrap.classList.contains('fs')) s = base;
+  /* 原生全屏 / 伪全屏：无视「1x 不放大」设定，直接铺满大屏（素材已超分）。
+     **网页全屏例外**：它只是把本站菜单收起来，画面尺寸仍按用户设置
+     （1.0x 就是 1280×720，不许偷偷放大）——2026-11-23 用户明确要求。 */
+  const webFs = document.body.classList.contains('wfs');
+  /* 手机/平板没有鼠标：网页全屏时如果还按「1.0x = 1280×720」算，一台 390px
+     宽的手机会得到 390×220 的小画面（上下大片黑边），等于没法看。触屏设备
+     的网页全屏一律按"铺满可用区域"来算（跟原生全屏一致），桌面仍严格按设置。 */
+  if (wrap.classList.contains('fs') && (!webFs || _noHover())) s = base;
   else if (SET.fit === '1x') s = Math.min(base, 1);  // 不放大，720p 素材 1:1 最清晰
   else if (SET.fit === '15') s = Math.min(base, 1.5);
   else s = base * 0.995;                              // 适应窗口
@@ -141,16 +156,80 @@ window.addEventListener('resize', fitStage);
  */
 let _ctlHome = null;            // 控制条原来的父节点与后继兄弟
 let _fsChromeTimer = null;
+let _curHideTimer = null;       // 「鼠标静止 N 秒后隐藏光标」的独立计时器
 
 function _fsActive() {
   const el = document.getElementById('stageWrap');
   return !!(document.fullscreenElement || document.webkitFullscreenElement)
-    || !!(el && el.classList.contains('fsp'));
+    || !!(el && el.classList.contains('fsp'))
+    || document.body.classList.contains('wfs');
+}
+
+/* 光标隐藏：**不能只挂在工具栏的自动隐藏上**。工具栏时长设成「不隐藏」、
+   或者触屏语义（tapOnce 不是 bar）不进 showFsChrome 时，以前就永远不会有
+   hidecur，鼠标停在画面上一直不消失（2026-11-23 用户反馈「按 F 全屏鼠标
+   不会自动消失」）。这里独立计时：进全屏先藏，鼠标一动先露再重新计时。 */
+function _armCursorHide(ms) {
+  const el = document.getElementById('stageWrap');
+  if (!el) return;
+  clearTimeout(_curHideTimer);
+  _curHideTimer = setTimeout(() => {
+    _curHideTimer = null;
+    if (_fsActive()) el.classList.add('hidecur');
+  }, Math.max(600, Number(ms) || 2600));
+}
+function _wakeCursor() {
+  const el = document.getElementById('stageWrap');
+  if (!el) return;
+  el.classList.remove('hidecur');
+  if (_fsActive()) _armCursorHide(2600);
+}
+function _stopCursorHide() {
+  clearTimeout(_curHideTimer);
+  _curHideTimer = null;
+  const el = document.getElementById('stageWrap');
+  if (el) el.classList.remove('hidecur');
+}
+
+/* 网页全屏：只在本页把菜单收起来，不向浏览器要原生全屏。
+   on=true 进、false 出、不传 = 切换。 */
+function setWebFullscreen(on) {
+  const el = document.getElementById('stageWrap');
+  if (!el) return;
+  const want = (on == null) ? !document.body.classList.contains('wfs') : !!on;
+  if (want) {
+    /* 已经处于原生全屏时先退出：两种全屏都开着没有意义，而且原生全屏
+       会盖在网页全屏的菜单之上，观感和退出路径都会乱。 */
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen
+        || document.msExitFullscreen;
+      if (exit) { try { exit.call(document); } catch (e) { /* 忽略 */ } }
+    }
+    document.body.classList.add('wfs');
+    el.classList.add('fsp');
+  } else {
+    document.body.classList.remove('wfs');
+    /* 原生全屏还开着时保留 fsp（它是原生全屏被拒时的兜底），别误关。 */
+    if (!(document.fullscreenElement || document.webkitFullscreenElement)) {
+      el.classList.remove('fsp');
+    }
+  }
+  onFsChange();
+  /* 外壳（shell.html）的常驻播放条画在 iframe 外面，网页全屏时也要收掉。
+     外壳那边只认这一条消息（见 shell.html 的 ui:wfs 分支）。 */
+  try {
+    if (window.parent !== window) {
+      window.parent.postMessage({ t: 'ui:wfs', on: want }, location.origin);
+    }
+  } catch (e) { /* 异源 / 无外壳：忽略 */ }
 }
 
 function toggleFullscreen() {
   const el = document.getElementById('stageWrap');
   if (!el) return;
+  /* 网页全屏时按「退出」/F：直接退回到普通页面（不要再切成原生全屏，
+     否则按钮写着「退出」却进得更彻底，用户只会更懵）。 */
+  if (document.body.classList.contains('wfs')) { setWebFullscreen(false); return; }
   // 已在原生全屏：退出
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     const exit = document.exitFullscreen || document.webkitExitFullscreen
@@ -198,6 +277,9 @@ function showFsChrome() {
   if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
   const ms = Number(SET.fsBarHide);
   if (ms > 0) _fsChromeTimer = setTimeout(hideFsChrome, ms);
+  /* 光标隐藏独立于工具栏：点按钮唤出工具栏后，只要鼠标不再动，光标也该隐藏
+     （工具栏设成「不隐藏」时 ms=0，上面那条计时器不会跑）。 */
+  _armCursorHide(ms > 0 ? ms : 2600);
 }
 
 /* 收起控制条（自动淡出 / 再点一下画面 / 退出全屏都走这里） */
@@ -234,7 +316,14 @@ function syncFsExitBtn() {
   const ex = document.getElementById('fsExit');
   const ctl = document.getElementById('controls');
   if (!ex || !ctl) return;
+  /* 网页全屏（wfs）不是系统全屏：没有系统返回键/手势可退，所以把它标出来，
+     让按钮文案直接说「退出网页全屏」。显隐跟原生全屏完全一样 —— 只随工具栏
+     出现/淡出（2026-11-24 用户：右上角一直挂着关闭按钮很难看）。wfs 进来时
+     会先弹一次工具栏，之后按「设置 → 播放/手势」的单击/双击再唤出
+     （双击默认=暂停，会顺带把工具栏弹出来）。 */
+  const webFs = document.body.classList.contains('wfs');
   ex.classList.toggle('redundant', !ctl.classList.contains('hideOpt'));
+  ex.textContent = webFs ? '✕ 退出网页全屏' : '✕ 退出全屏';
 }
 
 /* 工具栏弹出时把对话框顶上去，别糊住字幕。
@@ -278,6 +367,7 @@ function _fsShowCursor(e) {
     if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
     if (e.mozInputSource === 1) return;          // Firefox：1 = 触摸
   }
+  _wakeCursor();                                 // 鼠标动了先把光标露出来
   showFsChrome();
 }
 
@@ -333,6 +423,7 @@ function onFsChange() {
   const el = document.getElementById('stageWrap');
   const fs = _fsActive();
   if (el) el.classList.toggle('fs', fs);
+  if (window.__fsMenuHide) window.__fsMenuHide();
   /* 全屏时尽量把屏幕转成横屏（舞台本来就是 16:9 横版），退出时解锁回到
      系统默认的竖屏。iOS / 桌面拿不到锁权限，静默失败（见 common.js 的 ESC.orient）。 */
   if (window.ESC && ESC.orient) {
@@ -340,7 +431,11 @@ function onFsChange() {
   }
   fitStage();
   const b = document.getElementById('btnFs');
-  if (b) b.textContent = fs ? '⛶ 退出' : '⛶ 全屏';
+  if (b) {
+    b.textContent = fs ? '⛶ 退出' : '⛶ 全屏';
+    /* 全屏里只有一个动作（退出），别让读屏还念"全屏 / 网页全屏" */
+    b.setAttribute('aria-label', fs ? '退出全屏' : '全屏 / 网页全屏');
+  }
   _fsMoveControls(fs);
   if (fs && el) {
     _ensureFsExit();
@@ -351,19 +446,145 @@ function onFsChange() {
     if (hasHover) el.addEventListener('mousemove', _fsShowCursor);
     /* 触屏**不在** touchstart / 进入全屏时自动弹工具栏：
        单击要不要弹由「设置 → 播放/手势」决定。用户把单击设成「下一句」就是
-       不想被工具栏打断（2026-11-18 反馈），那进来时也别弹。 */
-    if ((SET.tapOnce || 'bar') === 'bar') showFsChrome();
+       不想被工具栏打断（2026-11-18 反馈），那进来时也别弹。
+       **网页全屏例外**：它不是系统全屏，没有返回键可用，进来时必须让用户看见
+       「退出」在哪儿（2026-11-24 反馈：网页全屏后没有任何选项）。 */
+    const webFs = document.body.classList.contains('wfs');
+    if ((SET.tapOnce || 'bar') === 'bar' || webFs) showFsChrome();
+    /* 光标隐藏独立计时：不依赖工具栏是否弹出/是否配了自动隐藏。 */
+    if (hasHover) _armCursorHide((SET.tapOnce || 'bar') === 'bar' ? 2600 : 1200);
   } else if (el) {
     el.removeEventListener('mousemove', _fsShowCursor);
-    el.classList.remove('hidecur');
+    _stopCursorHide();
     if (_fsChromeTimer) { clearTimeout(_fsChromeTimer); _fsChromeTimer = null; }
     syncFsLift();                    // 退出全屏：对话框位置归零
   }
 }
 document.addEventListener('fullscreenchange', onFsChange);
 document.addEventListener('webkitfullscreenchange', onFsChange);
-const _btnFs = document.getElementById('btnFs');
-if (_btnFs) _btnFs.onclick = toggleFullscreen;
+/* 全屏按钮 = 一个按钮两种全屏，切法全在**同一个菜单**里（用户 2026-11-23）：
+   · 桌面：鼠标移上去弹菜单，点哪项进哪个；
+   · 触屏：点一下弹菜单（没有 hover；以前只能双击进网页全屏，而且进去以后
+     没有任何可见的退出路径 —— 菜单里的「退出网页全屏」就是出口）；
+   · 键位：F / Shift+F 照旧。
+   按钮自己**不挂 title** —— 原生 title 气泡会和菜单叠成两个浮窗，快捷键写在
+   菜单项里（全屏（F） / 网页全屏（Shift+F））。 */
+(function initFsButton() {
+  const btn = document.getElementById('btnFs');
+  if (!btn) return;
+  const canHover = () => !_noHover();
+
+  const menu = document.createElement('div');
+  menu.id = 'fsMenu';
+  menu.className = 'fsMenu';
+  menu.hidden = true;
+  menu.innerHTML = '<button type="button" data-fs="native"></button>'
+    + '<button type="button" data-fs="web"></button>';
+  /* 必须挂在 #stageWrap 里：原生全屏只渲染被 requestFullscreen 的那个元素，
+     挂在 body 上时全屏中根本不显示（fixed 定位不受 #stageWrap 的裁剪影响）。 */
+  (document.getElementById('stageWrap') || document.body).appendChild(menu);
+  let hideT = 0;
+  let clickT = 0;
+  /* 触屏点按会合成一串鼠标事件（pointerover→mouseenter→mousedown→click）。
+     以前 mouseenter 先把菜单打开，紧接着 click 看到"已经开着"就关掉 ——
+     用户必须点第二次才看得见菜单（2026-11-24 反馈）。 */
+  let lastTouchAt = 0;
+
+  function syncItems() {
+    /* 这个菜单**只在没进全屏时**出现（进去以后按钮本身就是「退出」），
+       所以两项永远是"进入"文案，不会再问一次"要不要退出"。 */
+    const k = (typeof keyLabelsOf === 'function') ? keyLabelsOf('fullscreen') : 'F';
+    const a = menu.querySelector('[data-fs="native"]');
+    const b = menu.querySelector('[data-fs="web"]');
+    if (a) a.textContent = '全屏（' + k + '）';
+    if (b) b.textContent = '网页全屏（Shift+' + k + '）';
+  }
+  function show(force) {
+    /* 触屏刚按下时浏览器补发的 mouseenter 不算"悬停"：否则它先把菜单打开、
+       随后那次 click 又把它关掉，表现就是"要点两下"。 */
+    if (!force && Date.now() - lastTouchAt < 900) return;
+    clearTimeout(hideT);
+    syncItems();
+    menu.hidden = false;
+    const r = btn.getBoundingClientRect();
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    const left = Math.max(6, Math.min(r.right - w, innerWidth - w - 6));
+    let top = r.top - h - 8;
+    if (top < 6) top = Math.min(innerHeight - h - 6, r.bottom + 8);
+    menu.style.left = Math.round(left) + 'px';
+    menu.style.top = Math.round(top) + 'px';
+  }
+  function hideNow() {
+    clearTimeout(hideT);
+    menu.hidden = true;
+  }
+  function hideSoon() {
+    clearTimeout(hideT);
+    hideT = setTimeout(() => { menu.hidden = true; }, 180);
+  }
+
+  btn.removeAttribute('title');
+  btn.setAttribute('aria-label', '全屏 / 网页全屏');
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    /* **已经在任何全屏里 → 直接退出，不再弹切换菜单**：按钮上写的就是「退出」，
+       再问一次"要全屏还是网页全屏"自相矛盾（2026-11-24 用户反馈）。 */
+    if (_fsActive()) {
+      clearTimeout(clickT);
+      clickT = 0;
+      hideNow();
+      toggleFullscreen();
+      return;
+    }
+    if (e.shiftKey) { hideNow(); setWebFullscreen(); return; }
+    if (!canHover()) {
+      /* 触屏（未进全屏）：点一下开/关菜单，选进哪种全屏。 */
+      if (menu.hidden) show(true); else hideNow();
+      return;
+    }
+    if (e.detail >= 2) return;        // 桌面双击不再当快捷键（会和菜单打架）
+    /* 桌面单击 = 进原生全屏（延迟 230ms 是历史习惯，给菜单点击让路）。 */
+    clearTimeout(clickT);
+    clickT = setTimeout(() => {
+      clickT = 0;
+      hideNow();
+      toggleFullscreen();
+    }, 230);
+  };
+  btn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+  /* 记下"这一下是手指/笔"：决定上面 show() 是否忽略合成 mouseenter */
+  btn.addEventListener('pointerdown', (e) => {
+    if (e.pointerType && e.pointerType !== 'mouse') lastTouchAt = Date.now();
+  }, { passive: true });
+  /* 悬停菜单只在真有鼠标的设备上绑 —— 触屏设备绑了只会被合成事件反复触发 */
+  if (canHover()) {
+    /* 全屏里悬停也不再弹菜单：那时按钮是「退出」，鼠标点一下就走 */
+    btn.addEventListener('mouseenter', () => { if (!_fsActive()) show(false); });
+    btn.addEventListener('mouseleave', hideSoon);
+    menu.addEventListener('mouseenter', () => clearTimeout(hideT));
+    menu.addEventListener('mouseleave', hideSoon);
+  }
+  /* 触屏点菜单以外的任何地方 → 收起（菜单是浮层，收不起来会一直挡着画面） */
+  document.addEventListener('pointerdown', (e) => {
+    if (menu.hidden) return;
+    const t = e.target;
+    if (t && (menu.contains(t) || btn.contains(t))) return;
+    hideNow();
+  }, true);
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    e.preventDefault();
+    e.stopPropagation();
+    hideNow();
+    if (b.dataset.fs === 'web') setWebFullscreen();
+    else toggleFullscreen();
+  });
+  window.addEventListener('scroll', hideNow, true);
+  window.addEventListener('resize', hideNow);
+  window.__fsMenuHide = hideNow;
+})();
+
 /* 在全屏工具栏上点按钮时重置自动隐藏计时：
    否则手机上"点开工具栏→看两秒→刚要点"就淡没了。 */
 (function bindFsBarKeepAlive() {
@@ -1191,6 +1412,9 @@ function autoTalk(name) {
        「ブライドエスカレイヤー・リバース」 → 公共子串「リバース」(4)
      取最高分后只剩后者，和游戏一致（用户 2026-11-09 反馈两个都亮）。 */
   let best = null, bestScore = 0;
+  /* 字面对不上但编号能确认是同一人的（组名「王衣衣」/话者「イーイー」）：
+     收集起来，只有唯一一张时才点亮，多张都像就维持原状。 */
+  const idHits = [];
   ST.stands.forEach(el => {
     const gid = el.dataset.gid || '';
     if (!gid) return;
@@ -1201,10 +1425,15 @@ function autoTalk(name) {
       const c = commonSub(gid, nm);
       if (c >= 3) score = c;
     }
+    if (!score && avIdIsName(avStandNum(el), nm)) idHits.push(el);
     if (score > bestScore) { bestScore = score; best = el; }
   });
   if (best) {
     ST.stands.forEach(el => el.classList.toggle('dim', el !== best));
+    return;
+  }
+  if (idHits.length === 1) {
+    ST.stands.forEach(el => el.classList.toggle('dim', el !== idHits[0]));
     return;
   }
   /* 说话人**不在场**（画外音，或者台词名是别的角色）：在场的一个都不是说话者，
@@ -1269,7 +1498,37 @@ function mulColorBg(m) {
     applyMulColor(i, r, g, b, ms);
   });
 }
+/* Sepia 的实现用 feColorMatrix，不用 CSS 的 sepia()：
+   游戏里回忆/过去的色调是「去饱和后乘一层琥珀色」，实测目标 ≈
+   灰度 × (1.02, 0.72, 0.43)（从游戏截图逐区域取色拟合）。
+   CSS sepia()+saturate() 的固有色偏是 1 : 0.89 : 0.69，饱和度调高时
+   绿通道几乎不动（实测 saturate(2) 仍是 0.81 : 0.44），怎么调都不是
+   那种偏橙的琥珀色 —— 直接写成矩阵才和游戏对得上。 */
+let _drawFiltersReady = false;
+function ensureDrawFilters() {
+  if (_drawFiltersReady) return;
+  const host = document.getElementById('mulFilters');
+  if (!host) return;
+  _drawFiltersReady = true;
+  const NS = 'http://www.w3.org/2000/svg';
+  const f = document.createElementNS(NS, 'filter');
+  f.setAttribute('id', 'fSepiaMode');
+  f.setAttribute('color-interpolation-filters', 'sRGB');
+  const cm = document.createElementNS(NS, 'feColorMatrix');
+  cm.setAttribute('type', 'matrix');
+  const k = [1.02, 0.72, 0.43];              // 目标色（乘在灰度上）
+  const lum = [0.299, 0.587, 0.114];         // 灰度权重
+  const vals = [];
+  for (let i = 0; i < 3; i++) {
+    vals.push(k[i] * lum[0], k[i] * lum[1], k[i] * lum[2], 0, 0);
+  }
+  vals.push(0, 0, 0, 1, 0);
+  cm.setAttribute('values', vals.join(' '));
+  f.appendChild(cm);
+  host.appendChild(f);
+}
 function setDrawMode(mode) {
+  ensureDrawFilters();
   const st = $('#stage');
   st.classList.remove('f-sepia', 'f-gray');
   if (mode === 'sepia') st.classList.add('f-sepia');
@@ -3129,6 +3388,51 @@ function avValid(id) {
   if (!window.ESC || !ESC.media || typeof ESC.media.has !== 'function') return true;
   return ESC.media.has('avatar', id) !== false;
 }
+/** 立绘编号是不是这位话者本人。
+ *  立绘组名和话者名常常是**完全不同的写法**：中文全名「王衣衣」vs 话者「イーイー」、
+ *  「閃忍カズハ」vs「和葉」，字面比不出来就直接没头像、立绘还被压暗
+ *  （2026-11-20 用户反馈：活动剧情 第99话 第16段 伊伊 有立绘没头像）。
+ *  这里改用**编号级证据**：__AVNAMES.gid 里属于同一个立绘编号的其它组名
+ *  只要末尾就是这位话者名，就说明这个编号就是这个角色（生成表里「運命のイーイー」也是 087）。
+ *  只认「组名以话者名结尾」一个方向：「アカリの母」不会被当成「アカリ」的立绘。 */
+let AV_IDNAMES = null;
+function avIdNames(id) {
+  if (!AV_IDNAMES) {
+    AV_IDNAMES = new Map();
+    const gid = (window.__AVNAMES || {}).gid || {};
+    for (const k in gid) {
+      if (gid[k] == null) continue;
+      const sid = String(Number(gid[k]));
+      if (!AV_IDNAMES.has(sid)) AV_IDNAMES.set(sid, []);
+      AV_IDNAMES.get(sid).push(avNorm(k));
+    }
+  }
+  return AV_IDNAMES.get(String(Number(id))) || null;
+}
+const AV_NAME_ID_CACHE = new Map();
+function avIdIsName(id, raw) {
+  const nm = avNorm(raw);
+  const sid = String(Number(id));
+  if (!nm || !sid || sid === 'NaN') return false;
+  const key = sid + '|' + nm;
+  if (AV_NAME_ID_CACHE.has(key)) return AV_NAME_ID_CACHE.get(key);
+  let hit = false;
+  /* 话者名必须落在组名**末尾**：组名都是「形态前缀 + 名字」，
+     放宽成任意位置会把「ビートフーマン・ツクモ」认成族名「フーマン」。 */
+  for (const g of (avIdNames(sid) || [])) {
+    if (!g) continue;
+    const at = g.lastIndexOf(nm);
+    if (at >= 0 && at + nm.length === g.length) { hit = true; break; }
+  }
+  AV_NAME_ID_CACHE.set(key, hit);
+  return hit;
+}
+/** 立绘元素对应的角色编号（stand_087_xxx → 087） */
+function avStandNum(el) {
+  if (!el || !el.dataset) return '';
+  const m = /^(?:stand|char)_(\d+)_/i.exec(String(el.dataset.stId || ''));
+  return m ? m[1] : '';
+}
 /** 当前说话人的立绘：优先取唯一亮着的那张（autoTalk 已经把其他人压暗）；
  *  多张同时亮时，再按名字挑最像的。 */
 function avStandFor(raw) {
@@ -3140,10 +3444,12 @@ function avStandFor(raw) {
   if (lit.length === 1) {
     /* 画面只有一张立绘时，也必须是当前话者的立绘。
        例如「时贞」说话、画面上却是エスカ的立绘：立绘存在不代表
-       头像属于时贞，名字对不上就返回 null，宁可不显示头像。 */
+       头像属于时贞，名字对不上就返回 null，宁可不显示头像。
+       组名写法不同（王衣衣 / イーイー）时走编号级确认，仍是同一个人。 */
     const el = lit[0];
     const gid = avNorm(el.dataset.gid || '');
     if (nm && gid && avScore(gid, nm) >= 500) return el;
+    if (nm && avIdIsName(avStandNum(el), raw)) return el;
     return null;
   }
   if (nm && lit.length) {
@@ -3155,6 +3461,14 @@ function avStandFor(raw) {
       if (s > bestScore) { bestScore = s; best = el; }
     });
     if (best && bestScore >= 500) return best;
+    /* 字面对不上时，只接受**唯一**一张能按编号确认是这位话者的立绘：
+       两张以上都能确认说明判断不可靠，宁可不显示。 */
+    let uniq = null, dup = false;
+    lit.forEach(el => {
+      if (!avIdIsName(avStandNum(el), raw)) return;
+      if (uniq) dup = true; else uniq = el;
+    });
+    if (uniq && !dup) return uniq;
   }
   return null;
 }
@@ -3266,6 +3580,16 @@ function avIdFromStandKey(stKey, side) {
 function avStandId(el, side) {
   return el ? avIdFromStandKey(el.dataset.stId, side) : null;
 }
+/** ShowStand 的组名是否就是这位话者。字面对不上时（中文组名「王衣衣」
+ *  ↔ 话者「イーイー」）再看立绘编号：同一个编号的其它组名包含话者名
+ *  就说明是同一个人，仍然是**先认人再看图**，不会张冠李戴。 */
+function avGroupIsName(group, key, raw) {
+  const nm = avNorm(raw);
+  const g = avNorm(group);
+  if (nm && g && (g === nm || g.indexOf(nm) >= 0 || nm.indexOf(g) >= 0)) return true;
+  const m = /^(?:stand|char)_(\d+)_/i.exec(String(key || ''));
+  return !!(m && avIdIsName(m[1], raw));
+}
 function avLastStandId(side) {
   const ms = ST.methods || [];
   /* seekTo 期间 curMsgIdx 可能还是上一句的旧值（实测从 3 跳到 154 时
@@ -3283,7 +3607,7 @@ function avLastStandId(side) {
     /* CG 场景可回看 CG 之前最后一张立绘；但只有立绘组名和当前话者
        对得上才用，避免「时贞」的台词被套成尤诺头像。c=正数的 CG
        已经在前面按角色 id 处理，不需要过这一关。 */
-    if (nm && group && !(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
+    if (nm && group && !avGroupIsName(group, key, nm)) continue;
     const id = avIdFromStandKey(key, side);
     if (id) return id;
   }
@@ -3297,7 +3621,7 @@ function avLastStandId(side) {
     const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
     const group = String(m.GroupId || '').trim();
     if (!nm || !group) continue;
-    if (!(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
+    if (!avGroupIsName(group, key, nm)) continue;
     const id = avIdFromStandKey(key, side);
     if (id) return id;
   }
@@ -3316,9 +3640,9 @@ function avLastStandId(side) {
       if (!m || (m.Method !== 'ShowStand' && m.Method !== 'ShowStandEffect')) continue;
       const group = String(m.GroupId || '').trim();
       if (!nm || !group) continue;
-      if (!(group === nm || group.indexOf(nm) >= 0 || nm.indexOf(group) >= 0)) continue;
-      const id = avIdFromStandKey(m.StandImage || m.Stand || m.StandKey || m.Image || '',
-        side);
+      const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
+      if (!avGroupIsName(group, key, nm)) continue;
+      const id = avIdFromStandKey(key, side);
       if (id) return id;
     }
   }
@@ -3393,6 +3717,9 @@ function avNameIsId(raw, id) {
   for (const k in gid) {
     if (gid[k] != null && String(Number(gid[k])) === sid && hit(k)) return true;
   }
+  /* 跨写法（中文组名「王衣衣」↔ 话者「イーイー」）：字面比不出来，
+     但编号的其它组名能确认是同一人。 */
+  if (avIdIsName(sid, raw)) return true;
   const full = (window.__NAMES || {})[sid];
   return !!full && hit(full);
 }
@@ -5461,7 +5788,7 @@ function syncSettingControls() {
   syncMsgRanges();                     // 垂直位置上限/水平位置可用性
   $('#setStroke').value = Math.round((SET.msgStroke ?? 1.2) * 10);
   $('#setAlign').value = SET.msgAlign || 'left';
-  $('#sortBy').value = SET.sortBy || 'id';
+  $('#sortBy').value = SET.sortBy || 'date-desc';
   const rarArr = (SET.rarSel || '').split(',');
   // 只碰 SSR/SR/R（带 data-r 的）；第四格「播放记录」不是稀有度，状态由 setHistView 管
   document.querySelectorAll('.rar-row button[data-r]').forEach(b =>
@@ -6083,7 +6410,11 @@ function syncKeyHints() {
   }
   const btnFs = document.getElementById('btnFs');
   if (btnFs) {
-    btnFs.title = L10N.t('ctrl.fs', '全屏（{key}）', { key: keyLabelsOf('fullscreen') });
+    /* 只写 aria-label：这个按钮上已经有「全屏 / 网页全屏」菜单，再挂 title
+       就会被浏览器再弹一个原生气泡（2026-11-23 用户报的两个浮窗）。 */
+    btnFs.setAttribute('aria-label', _fsActive()
+      ? L10N.t('ctrl.fsExit', '退出全屏（{key}）', { key: keyLabelsOf('fullscreen') })
+      : L10N.t('ctrl.fs', '全屏（{key}）', { key: keyLabelsOf('fullscreen') }));
   }
   const sToggle = document.getElementById('sToggle');
   if (sToggle) {
@@ -6625,6 +6956,38 @@ function favHTML(id) {
   return `<span class="fav${on ? ' on' : ''}" title="${on ? '取消收藏' : '加入收藏'}">${on ? '★' : '☆'}</span>`;
 }
 
+/* 侧栏行（#charList）里的原生 title 全部转成 aria-label。
+ *
+ * 为什么：这一区域已经由 player.js 自己的 #bnrTip 弹详情卡（深色），而
+ * index.html 给 #charList 加了 data-tip-off 让全站 tip.js 不要去抢 ——
+ * 结果行上的 `title` 没人接管，浏览器会**再弹一个白底小气泡**：
+ * 同一个行悬停时"一白一黑两个浮窗"（2026-11-23 用户反馈）。
+ * title 是浏览器行为，CSS 关不掉，只能不写 title。语义挪到 aria-label：
+ * 无障碍读屏、自动化脚本照样能读到，但不会再出现第二个气泡。 */
+function deTitle(root) {
+  if (!root) return;
+  const all = [];
+  if (root.getAttribute && root.getAttribute('title')) all.push(root);
+  if (root.querySelectorAll) root.querySelectorAll('[title]').forEach(e => all.push(e));
+  all.forEach(e => {
+    const t = e.getAttribute('title');
+    if (t) e.setAttribute('aria-label', t);
+    e.removeAttribute('title');
+  });
+}
+
+/* 详情卡里的「状态」一行。
+ * `soft-missing` 的真实含义是「剧本在、语音目录不在」（`install.unit_state`），
+ * 大多是官方源本来就没配语音。以前写成「缺公共素材」，用户会以为背景/横幅没下
+ * 载（2026-11-23 反馈：漫画剧情显示缺公共素材）。漫画本来就没有语音，直接说
+ * 可播放。 */
+function stateText(st, manga) {
+  if (st === 'missing') return '资源未下载';
+  if (manga) return '可播放';
+  if (st === 'soft-missing') return '可播放（无语音）';
+  return '可播放';
+}
+
 /** 播放进度提示：「第2/5段 45%」；其他视图按"话"取，段对不上就不显示 */
 function progHTML(key, part, totalParts) {
   const rec = UD ? UD.prog(key) : null;
@@ -6655,7 +7018,9 @@ function syncRowProg() {
     const tp = +pg.dataset.tp || 0;
     const seg = (tp > 1) ? `第${rec.p + 1}/${tp}段 ` : (rec.p > 0 ? `第${rec.p + 1}段 ` : '');
     pg.textContent = `${seg}${UD.progPct(rec)}%`;
-    pg.title = `上次看到：第 ${rec.p + 1} 段，第 ${UD.lineNo(rec)} 句 / 共 ${rec.n} 句`;
+    // aria-label 而不是 title：行上已有 #bnrTip，title 会多弹一个浏览器白气泡
+    pg.setAttribute('aria-label',
+      `上次看到：第 ${rec.p + 1} 段，第 ${UD.lineNo(rec)} 句 / 共 ${rec.n} 句`);
   });
 }
 
@@ -6668,7 +7033,7 @@ function bindFav(root, id, onChange) {
     const on = UD.toggleFav('story', id);
     el.classList.toggle('on', on);
     el.textContent = on ? '★' : '☆';
-    el.title = on ? '取消收藏' : '加入收藏';
+    el.setAttribute('aria-label', on ? '取消收藏' : '加入收藏');
     toast(on ? '已加入收藏' : '已取消收藏');
     if (onChange) onChange();
   };
@@ -7015,6 +7380,9 @@ function renderHistList(box, filter = '') {
         applyChain(d.querySelector('img'), chain);
       }
     }
+    /* 行内 title → aria-label：这一行已经有 #bnrTip 详情卡，不能再让浏览器
+       弹第二个白底气泡（见 deTitle 的注释）。 */
+    deTitle(d);
     bindTip(d, () => {
       const parts = r.n ? `第 ${r.p + 1} 段 · 共 ${r.n} 句` : '';
       return (bnr ? `<img src="${esc(imgSrc(bnr))}" alt="" `
@@ -7027,8 +7395,7 @@ function renderHistList(box, filter = '') {
         + `<dt>剧情</dt><dd>${parts || '—'}</dd>`
         + `<dt>上次看到</dt><dd>第 ${r.p + 1} 段 · 第 ${UD.lineNo(r)}/${r.n} 句`
         + `（${UD.progPct(r)}%，${UD.ago(r.ts)}）</dd>`
-        + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载'
-          : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+        + `<dt>状态</dt><dd>${stateText(st)}</dd>`
         + `</dl>`;
     });
     d.onclick = () => openStory(key);
@@ -7046,9 +7413,37 @@ function renderHistList(box, filter = '') {
   endScroll(box, sc);
 }
 
+/* 排序框的选项随分类换文案：角色用「编号 / 名字 / 实装日期」，
+   主线·活动·其他用「剧情顺序 / 剧情名 / 最新在前」—— 同一句「实装日期」
+   对剧情读不出来是什么意思（2026-11-23 用户：别的类型也该能排序）。 */
+function syncSortLabels() {
+  const sel = $('#sortBy');
+  if (!sel) return;
+  const adv = SRC !== 'char';
+  const mode = adv ? 'adv' : 'char';
+  if (sel.dataset.mode === mode) return;
+  sel.dataset.mode = mode;
+  /* 角色模式的四条在 index.html 里带 data-i18n（sort.*）钩子，这里重建 option
+     必须把钩子和默认中文一起带上：否则以后补上 sort.* 词条时，切语言对这块
+     不生效（2026-11-24 审计）。剧情模式没有对应词条，只写中文。 */
+  const list = adv
+    ? [{ v: 'id', t: '按剧情顺序' }, { v: 'name', t: '按剧情名' },
+      { v: 'date-desc', t: '最新在前' }, { v: 'date-asc', t: '最早在前' }]
+    : [{ v: 'id', k: 'sort.id', t: '按角色 ID' },
+      { v: 'name', k: 'sort.name', t: '按名字（あいうえお）' },
+      { v: 'date-desc', k: 'sort.dateDesc', t: '实装日期 新→旧' },
+      { v: 'date-asc', k: 'sort.dateAsc', t: '实装日期 旧→新' }];
+  sel.innerHTML = list.map(o => '<option value="' + o.v + '"'
+    + (o.k ? ' data-i18n="' + o.k + '" data-i18n-default="' + o.t + '"' : '')
+    + '>' + o.t + '</option>').join('');
+  if (!adv && window.L10N && L10N.applyDom) L10N.applyDom();
+  sel.value = SET.sortBy || 'date-desc';
+}
+
 function renderSidebarBody(filter = '') {
   const box = $('#charList');
   if (!box) return;
+  syncSortLabels();
   syncFilterBar();
   // 播放记录是**独立视图**（跨分类、按时间倒序），不参与来源/稀有度筛选
   if (HIST_ON) { renderHistList(box, filter); return; }
@@ -7115,10 +7510,12 @@ function renderSidebarBody(filter = '') {
     // 带上标识：自动化测试和调试时不用靠 title 去猜是哪一行
     d.dataset.id = c.id;
     d.dataset.key = 'char_' + c.id;
-    d.title = `${nm}${m.zh ? ' / ' + m.zh : ''}\n` +
-      `ID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}` +
-      (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '') +
-      (st === 'soft-missing' ? '\n无语音：官方源未提供该语音包' : '');
+    /* 只写 aria-label，不写 title：行上已有 #bnrTip 详情卡，再给 title 会让
+       浏览器并排弹一个白底气泡（2026-11-23 用户反馈"一白一黑两个浮窗"）。 */
+    d.setAttribute('aria-label', `${nm}${m.zh ? ' / ' + m.zh : ''}`
+      + `\nID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}`
+      + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '')
+      + (st === 'soft-missing' ? '\n无语音：官方源未提供该语音包' : ''));
     /* 图片要不要请求，必须"能确定磁盘上有图"才发 —— 横幅和头像都不随程序分发，
        全新环境里 384 行一次会打出 5000 多个 404，把启动窗口刷成一片红。
        两道关，缺一不可：
@@ -7145,7 +7542,7 @@ function renderSidebarBody(filter = '') {
       `<span>${c.lines ? c.lines + ' 句' : '未安装'}</span>` +
       progHTML('char_' + c.id, null, c.parts) +
       (st === 'missing' ? '<span class="badge nodl">未下载</span>' :
-        st === 'soft-missing' ? '<span class="badge soft">缺素材</span>' : '') +
+        st === 'soft-missing' ? '<span class="badge soft">无语音</span>' : '') +
       `</span>` +
       `<span class="cpy" title="复制角色名">⧉</span>` +
       // 收藏星放在最右边：每行位置一致，鼠标只需要上下移动
@@ -7159,6 +7556,7 @@ function renderSidebarBody(filter = '') {
         applyChain(d.querySelector('img'), imgChain);
       }
     }
+    deTitle(d);
     bindTip(d, () => {
       const parts = c.parts || 0;
       const tr = (typeof transStatsOf === 'function') ? '' : '';
@@ -7172,7 +7570,7 @@ function renderSidebarBody(filter = '') {
         + `<dl><dt>ID</dt><dd>${c.id}</dd>`
         + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}${m.d ? ' · 实装 ' + esc(m.d) : ''}</dd>`
         + `<dt>剧情</dt><dd>${parts} 段 · ${c.lines || 0} 句</dd>`
-        + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+        + `<dt>状态</dt><dd>${stateText(st)}</dd>`
         + (rec ? `<dt>上次看到</dt><dd>第 ${rec.p + 1} 段 · 第 ${UD.lineNo(rec)}/${rec.n} 句`
           + `（${UD.progPct(rec)}%，${UD.ago(rec.ts)}）</dd>` : '')
         + `</dl>${tr}`;
@@ -7211,7 +7609,17 @@ function bannerOfChar(id) {
   return `media/img/story/char_${id}.webp`;
 }
 function bannerOfAdv(a) {
-  return (a && a.cover) || '';
+  if (!a) return '';
+  if (a.cover) return a.cover;
+  /* 兜底：advindex 里的 cover 是**生成那一刻**按磁盘有无算出来的。官方上新
+     一章/一个活动后，目录条目里可能还是空的，而横幅图已经导出到本地 ——
+     这时按约定路径拼一条（storyImgOk 会再按本机清单核一遍，没有就不请求）。
+     2026-11-23 用户反馈：活动第99话目录已更新、图也在，但列表照样没横幅。 */
+  const m = /^adv_(\w+?)(?:_([0-9a-z]+))?$/.exec(String(a.key || ''));
+  if (m && m[2] && m[1] !== 'tutorial' && m[1] !== 'op') {
+    return `media/img/story/${m[1]}_${m[2]}.webp`;
+  }
+  return '';
 }
 
 /** media/img/story/<stem>.<ext> 这张横幅在本机磁盘上到底有没有。
@@ -7249,8 +7657,13 @@ function tipHide() {
 }
 /* 触屏设备没有真正的"鼠标移开"：点列表项会合成一个 mouseenter，但之后
    不会再有 mouseleave，浮窗就一直挂着挡住画面（手机上点剧情后再点播放，
-   浮窗还压在上面）。所以只在**确实能悬停**的设备上绑这个浮窗。 */
-const CAN_HOVER = !!(window.matchMedia
+   浮窗还压在上面）。所以只在**确实能悬停**的设备上绑这个浮窗。
+   `?nohover=1` 是测试钩子：桌面浏览器也能按"触屏语义"跑（手势、全屏菜单、
+   光标隐藏都走 !CAN_HOVER 分支），不用真机就能验证移动端逻辑。 */
+const CAN_HOVER = !(function () {
+  try { return new URLSearchParams(location.search).has('nohover'); }
+  catch (e) { return false; }
+})() && !!(window.matchMedia
   && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
 
 function bindTip(el, htmlFn) {
@@ -7408,6 +7821,7 @@ function renderOtherGroups(box, filter = '', opt = {}) {
         ev.stopPropagation();
         copyText(`${g.name} #${e.i + 1}`, '已复制');
       };
+      deTitle(d);
       bindTip(d, () => {
         const rec = UD && UD.prog(e.k);
         return `<div style="font-weight:600;margin-bottom:4px">${esc(g.name)}</div>`
@@ -7535,6 +7949,23 @@ function renderAdvList(filter = '') {
     .filter(a => !favMode || (UD && UD.isFav('story', a.key)))
     .filter(a => !f || (a.title || storyTitle(a.key)).toLowerCase().includes(f)
       || String(a.first || '').toLowerCase().includes(f) || a.key.includes(f));
+  /* 主线/活动也吃侧栏的排序框（以前只有角色列表生效）：
+       date-desc（默认）→ 最新的一章 / 一个活动在最上面
+       date-asc / id      → 剧情顺序（最早的在前）
+       name               → 按标题（あいうえお）
+     排序键用 advindex 的 order：主线=章号、活动=官方发表顺序
+     （adv_event_<n> 是打包批次号，不能直接拿来排）。
+     2026-11-23 用户要求：默认倒序，不然每次更新都要滚到底找新剧情。 */
+  const ordOf = a => (a.order == null ? 9999 : (Number(a.order) || 0));
+  const sMode = SET.sortBy || 'date-desc';
+  advAll = advAll.slice().sort((a, b) => {
+    if (sMode === 'name') {
+      return String(a.title || storyTitle(a.key))
+        .localeCompare(String(b.title || storyTitle(b.key)), 'ja');
+    }
+    if (sMode === 'date-asc' || sMode === 'id') return ordOf(a) - ordOf(b);
+    return ordOf(b) - ordOf(a);
+  });
   /* 未下载资源的排到后面，和角色列表同口径 */
   const stOf2 = key => (window.PACKSTATE ? PACKSTATE.status(key) : 'unknown');
   advAll = advAll.slice().sort((a, b) =>
@@ -7589,6 +8020,8 @@ function advItem(a) {
   // 同一部剧情的多个条目（如 adv_op 里的三部序章）共用 key，靠 part 区分：
   // 标题优先用条目自带的 title，起始段用 a.part。
   const title = a.title || storyTitle(a.key);
+  // 漫画式活动（零台词 + 有内容）：老 advindex 没有 manga 字段 → 用台词数推断
+  const isManga = !!(a.manga || (a.lines === 0 && a.parts > 0));
   const startPart = Number.isInteger(a.part) ? a.part : null;
   const d = document.createElement('div');
   d.className = 'char-btn adv bnr' + (a.key === S.key ? ' on' : '')
@@ -7606,10 +8039,12 @@ function advItem(a) {
      · 装了但 0 段 0 句 → 官方先放了**空占位包**（正文还没上），
        这种条目 sync_advindex 会主动剔掉，所以只能从清单里看到。 */
   const emptyPack = !!(a.cloud && st !== 'missing' && !a.parts);
-  d.title = `${title}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
+  /* 同上：详情卡由 #bnrTip 负责，行上的 title 只会多出一个浏览器白底气泡。 */
+  d.setAttribute('aria-label', `${title}\n${a.parts} 段 · ${a.lines} 句 · ${vnote}`
+    + (isManga ? ' · 漫画剧情（逐格 CG，没有台词）' : '')
     + (a.first ? `\n${a.first}` : '')
     + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '')
-    + (emptyPack ? '\n官方还没放出正文（空占位包）' : '');
+    + (emptyPack ? '\n官方还没放出正文（空占位包）' : ''));
   // 两行一项：横幅（没横幅就只留标题，别塞一张假图）
   d.innerHTML =
     (cover
@@ -7623,21 +8058,24 @@ function advItem(a) {
     + `${esc(title)}</span>` +
     `<span class="sub"><span>${a.parts} 段</span><span>${a.lines} 句</span>` +
     `<span>${vnote}</span>` +
+    (isManga ? '<span class="badge manga">漫画</span>' : '') +
     progHTML(a.key, null, a.parts) +
     (st === 'missing' ? '<span class="badge nodl">未下载</span>' : '') +
     (emptyPack ? '<span class="badge soft">空包</span>' : '') +
     `</span>` +
     `<span class="cpy" title="复制剧情名">⧉</span>` +
     favHTML(a.key) + `</span>`;
+  deTitle(d);
   bindTip(d, () => {
     const rec = UD && UD.prog(a.key);
     return (cover ? `<img src="${esc(imgSrc(cover))}" alt="" `
       + `onerror="this.style.display='none'">` : '')
       + `<div style="font-weight:600;margin-bottom:4px">${esc(title)}</div>`
       + `<dl><dt>剧情</dt><dd>${a.parts} 段 · ${a.lines} 句</dd>`
+      + (isManga ? `<dt>形式</dt><dd>漫画剧情（逐格 CG 翻页，没有台词）</dd>` : '')
       + `<dt>语音</dt><dd>${vnote}</dd>`
       + (a.first ? `<dt>首句</dt><dd>${esc(a.first)}</dd>` : '')
-      + `<dt>状态</dt><dd>${st === 'missing' ? '资源未下载' : st === 'soft-missing' ? '缺公共素材' : '可播放'}</dd>`
+      + `<dt>状态</dt><dd>${stateText(st, isManga)}</dd>`
       + (rec ? `<dt>上次看到</dt><dd>第 ${rec.p + 1} 段 · 第 ${UD.lineNo(rec)}/${rec.n} 句`
         + `（${UD.progPct(rec)}%，${UD.ago(rec.ts)}）</dd>` : '')
       + `</dl>`;
@@ -7813,12 +8251,12 @@ function revealRow(key) {
 }
 
 $('#sortBy').onchange = e => {
-  /* 播放记录是跨分类的独立视图、非角色分类也没有"角色级排序"：
-     这两处改排序不会生效，把选项弹回去并说明原因（比置灰更好懂）。 */
-  if (HIST_ON || SRC !== 'char') {
-    e.target.value = SET.sortBy || 'id';
-    toast(HIST_ON ? '打开「播放记录」时不能改排序，先关掉它'
-      : '只有「角色剧情」能按这里的方式排序');
+  /* 播放记录是跨分类的独立视图（按最后观看时间倒序），改排序不生效：
+     弹回原值并说明原因。**主线和活动现在也能排序**了（2026-11-23 用户
+     要求：不只角色能排；主线按章号、活动按官方发表顺序当"日期"用）。 */
+  if (HIST_ON) {
+    e.target.value = SET.sortBy || 'date-desc';
+    toast('打开「播放记录」时不能改排序，先关掉它');
     return;
   }
   SET.sortBy = e.target.value;
@@ -8086,7 +8524,14 @@ function renderTabs() {
     meta += ' · ' + L10N.t('meta.translated', `已译 ${s.done}/${s.total}（${pct}%）`,
       { n: s.done, t: s.total, p: pct });
   }
-  $('#meta').textContent = meta;
+  /* #meta 是**单行省略**的（段标签优先级更高），窄窗口下「已译 0/2320（0%）」
+     会被截掉 —— 以前没有任何办法看到完整内容（2026-11-23 用户反馈）。
+     写成 title：全站 tip.js 会把它换成 14px 自绘气泡（#tabs 不在 data-tip-off 里）。 */
+  const metaEl = $('#meta');
+  if (metaEl) {
+    metaEl.textContent = meta;
+    metaEl.title = meta;
+  }
   updateCnt();
   updateBanner();
   fitTabs(true);
@@ -8346,6 +8791,13 @@ function mulMatrixDiag(id) {
   if (!cm) return null;
   const v = (cm.getAttribute('values') || '').trim().split(/[\s,]+/).map(Number);
   if (v.length !== 20) return null;
+  /* 只认**纯 RGB 乘算矩阵**（rgbMulFilter 生成的对角矩阵）。
+     回忆滤镜 #fSepiaMode 是「灰度×琥珀色」的满矩阵，用 v[0]/v[6]/v[12]
+     当乘法系数会把分享图染成完全错误的颜色 —— 它由下面 shareStageShot
+     的整画面后处理补，这里必须返回 null。 */
+  const diag = v[1] === 0 && v[2] === 0 && v[4] === 0 && v[5] === 0
+    && v[7] === 0 && v[9] === 0 && v[10] === 0;
+  if (!diag) return null;
   return [v[0], v[6], v[12]];
 }
 
@@ -8468,16 +8920,25 @@ function shareStageShot() {
   $('#standLayer').querySelectorAll('.stand img').forEach(im => paint(im));
   $('#cgLayer').querySelectorAll('img').forEach(im => paint(im, '#05060a'));
 
-  // DrawMode（sepia / 灰度）是挂在 #stage 上的整层滤镜
-  const sf = getComputedStyle(stage).filter;
-  if (sf && sf !== 'none' && sf.indexOf('url(') < 0) {
-    const t = document.createElement('canvas');
-    t.width = W; t.height = H;
-    const tg = t.getContext('2d');
-    tg.filter = sf;
-    tg.drawImage(cv, 0, 0);
-    g.clearRect(0, 0, W, H);
-    g.drawImage(t, 0, 0);
+  /* DrawMode（sepia / 灰度）2026-11-23 起只作用画面三层（见 player.css），
+     对话框和头像不会被染黄。canvas 的 ctx.filter 不支持 url(#…)，
+     所以这里按同一套矩阵直接算一遍像素：
+       sepia = 灰度 × (1.02, 0.72, 0.43)    gray = 纯灰度 */
+  const sepiaOn = stage.classList.contains('f-sepia');
+  const grayOn = stage.classList.contains('f-gray');
+  if (sepiaOn || grayOn) {
+    try {
+      const idata = g.getImageData(0, 0, W, H);
+      const d = idata.data;
+      const k = sepiaOn ? [1.02, 0.72, 0.43] : [1, 1, 1];
+      for (let i = 0; i < d.length; i += 4) {
+        const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        d[i] = Math.min(255, l * k[0]);
+        d[i + 1] = Math.min(255, l * k[1]);
+        d[i + 2] = Math.min(255, l * k[2]);
+      }
+      g.putImageData(idata, 0, 0);
+    } catch (e) { /* 画布被污染时跳过，不影响分享 */ }
   }
   return cv;
 }
@@ -9479,6 +9940,12 @@ document.addEventListener('keydown', e => {
       st.hidden = true;
       return;
     }
+    /* 网页全屏：Esc 退出（原生全屏由浏览器自己处理，到不了这里）。 */
+    if (document.body.classList.contains('wfs')) {
+      e.preventDefault();
+      setWebFullscreen(false);
+      return;
+    }
   }
   /* 分享弹窗是模态：开着的时候空格/回车/方向键不该去推剧情
      （焦点在勾选框上时下面的 INPUT 过滤会拦住，但点空白处后焦点就没了） */
@@ -9506,7 +9973,10 @@ document.addEventListener('keydown', e => {
     case 'prev': prevLine(); break;
     case 'rush': setRush(true); break;                 // 按住 = 快进
     case 'settings': $('#btnSet').click(); break;
-    case 'fullscreen': toggleFullscreen(); break;
+    case 'fullscreen':
+      /* Shift+F = 网页全屏（只隐藏菜单）；F 仍是原生全屏。 */
+      if (e.shiftKey) setWebFullscreen(); else toggleFullscreen();
+      break;
     case 'lang': switchLang(); break;
     case 'sidebar': $('#sToggle').click(); break;
     case 'hist': $('#hToggle').click(); break;
