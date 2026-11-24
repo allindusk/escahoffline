@@ -1541,6 +1541,17 @@ def export_avatar_official(kind: str, cid: int, size: int = 96,
       * ``enemy_battle``       —— 敌人战斗图标兜底（20001+）
     ``regen`` 只在单张调用时置 True；批量导出完由调用方统一重写 mediaindex。
     """
+    # 「官方图只有脸部」的 5xxx 编号（avatar_face_crop.json）产物一律换成从立绘
+    # 裁的那张：官方 2xxx 的整脸特写不能直接进播放器（2026-11-24 用户要求）。
+    # 立绘还没装到本机时 export_avatar_from_stand 返回 False，退回官方图。
+    if kind in ("enemy", "enemy_user", "enemy_battle"):
+        try:
+            if int(cid) in face_crop_ids() and export_avatar_from_stand(
+                    int(cid), size=size, force=force, x2=x2, regen=regen):
+                return True
+        except (TypeError, ValueError):
+            pass
+
     from PIL import Image
     import UnityPy
 
@@ -1627,19 +1638,156 @@ def enemy_avatar_has_official(cid: int, index: dict) -> bool:
     return f"bundle_usericon_user_icon_{cid - 3000:04d}" in index
 
 
+#: 官方 e 图四边 alpha 均值超过它 = 整张脸特写 / 宣传图（正常图标四边透明，实测 ≤65.5）。
+FACE_AVATAR_EDGE = 80.0
+
+_FACE_CROP_IDS: set[int] | None = None
+_STAND_BOX: dict | None = None
+
+
+def face_crop_ids() -> set[int]:
+    """官方 e 图是整脸特写、需要改用立绘裁的 5xxx 编号（``data/avatar_face_crop.json``）。
+
+    2026-11-24 用户要求恢复这个规则：官方图只有一张脸时不要直接放进播放器，
+    用当前这套立绘按官方脸框裁一张。名单只补「官方图已经被删掉、本机无图可判」
+    的那些；有图时由 :func:`_avatar_full_bleed` 自动判断。
+    """
+    global _FACE_CROP_IDS
+    if _FACE_CROP_IDS is None:
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "data",
+                                   "avatar_face_crop.json"), encoding="utf-8") as f:
+                _FACE_CROP_IDS = {int(x) for x in (json.load(f).get("ids") or [])}
+        except Exception:                                  # noqa: BLE001
+            _FACE_CROP_IDS = set()
+    return _FACE_CROP_IDS
+
+
+def _stand_box() -> dict:
+    global _STAND_BOX
+    if _STAND_BOX is None:
+        try:
+            s = open(os.path.join(DATA, "stand_box.js"), encoding="utf-8-sig").read()
+            _STAND_BOX = json.loads(s[s.find("=") + 1:].strip().rstrip(";")) or {}
+        except Exception:                                  # noqa: BLE001
+            _STAND_BOX = {}
+    return _STAND_BOX
+
+
+def _stand_image(cid: int):
+    """这套立绘的成品图（优先默认表情 8AEE967B）与服装 key。"""
+    d = os.path.join(IMG, "stand")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return None, ""
+    fallback = None
+    for n in names:
+        m = re.match(r"^stand_%d_([0-9A-Fa-f]+)_([0-9A-Fa-f]+)\.webp$" % int(cid), n)
+        if not m:
+            continue
+        p = os.path.join(d, n)
+        if m.group(2).upper() == "8AEE967B":
+            return p, m.group(1)
+        if fallback is None:
+            fallback = (p, m.group(1))
+    return fallback or (None, "")
+
+
+def _avatar_full_bleed(path: str) -> bool:
+    """四边 alpha 均值高 = 整张脸特写 / 宣传图（正常图标四周是透明的）。"""
+    try:
+        import numpy as np
+        from PIL import Image
+        a = np.array(Image.open(path).convert("RGBA"))[:, :, 3]
+        k = max(2, a.shape[0] // 24)
+        edges = np.concatenate([a[:k].ravel(), a[-k:].ravel(),
+                                a[:, :k].ravel(), a[:, -k:].ravel()])
+        return float(edges.mean()) > FACE_AVATAR_EDGE
+    except Exception:                                      # noqa: BLE001
+        return False
+
+
+def _mark_stand_avatar(cid: int) -> None:
+    """记下「这张 e 图是立绘裁的」——清理时不能按"官方没有"删掉。"""
+    p = os.path.join(STATE_DIR, "stand_avatar.json")
+    try:
+        state = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                state = json.load(f)
+        if not isinstance(state, dict):
+            state = {}
+        state[str(int(cid))] = "stand"
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def export_avatar_from_stand(cid: int, size: int = 96, force: bool = False,
+                             x2: bool = True, regen: bool = False) -> bool:
+    """从立绘现裁一张 ``e####`` 头像（官方图只有脸部 / 本机没有可用图时）。
+
+    取景：以官方脸框（``ExpressionCutRect``）中心为中心、边长为脸宽 2.4 倍的
+    正方形 —— 2026-11-20 那批人工核对过的成品就是按这个口径出的（5246、5145
+    与原成品像素误差 <200）。产出写 ``avatar/e####.png``（96×96）与 img_x2。
+    """
+    cid = int(cid)
+    key = "e%04d" % cid
+    out = os.path.join(IMG, "avatar", key + ".png")
+    if os.path.exists(out) and not force:
+        return True
+    path, cloth = _stand_image(cid)
+    if not path:
+        return False
+    box = _stand_box().get("%d_%s" % (cid, cloth))
+    if not box or len(box) < 8:
+        return False
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("RGBA")
+        fx, fy, fw, fh = [float(v) for v in box[4:8]]
+        if fw <= 0 or fh <= 0:
+            return False
+        side = int(round(fw * 2.4))
+        side = max(16, min(side, im.width, im.height))
+        x0 = int(round(fx + fw / 2 - side / 2))
+        y0 = int(round(fy + fh / 2 - side / 2))
+        x0 = max(0, min(x0, im.width - side))
+        y0 = max(0, min(y0, im.height - side))
+        im = im.crop((x0, y0, x0 + side, y0 + side)).resize((size, size), Image.LANCZOS)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        im.save(out, optimize=True)
+        if x2:
+            x2dir = os.path.join(IMG_X2, "avatar")
+            os.makedirs(x2dir, exist_ok=True)
+            im.resize((size * 2, size * 2), Image.LANCZOS).save(
+                os.path.join(x2dir, key + ".webp"), "WEBP", quality=92, method=4)
+        _mark_stand_avatar(cid)
+        if regen:
+            regen_mediaindex()
+        return True
+    except Exception as e:                                 # noqa: BLE001
+        _log(f"    立绘裁头像失败 {key}: {e}")
+    return False
+
+
 def fix_enemy_avatars(index: dict | None = None) -> tuple[int, int]:
-    """清理来源不可靠 / 官方根本没有的 ``e####`` 敌人头像。
+    """校正 ``e####`` 敌人/NPC 头像：官方只有脸部 → 改用立绘裁；官方没有 → 无头像。
 
-    两类要清：
-      · 旧版本把 ``bundle_usericon_user_icon_5xxx``（活动/皮肤图标，其中夹着
-        整张脸特写 + 活动 logo 的宣传图）或 ``battle_character_icon_200xx``
-        （别的角色的战斗图标）写成了 e 头像 —— 那些是别人的脸；
-      · 历史上"从立绘现裁"兜底生成的头像 —— 官方本来就没给这个角色头像，
-        用户 2026-11-23 明确要求**保持无头像**（对话框宁可不显示头像）。
+    三类处理：
+      · 官方 ``usericon 2xxx`` 存在但图是**整张脸特写**（四边不透明）→ 用当前
+        立绘按官方脸框裁一张替换（2026-11-24 用户要求恢复：学生ランス 5246；
+        2026-11-20 那批 30 张也是这么来的）；
+      · 官方没有、但编号在 ``avatar_face_crop.json`` 名单里（官方图已被删掉、
+        本机没有文件可判）→ 立绘裁一张；这部剧还没装到本机就等下次；
+      · 其余官方没有的 e 图（旧版错配 / 宣传图 / 别的角色图标）→ 删掉、保持
+        无头像（2026-11-23 用户要求：老人乙、ハニー这类不要凭空造头像）。
 
-    判据只有一条：官方 ``usericon 2xxx``（= 5xxx - 3000）存不存在。
-    存在的保留（那是标准半身像），不存在的一律删。幂等，可反复调用。
-    返回 ``(保留重导的 0, 删除数)``，第一个返回值只为兼容旧调用点。
+    立绘裁出来的图在 ``stand_avatar.json`` 里有标记，重复调用不会重裁/误删。
+    返回 ``(立绘裁的张数, 删除张数)``。
     """
     adir = os.path.join(IMG, "avatar")
     if not os.path.isdir(adir):
@@ -1648,52 +1796,71 @@ def fix_enemy_avatars(index: dict | None = None) -> tuple[int, int]:
         try:
             from .manifest import load_index
             index = load_index()
-        except Exception:                                      # noqa: BLE001
+        except Exception:                                  # noqa: BLE001
             index = {}
     if not index:
-        return 0, 0
-    fixed = removed = 0
+        # 没有资源清单时判断不了"哪些 e 图该删"（宁可不动）；但名单里的脸裁
+        # 不依赖清单 —— 新装/升级后先把缺的补出来，不影响任何删除逻辑。
+        cropped = 0
+        for cid in sorted(face_crop_ids()):
+            if os.path.exists(os.path.join(adir, "e%04d.png" % cid)):
+                continue
+            if export_avatar_from_stand(cid, force=False):
+                cropped += 1
+        return cropped, 0
     st_path = os.path.join(STATE_DIR, "stand_avatar.json")
     try:
         state = json.load(open(st_path, encoding="utf-8"))
         if not isinstance(state, dict):
             state = {}
-    except Exception:                                          # noqa: BLE001
+    except Exception:                                      # noqa: BLE001
         state = {}
-    dirty = False
+    face_ids = face_crop_ids()
+    cropped = removed = 0
     for name in sorted(os.listdir(adir)):
         m = re.match(r"^e(\d{4})\.png$", name)
         if not m:
             continue
         cid = int(m.group(1))
-        if enemy_avatar_has_official(cid, index):
+        path = os.path.join(adir, name)
+        if str(cid) in state:                    # 已经是立绘裁的：保留
             continue
-        # 官方**没有**这个头像 → 保持"无头像"。
-        # 2026-11-23 用户明确要求：官方原本就没头像的（如 5xxx 里的老人乙、
-        # ハニー这类怪物/NPC）不要从立绘裁一张顶上；只有"官方有头像但不符合
-        # 播放器要求"（例如非正方形，由 export_avatar_official 中心裁）才处理。
-        # 以前这里会给每个编号现裁一张，结果对话框里出现官方从没给过的头像。
+        if enemy_avatar_has_official(cid, index):
+            # 官方图是整张脸特写 → 换成立绘裁；裁不出来（没装这部剧）就保留官方图
+            if _avatar_full_bleed(path) and export_avatar_from_stand(cid, force=True):
+                state[str(cid)] = "stand"
+                cropped += 1
+            continue
+        # 官方没有：名单里的改立绘裁，其余保持"无头像"
+        if (cid in face_ids) and export_avatar_from_stand(cid, force=True):
+            state[str(cid)] = "stand"
+            cropped += 1
+            continue
         try:
-            os.remove(os.path.join(adir, name))
+            os.remove(path)
             x2 = os.path.join(IMG_X2, "avatar", name[:-4] + ".webp")
             if os.path.exists(x2):
                 os.remove(x2)
             state.pop(str(cid), None)
-            dirty = True
             removed += 1
         except OSError:
             pass
-    if dirty:
+    # 名单里还没有文件的（官方图早被删掉 / 这次才装到这部剧）：有立绘就补一张
+    for cid in sorted(face_ids):
+        if os.path.exists(os.path.join(adir, "e%04d.png" % cid)):
+            continue
+        if export_avatar_from_stand(cid, force=False):
+            state[str(cid)] = "stand"
+            cropped += 1
+    if cropped or removed:
         try:
-            os.makedirs(STATE_DIR, exist_ok=True)
             with open(st_path, "w", encoding="utf-8") as f:
-                json.dump(state, f)
+                json.dump(state, f, ensure_ascii=False)
         except OSError:
             pass
-    if fixed or removed:
-        _log(f"   敌人头像校正：清理 {removed} 张官方没有头像的 e 图"
-             "（保持无头像；只有官方 usericon 2xxx 才当头像）")
-    return fixed, removed
+        _log(f"   敌人头像校正：立绘裁 {cropped} 张、清理 {removed} 张"
+             "（官方只有脸部/没有头像的按立绘裁；其余保持无头像）")
+    return cropped, removed
 
 
 def avatar_bundle_applicable(name: str) -> bool:

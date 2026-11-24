@@ -1158,7 +1158,9 @@ function currentStand(m) {
  * Option3 = 秒数（3191 条里 2998 条带 Option1、342 条带 Option2，还有只上下动的）。
  * 以前只吃 Option1，纵向位移整个丢掉；再早则一律按"上下浮动"的 m-move 播，
  * 等于把所有"走过去/后退一步"都演成了原地跳。 */
-function motionStand(m) {
+/** instant=true：切句重放用 —— 「移動 / 座る / 立つ」是**持续状态**，
+ *  按原顺序静默落到最终位移，不演过渡、不等待（见 seekTo 的逐条重放）。 */
+function motionStand(m, instant) {
   const el = currentStand(m);
   if (!el) return Promise.resolve();
   const name = m.Motion || '';
@@ -1187,9 +1189,9 @@ function motionStand(m) {
     el.dataset.offy = String(baseY);
     el.style.setProperty('--offx', `${base}px`);   // 动画关键帧要用（见 player.css）
     el.style.setProperty('--offy', `${baseY}px`);
-    el.style.transition = `transform ${t}s ease`;
+    el.style.transition = instant ? 'none' : `transform ${t}s ease`;
     el.style.transform = `translateX(var(--tx,-50%)) translate(${base}px, ${baseY}px)`;
-    return wait(t * 1000);
+    return instant ? Promise.resolve() : wait(t * 1000);
   }
   if (name === '座る' || name === '立つ') {
     /* 坐下/起身：整体下沉或抬回（不是抖动）；要叠在「移動」留下的位移上。
@@ -1215,11 +1217,13 @@ function motionStand(m) {
     const baseY = num(el.dataset.offy, 0) + delta;
     el.dataset.offy = String(baseY);
     el.style.setProperty('--offy', `${baseY}px`);
-    el.style.transition = 'transform .3s ease';
+    el.style.transition = instant ? 'none' : 'transform .3s ease';
     el.style.transform = `translateX(var(--tx,-50%)) ` +
       `translate(${num(el.dataset.offx, 0)}px, ${baseY}px)`;
-    return wait(300);
+    return instant ? Promise.resolve() : wait(300);
   }
+  /* 一次性动作（弹出 / 点头 / 抖动…）：切句重放时不重演 */
+  if (instant) return Promise.resolve();
   const map = {
     'ポップ': 'm-pop', '横揺れ': 'm-sway',
     'おじぎ': 'm-bow', '微動': 'm-tremble', '振動': 'm-tremble',
@@ -3682,9 +3686,12 @@ function avLastStandId(side) {
     /* CG 场景可回看 CG 之前最后一张立绘；但只有立绘组名和当前话者
        对得上才用，避免「时贞」的台词被套成尤诺头像。c=正数的 CG
        已经在前面按角色 id 处理，不需要过这一关。 */
+    if (!key) continue;                       // ShowStandEffect 只有组名，没有立绘
     if (nm && group && !avGroupIsName(group, key, nm)) continue;
-    const id = avIdFromStandKey(key, side);
-    if (id) return id;
+    /* **最近一张**命中的立绘就是 CG 前的那一套：它没有头像就空着，
+       不要继续往前翻找同一个人更早的服装（那会拿铠甲ランス的 e5032
+       套到学生ランス身上，2026-11-24 用户反馈）。 */
+    return avIdFromStandKey(key, side);
   }
   /* CG-only 场景：CG 前面一张 ShowStand 都没有时，允许看同段后面
      第一张 GroupId 能对上的 ShowStand。Hシーン集第6段（CG at 29，
@@ -3695,10 +3702,10 @@ function avLastStandId(side) {
     if (!m || (m.Method !== 'ShowStand' && m.Method !== 'ShowStandEffect')) continue;
     const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
     const group = String(m.GroupId || '').trim();
-    if (!nm || !group) continue;
+    if (!key || !nm || !group) continue;
     if (!avGroupIsName(group, key, nm)) continue;
-    const id = avIdFromStandKey(key, side);
-    if (id) return id;
+    /* 同上面：CG 之后**第一张**能对上的立绘就是这一场的那一套，没有就空着 */
+    return avIdFromStandKey(key, side);
   }
   /* 有些段（Hシーン集这类「从 CG 直接开始」的剪切版）本段里根本没有 ShowStand，
      但前一段末尾的立绘状态就是画面上的状态。这里**通用地**看上一段最后一个
@@ -3716,9 +3723,9 @@ function avLastStandId(side) {
       const group = String(m.GroupId || '').trim();
       if (!nm || !group) continue;
       const key = m.StandImage || m.Stand || m.StandKey || m.Image || '';
+      if (!key) continue;
       if (!avGroupIsName(group, key, nm)) continue;
-      const id = avIdFromStandKey(key, side);
-      if (id) return id;
+      return avIdFromStandKey(key, side);
     }
   }
   return null;
@@ -3824,6 +3831,11 @@ function avResolve(raw) {
     if (picked) id = picked;
   }
   if (!id) id = avStandId(stand, side);
+  /* 台上这张立绘已经按名字确认是话者本人时，头像**只能来自这一套**。
+     它没有官方头像就保持无头像 —— 不能再用「话者名 → 角色编号」去拿同一个人
+     另一套服装的头像（2026-11-24 用户反馈：学生ランス 5246 顶着铠甲ランス
+     的 e5032，两套衣服完全不搭）。 */
+  if (!id && stand) return null;
   /* CG 之前最后一张立绘也要能回看：CG-only 场景没有 ST.stands，
      但剧本 methods 里仍有 ShowStand，且 GroupId 可校验当前话者。 */
   if (!id && VIS.cg && VIS.cg.key) id = avLastStandId(side);
@@ -4789,6 +4801,16 @@ function focusLine(gi) {
 }
 
 /* ---- 跳转：只重放「画面状态」类指令，不碰文字与音频 ---- */
+/* 新指令先归类，别等用户发现再补 —— 手动切句 = 从段首重建目标句的状态，
+   自动播放 = 逐条顺序执行，任何一条归错类都会变成「只有手动出问题」：
+     A. 持续状态（到目标句仍然成立）→ 必须进 REPLAY 或在 seekTo 里按最终
+        状态重放：背景/CG、立绘在场与站位、**MotionStand 的移動/座る/立つ**、
+        染色、字号、说话人压暗、镜头缩放、全屏立绘。
+     B. 一次性演出（只在那一瞬）→ FX_REPLAY_ONCE，仅补目标句区间：
+        弹出/点头/抖动/闪屏/气泡/地点牌/音效。
+     C. 控制流（Wait / WaitMotion / ShowMessage*）→ 两条路径各有一套。
+     D. 音频状态（PlayMusic / StopMusic / Loop）→ restoreAudioAt 补最终状态；
+        VOICE / PlayVoice 由目标句补播。 */
 /* 镜头指令也必须重放：otherwise「上一句」回到的还是当前这一句的缩放状态，
    玩家想对比前后两句的画面就看不出差别（2026-11-08 用户反馈）。 */
 const CAM_REPLAY = new Set(['ZoomInEventCG', 'FastZoomInEventCG',
@@ -4811,8 +4833,9 @@ const REPLAY = new Set([
      只有按整段顺序重放才能还原。以前它们只挂在 FX_REPLAY_ONCE 上
      （只补目标句区间那一条），整段更早发生的就永远不恢复 ——
      全站统计 ToUpper 28551 句 / ToLower 898 / SwapStand 128 / ShowStandFull 62。
-     一次性动画（Shake / MotionStand / ScreenFlash / ShowStandEffect…）
-     仍留在 FX_REPLAY_ONCE，别混进来。 */
+     一次性动画（Shake / ScreenFlash / ShowStandEffect / 弹出·点头…）仍留在
+     FX_REPLAY_ONCE，别混进来。MotionStand 按动作拆开：移動/座る/立つ 是持续
+     状态（在 seekTo 里逐条瞬时重放），其余动作才是一次性的。 */
   'ShowStandFull', 'SwapStand', 'ToUpper', 'ToLower',
   ...CAM_REPLAY,
 ]);
@@ -4881,7 +4904,9 @@ function replayOne(m) {
       }
       break;
     }
-    case 'MulStand': mulStand(m); break;
+    /* 恢复现场：染色直接落到目标值，不再按剧本 Time 淡入一遍（否则每切一句
+       立绘都从原色渐变过去，看着就是闪） */
+    case 'MulStand': mulStand({ ...m, Time: 0 }); break;
     case 'TalkCharacter': talkCharacter(m); break;
     case 'ClearTalkCharacter':
       ST.talkExplicit = false;
@@ -4912,6 +4937,8 @@ function replayOne(m) {
 }
 
 let seeking = false;
+/* 上一次「带软转场的切句」时刻：连点/快进时据此退回硬切（见 seekTo）。 */
+let _lastSoftSeekAt = 0;
 
 /** 跳转后补"音频状态"：[0, midx) 里的 PlayMusic / StopMusic / PlayLoopSound /
  *  StopLoopSound 都被"不碰音频"的跳转跳过了，不补就会出现——
@@ -4989,7 +5016,14 @@ async function seekTo(midx, opt) {
     const pendingFx = [];
     for (let i = prevMsg + 1; i < midx; i++) {
       const mk = ST.methods[i];
-      if (FX_REPLAY_ONCE.has(mk.Method)) pendingFx.push({ i, m: mk });
+      if (!FX_REPLAY_ONCE.has(mk.Method)) continue;
+      /* 移動 / 座る / 立つ 是持续状态，已在上面逐条重放里瞬时落定；
+         这里再当一次性演出重播会**位移两遍**。只有弹出/点头等一次性动作才补演。 */
+      if (mk.Method === 'MotionStand') {
+        const mo = mk.Motion || '';
+        if (mo === '移動' || mo === '座る' || mo === '立つ') continue;
+      }
+      pendingFx.push({ i, m: mk });
     }
     let lastBg = null, lastCg = null, lastCam = null, lastFlash = null;
     /* 这一段里到底有没有出现过背景/CG 指令。没有出现 ≠ 应该没有背景：
@@ -5014,6 +5048,18 @@ async function seekTo(midx, opt) {
          所以这里额外记全区间最后一次，重播后按它落到最终状态。 */
       if (M === 'ScreenFlashIn' || M === 'ScreenFlashOut') {
         lastFlash = { i, m };
+        continue;
+      }
+      /* MotionStand 的「移動 / 座る / 立つ」改的是**持续状态**（立绘落点），
+         不是"当时那一下"：以前只在 FX_REPLAY_ONCE 里补目标句区间那一条，
+         更早发生的位移一跨句就丢 —— 坐下的人又站着、后退半步回到原位
+         （全站 3238 条移動 / 122 条座る / 78 条立つ）。这里按原顺序瞬时重放；
+         后面的 ShowStand 复用同一个元素时也会带着这份位移（与自动播放一致）。 */
+      if (M === 'MotionStand') {
+        const mo = m.Motion || '';
+        if (mo === '移動' || mo === '座る' || mo === '立つ') {
+          try { motionStand(m, true); } catch (e) { }
+        }
         continue;
       }
       if (!REPLAY.has(M)) continue;
@@ -5043,24 +5089,36 @@ async function seekTo(midx, opt) {
         }
       }
     }
+    /* 快进（按住 K / 长按）与连点时不走软转场：每 90ms 切一句，转场根本演不完，
+       只会叠出一堆正在淡出的旧图（看着像闪）。快速推进要的是硬切。
+       连续两次切句间隔太短（<260ms）也按硬切处理，理由相同。 */
+    const softStep = !!(opt && opt.soft) && !ST.rush
+      && (performance.now() - _lastSoftSeekAt > 260);
+    if (softStep) _lastSoftSeekAt = performance.now();
+    /* CG 必须先于背景落定：
+       setBackground 会调 dropCgForBg 把 resetStage 标成 stale 的旧 CG 直接
+       清掉。目标句本身还带着同一张 CG 时（CG 场景里逐句切就是这样），先放
+       背景等于把台上那张 CG 删掉、再从 opacity:0 淡回来 —— 每切一句都露出
+       一次背景（2026-11-24 用户反馈：ビートクイーン・リア 第6段所有切句都
+       闪出背景图）。先 setCg 会清掉 stale 标记，后面的换背景就不会再抢它；
+       同一张图还会走 setLayerImage 的「同图复用」分支，DOM 一动不动。 */
+    if (lastCg) {
+      const softCg = softStep;
+      const isShowCg = lastCg.m.Method === 'ShowEventCg';
+      try {
+        if (softCg && isShowCg) setCg(lastCg.m.EventImage, CG_SOFT_FADE, true);
+        /* HideEventCg：955 条里 882 条 Time=0.75，以前重放直接清空，
+           CG 一帧消失、背景硬切。Time=0 的仍按硬切。 */
+        else if (softCg) setCg('', Math.min(num(lastCg.m.Time, 0.3), CG_SOFT_FADE), true);
+        else replayOne(lastCg.m);
+      } catch (e) { }
+    }
     /* 相邻句切句（opt.soft）：换背景也保留转场。
        自动播放跑的是 ShowBackground 的 Time（32912 条里 21074 条 0.75s /
        6300 条 0.5s；1775 条 Time=0 是剧本自己写的硬切，保持硬切）；
        手动逐句走整段 seek 重放，被 fastForward 抹成一帧换掉，整个场景
        "闪"一下 —— 和 CG 差分是同一类问题。这里只给**本段内那一条**
        补转场（i<0 是从上一段借来的背景，属于恢复现场，照旧瞬时）。 */
-    const softStep = !!(opt && opt.soft);
-    /* HideEventCg 的淡出要抢在背景之前：setBackground 里的 dropCgForBg 会把
-       resetStage 标成 stale 的旧 CG 直接清掉，等到下面 CG 那一块再淡就已经
-       没图可淡了（HideEventCg → ShowBackground 的顺序很常见）。setCg('') 会
-       清掉 stale 标记，之后换背景就不会再抢这张正在淡出的图。 */
-    let cgSoftHidden = false;
-    if (softStep && lastCg && lastCg.m.Method === 'HideEventCg') {
-      try {
-        setCg('', Math.min(num(lastCg.m.Time, 0.3), CG_SOFT_FADE), true);
-        cgSoftHidden = true;
-      } catch (e) { }
-    }
     if (lastBg) {
       const bgT = num(lastBg.m.Time, 0);
       const softBg = softStep && lastBg.i >= 0 && bgT > 0;
@@ -5080,22 +5138,6 @@ async function seekTo(midx, opt) {
          冷気是平滑淡入后一直保持，从不重建）。同一同步块里瞬间落到目标色，
          浏览器只绘制最终状态，中间那帧根本不会上屏。 */
       try { mulColorBg({ ...x.m, Time: 0 }); } catch (e) { }
-    }
-    /* 相邻句切句（opt.soft）时，CG 换图保留一小段交叉淡入。
-       自动播放是逐条执行 runOne，差分切换带剧本里的 Time 淡入；手动逐句
-       却是整段 seek 重放，被 fastForward 的 instant 抹成硬切 —— 同一处差分
-       自动模式平滑、点一下"闪一下"（2026-11-24 用户反馈）。跳转 / 拖进度条
-       维护原样：直接就位。 */
-    if (lastCg && !cgSoftHidden) {
-      const softCg = !!(opt && opt.soft);
-      const isShowCg = lastCg.m.Method === 'ShowEventCg';
-      try {
-        if (softCg && isShowCg) setCg(lastCg.m.EventImage, CG_SOFT_FADE, true);
-        /* HideEventCg 同理：955 条里 882 条 Time=0.75，以前重放直接清空，
-           CG 一帧消失、背景硬切。Time=0 的仍按硬切。 */
-        else if (softCg) setCg('', Math.min(num(lastCg.m.Time, 0.3), CG_SOFT_FADE), true);
-        else replayOne(lastCg.m);
-      } catch (e) { }
     }
     /* 镜头最后应用：它写的是台上那张 <img> 的内联 transform，得等 CG 定下来才有效。
        镜头指令是绝对赋值（scale 覆盖，不是叠加），所以只取最后一条就是该句的最终画面；
@@ -5131,19 +5173,24 @@ async function seekTo(midx, opt) {
     /* 目标句自己带的一次性特效（pendingFx 刚重播的那个）不能被这一步撤掉：
        只有"这一跳没在层上生出新东西"时才清理。 */
     const liveF = screffLive.front, liveB = screffLive.back;
-    if (kf) { try { showScreenEffect(kf, false); } catch (e) { } }
+    /* Time 归零：这是"恢复到目标句应有的状态"，不是重演淡入。全站 21385 条里
+       有 1410 条 Time>0，照剧本走的话每切一句特效都重新淡入一次（看着像闪）。 */
+    if (kf) { try { showScreenEffect({ ...kf, Time: 0 }, false); } catch (e) { } }
     /* 目标位置不该有特效时也不要"一帧清空"：留 220ms 淡出，和新画面接上。
        以前 stopScreff(...,0) 瞬间 remove，重建又要几十毫秒，中间那 0.1~0.2 秒
        画面上什么特效都没有 —— 用户录屏里指出的「演出效果被清空一下」。 */
     else if (liveF === liveFrontAtStart) stopScreff('front', 220);
-    if (kb) { try { showScreenEffect(kb, true); } catch (e) { } }
+    if (kb) { try { showScreenEffect({ ...kb, Time: 0 }, true); } catch (e) { } }
     else if (liveB === liveBackAtStart) stopScreff('back', 220);
     /* 闪屏按全区间最后一次 In/Out 落定：暂停着切句也不会留一块白屏，
        跳到「In 之后、Out 之前」的句子也能保持游戏里该有的亮度。 */
     if (lastFlash) {
+      /* Time 归零：这是"把亮度恢复到目标句应有的状态"，不是重演一次淡入。
+         按剧本 Time 走的话，跳到「In 之后、Out 之前」的句子会再白闪一次。 */
+      const fm = { ...lastFlash.m, Time: 0 };
       try {
-        if (lastFlash.m.Method === 'ScreenFlashIn') flashIn(lastFlash.m);
-        else flashOut(lastFlash.m);
+        if (lastFlash.m.Method === 'ScreenFlashIn') flashIn(fm);
+        else flashOut(fm);
       } catch (e) { }
     }
     /* 只有「重放里确实出现过背景/CG 指令、且最终没留下图」才撤掉这一层。
@@ -5151,11 +5198,21 @@ async function seekTo(midx, opt) {
        keepVisual 把画面留着了），必须保留 —— 否则快进/跳会突然黑屏。 */
     if (sawBg && !VIS.bg.hit) { $('#bgLayer').innerHTML = ''; VIS.bg.key = null; VIS.bg.el = null; }
     if (sawCg && !VIS.cg.hit) { $('#cgLayer').innerHTML = ''; VIS.cg.key = null; VIS.cg.el = null; }
+    /* 重放时 showStand(instant) 往内联写了 transition:none；留着会盖掉 CSS 里
+       .stand 自己的过渡，回到播放态后第一条 HideStand / MoveStand 会瞬间跳变。 */
+    ST.stands.forEach(el => { if (el.style.transition === 'none') el.style.transition = ''; });
 
     // 2) 恢复说话人与配音标记
-    let lastWindow = null;
+    /* 窗口的开/关要看**最后一次** Show/Hide，而不是"最后一条 Show"：
+       全站有 526 句 ShowMessage 之前一条窗口指令是 HideMessageWindow
+       （隐藏字幕时重复上一句的占位行）。以前一律 classList.add('on')，
+       手动跳到这些句子会把本该关着的对话框又打开。 */
+    let lastWindow = null;      // 最后一次 Show（名字/配音标记从它取）
+    let winOpen = false;
     for (let i = 0; i < midx; i++) {
-      if (ST.methods[i].Method === 'ShowMessageWindow') lastWindow = ST.methods[i];
+      const WM = ST.methods[i].Method;
+      if (WM === 'ShowMessageWindow') { lastWindow = ST.methods[i]; winOpen = true; }
+      else if (WM === 'HideMessageWindow') winOpen = false;
     }
     const whoJump = lastWindow ? spkName(lastWindow) : '';
     ST.curName = whoJump;
@@ -5165,11 +5222,19 @@ async function seekTo(midx, opt) {
     ST.voiceHas = !!(lastWindow && lastWindow.VoiceMark === '○');
     if (lastWindow) {
       const w = $('#msgWindow');
-      w.classList.add('on');
+      /* hideWindow 的擦除是带内联 transform / transition 的（0.24s）：
+         擦到一半就切句的话，恢复时要先把这层残留清掉，否则框会停在偏斜位置。 */
+      w.style.transition = '';
+      w.style.transform = '';
+      /* 设置里关了「对话框」时，自动播放也不会开窗（showWindow 直接 return）；
+         切句重放同样别把它顶回来。 */
+      w.classList.toggle('on', winOpen && !!SET.showWin);
       // 先补上“谁在说话”的压暗，头像才知道该取哪张立绘的编号
       autoTalk(whoJump);
-      setMsgName(whoJump, lastWindow.Name || '');
-      $('#msgText').classList.toggle('narr', !whoJump);
+      if (winOpen && SET.showWin) {
+        setMsgName(whoJump, lastWindow.Name || '');
+        $('#msgText').classList.toggle('narr', !whoJump);
+      }
     }
 
     // 3) 音频状态（BGM / 循环音效）：跳过的段落里的 PlayMusic 要补上，否则进来没声音
@@ -5178,9 +5243,11 @@ async function seekTo(midx, opt) {
     restoreAudioAt(midx, !resume && ST.auto);
 
     // 4) 目标句的语音挂在 midx 前一条 VOICE 上，补播它
+    /* PlayVoice 是 VOICE 的别名（150 条，字段完全相同）：以前只认 VOICE，
+       主线/活动里用 PlayVoice 的那些句子切过去就静音。 */
     ST.voiceP = null;
     const prev = ST.methods[midx - 1];
-    if (prev && prev.Method === 'VOICE' && prev.Voice) {
+    if (prev && (prev.Method === 'VOICE' || prev.Method === 'PlayVoice') && prev.Voice) {
       ST.voiceP = playVoice(prev.Voice);
     }
 

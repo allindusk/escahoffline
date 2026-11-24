@@ -2175,7 +2175,8 @@ class _QuietServer(http.server.ThreadingHTTPServer):
 
 #: 头像来源修复的内部修订号：改了修复逻辑就 +1，老用户升级后会重跑一次。
 #: rev 2（2026-11-23）：不再从立绘现裁 —— 官方没头像的一律删除、保持无头像。
-AVATAR_REPAIR_REV = 2
+#: rev 3（2026-11-24）：恢复「官方图只有脸部 → 立绘裁」；名单外的官方没有的仍删除。
+AVATAR_REPAIR_REV = 3
 
 
 def _avatar_dirs_sig() -> list:
@@ -2216,13 +2217,21 @@ def _repair_avatar_sources() -> None:
                 and old.get("sig") == sig:
             return
         idx = cdn_install.config_manifest_index()
-        fixed = removed = 0
-        if idx:
-            fixed, removed = cdn_stages.fix_enemy_avatars(idx)
+        # 清单缺失时也要跑：立绘脸裁不依赖清单，能先补上就补上（删除逻辑会自己跳过）。
+        fixed, removed = cdn_stages.fix_enemy_avatars(idx or {})
         if fixed or removed:
-            # 头像文件变了 → 立绘组→头像的映射必须同步重建，否则前端还按旧表
-            # 去请求已被删掉的 e5072（404）或继续显示旧图。
+            # 头像文件变了 → 立绘组→头像的映射、媒体索引、高清图覆盖层都要同步重建，
+            # 否则前端还按旧表去请求已被删掉的 e5072（404），或者新裁的 e5246
+            # 被 ESC.media.has() 判成"没有这张图"而不显示。
             cdn_stages.regen_avatarmap()
+            try:
+                cdn_stages.regen_mediaindex()
+            except Exception:                              # noqa: BLE001
+                pass
+            try:
+                media.rebuild_x2_overlay()
+            except Exception:                              # noqa: BLE001
+                pass
             cdn_install.invalidate_units()
         os.makedirs(os.path.dirname(sp), exist_ok=True)
         with open(sp, "w", encoding="utf-8") as f:
@@ -2230,9 +2239,9 @@ def _repair_avatar_sources() -> None:
                        "fixed": fixed, "removed": removed},
                       f, ensure_ascii=False)
         if fixed or removed:
-            applog.info("头像来源校正：清理 %d 张官方没有头像的 e 图"
-                        "（旧版本错配 / 从立绘现裁的，保持无头像）" % removed,
-                        tag="boot")
+            applog.info("头像来源校正：立绘裁 %d 张、清理 %d 张"
+                        "（官方只有脸部/没头像的按立绘裁；其余保持无头像）"
+                        % (fixed, removed), tag="boot")
     except Exception as e:                                     # noqa: BLE001
         applog.debug("头像来源校正跳过（不影响使用）：%s" % e, tag="boot")
 

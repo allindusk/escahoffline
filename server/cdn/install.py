@@ -3156,11 +3156,12 @@ def _install_story_avatars(mf, stand_ids, job=None, workers: int = 16) -> dict:
     # 顺带清掉"来源不可靠"的历史 e 头像（旧版把活动宣传图 / 别的角色的战斗
     # 图标 / 从立绘现裁的图写成了 e####）：有官方 usericon 2xxx 的保留，
     # 其余删掉、保持无头像（2026-11-23 用户要求）。
+    cropped = 0
     try:
-        _f2, dropped = stages.fix_enemy_avatars(mf.index)
+        cropped, dropped = stages.fix_enemy_avatars(mf.index)
     except Exception:                                          # noqa: BLE001
         dropped = 0
-    if c_ok or n_ok or e_ok or dropped:
+    if c_ok or n_ok or e_ok or cropped or dropped:
         try:
             from .. import media
             stages.regen_avatarmap()
@@ -3170,8 +3171,9 @@ def _install_story_avatars(mf, stand_ids, job=None, workers: int = 16) -> dict:
             pass
         if job is not None:
             job.log(f"   头像补齐：角色 {c_ok} 张、NPC {n_ok} 张、敌人 {e_ok} 张"
+                    + (f"、立绘裁 {cropped} 张" if cropped else "")
                     + (f"、清理无官方来源 {dropped} 张" if dropped else ""))
-    return {"char": c_ok, "npc": n_ok, "enemy": e_ok, "cropped": 0}
+    return {"char": c_ok, "npc": n_ok, "enemy": e_ok, "cropped": cropped}
 
 
 def _install_adv(mf, kind, no, job, workers, voice, image, maps, force,
