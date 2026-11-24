@@ -644,18 +644,38 @@ function wipeIn(img, motion, ms) {
 }
 
 /** 往某个图层画一张图（背景 / CG 共用）：同图复用、换图交叉淡入或 Wipe */
-function setLayerImage(kind, sel, id, fade, motion) {
+function setLayerImage(kind, sel, id, fade, motion, soft) {
   const L = $(sel), st = VIS[kind];
   const key = id || '';
   const list = key ? candsOf(kind === 'bg' ? 'back' : 'cg', key) : [];
   const ms = Math.max(fade || 0, 0) * 1000;
   st.hit = true;
   if (!key || !list.length) {
-    L.innerHTML = '';
+    /* 清空也要遵守剧本 Time：HideEventCg 全站 955 条里 882 条 Time=0.75，
+       以前这里一帧 innerHTML=''，整屏 CG 直接消失、露出背景 —— 自动播放
+       和手动逐句都一样"啪"地闪一下。跳转重放默认仍直接清（瞬时恢复现场），
+       只有 soft（相邻句手动切句）才淡出，和换图走同一套交叉淡入口径。 */
+    const olds = Array.from(L.children);
     st.key = null; st.el = null;
-    return Promise.resolve();
+    if (!olds.length) return Promise.resolve();
+    if ((ST.fastForward && !soft) || ms <= 0) {
+      L.innerHTML = '';
+      return Promise.resolve();
+    }
+    olds.forEach(i => {
+      i.style.transition = `opacity ${ms}ms`;
+      i.style.opacity = 0;
+    });
+    setTimeout(() => {
+      olds.forEach(i => { if (i.parentNode === L) i.remove(); });
+    }, ms + 60);
+    return wait(ms);
   }
-  const instant = ST.fastForward;          // 跳转重放：不演淡入，直接就位
+  /* instant = 跳转重放（fastForward）：不演淡入，直接就位。
+     soft=true 是例外：这一次虽然也在 seek 重放里，但它是「上一句 / 下一句」
+     相邻切句，换图仍要走淡入 —— 否则整屏 CG 差分是硬切，观感就是"闪一下"
+     （自动播放逐条执行时是有剧本 Time 淡入的）。见 seekTo 对 lastCg 的处理。 */
+  const instant = ST.fastForward && !soft;
   const wipe = !instant && !!WIPE[motion];
   if (st.key === key && st.el && st.el.parentNode === L) {
     // 同一张图：不清层、不重建、不淡入（filter 由随后的颜色乘算指令重新施加）
@@ -671,8 +691,12 @@ function setLayerImage(kind, sel, id, fade, motion) {
   }
   const img = applyChain(new Image(), list);
   img.style.filter = '';
-  // Wipe 模式下不提 opacity：否则会和擦除叠出「淡 + 擦」两层效果
-  img.style.opacity = (instant || wipe) ? 1 : 0;
+  /* Wipe 模式下不提 opacity：否则会和擦除叠出「淡 + 擦」两层效果。
+     硬切（instant）这次也从 0 起步：这张 <img> 带着不透明底色 #05060a
+     （player.css），图还没解码就以 opacity:1 叠上去，会把旧图整块盖成黑的
+     一瞬。缓存冷的时候这一下就是肉眼可见的"闪黑"，reveal 里改成能画出来
+     之后再同一帧换图上屏。 */
+  img.style.opacity = wipe ? 1 : 0;
   img.style.transition = instant ? 'none' : `opacity ${fade}s`;
   if (wipe) clipSet(img, WIPE[motion]);
   const olds = Array.from(L.children);
@@ -682,7 +706,14 @@ function setLayerImage(kind, sel, id, fade, motion) {
   const dropOld = () => olds.forEach(o => { if (o !== img) o.remove(); });
   const reveal = () => {
     if (done) return; done = true;
-    if (instant) { dropOld(); return; }
+    if (instant) {
+      /* 解码完成后再上屏 + 撤旧图（同一帧交换）：硬切也不能露黑底，
+         图没准备好时先让旧图顶着。decode 不可用 / 失败就退回同步交换。 */
+      const swap = () => { img.style.opacity = 1; dropOld(); };
+      if (img.decode) img.decode().then(swap, swap);
+      else swap();
+      return;
+    }
     if (wipe) wipeIn(img, motion, ms);
     else requestAnimationFrame(() => { img.style.opacity = 1; });
     // 等新图真的能画出来再撤旧图：中间不能有「两张都没有」的瞬间
@@ -700,7 +731,7 @@ function setLayerImage(kind, sel, id, fade, motion) {
 
 /* 版本戳只留在 window 上：控制台敲 PLAYER_BUILD 可查当前跑的是哪份代码。
    不再往页面标题里追加排查标记 —— 标题是给用户看的，不是调试输出。 */
-window.PLAYER_BUILD = '2026-11-11d';
+window.PLAYER_BUILD = '2026-11-24a';
 
 /* 粒子层渲染路径：**默认走 canvas**。
    DOM 版一层邪気/冷気 要建 480 个 500~1000px 的 `.fxp` 节点 + 480 张染色贴图
@@ -743,18 +774,20 @@ function dropCgForBg() {
   VIS.cg.stale = false;
 }
 
-/** 显示背景：Time 是转场时长（全站默认 0.75s，Time=0 表示硬切） */
-function setBackground(id, m) {
+/** 显示背景：Time 是转场时长（全站默认 0.75s，Time=0 表示硬切）。
+ *  soft=true 只给「相邻句手动切句」用：跳转重放本来是瞬时换图，但那样
+ *  整屏场景一帧换掉，和自动播放的淡入/擦除差得太远（见 seekTo）。 */
+function setBackground(id, m, soft) {
   /* 放在"同一张背景走早退分支"之前：跨段时下一段开场的背景常常和上一段
      是同一张，走早退的话那张遗留 CG 就清不掉了。 */
   dropCgForBg();
   const fade = m ? num(m.Time, 0.75) : 0.45;
-  return setLayerImage('bg', '#bgLayer', id, fade, m && m.Motion);
+  return setLayerImage('bg', '#bgLayer', id, fade, m && m.Motion, soft === true);
 }
 
 /** 隐藏背景：以前直接 innerHTML='' 瞬间消失，而数据里 HideBackground 的 Time
  *  93% 是 0.75/0.5/0.3 秒、26% 带 WipeRight —— 那是一个完整转场，不是硬切。 */
-function hideBackground(m) {
+function hideBackground(m, soft) {
   const L = $('#bgLayer'), st = VIS.bg;
   st.hit = true;
   const imgs = Array.from(L.children);
@@ -762,7 +795,9 @@ function hideBackground(m) {
   if (!imgs.length) return Promise.resolve();
   const ms = Math.max(num(m && m.Time, 0.75), 0) * 1000;
   const wipe = WIPE[m && m.Motion];
-  if (ST.fastForward || ms === 0) {
+  /* soft：相邻句手动切句时，HideBackground 也按剧本 Time 擦/淡出去。
+     跳转（拖进度条 / 点句子）仍然直接清空 —— 那是"恢复现场"。 */
+  if ((ST.fastForward && !soft) || ms === 0) {
     L.innerHTML = '';
     return Promise.resolve();
   }
@@ -829,14 +864,23 @@ function setDoubleBackground(l, r) {
   return instant ? Promise.resolve() : wait(400);
 }
 
-function setCg(id, fade) {
+function setCg(id, fade, soft) {
   /* 任何一条 CG 指令（含 HideEventCg 的清空）都算"这张 CG 归本段管"：
      取消 resetStage 打上的 stale 标记，setBackground 就不会来收它
      （见 dropCgForBg）。 */
   VIS.cg.stale = false;
   const f = (fade == null || !isFinite(fade)) ? 0.3 : Math.max(fade, 0);
-  return setLayerImage('cg', '#cgLayer', id, f);
+  return setLayerImage('cg', '#cgLayer', id, f, null, soft === true);
 }
+
+/* 「上一句 / 下一句」相邻切句时 CG 换图的淡入时长（秒）。
+   比剧本里的默认 0.5s 短一点：手点是主动切句，观众不想等太久，
+   但也不能硬切 —— 整屏图硬切就是"闪一下"。 */
+const CG_SOFT_FADE = 0.25;
+/* 「上一句 / 下一句」相邻切句时背景转场的时长（秒）。剧本 ShowBackground 的
+   Time 中位是 0.75s —— 自动播放是在台词出现前跑完的，手动逐句时台词已经
+   在旁边了，0.75s 会显得画面在拖；取 0.35s 既不是硬切，也不和读字抢时间。 */
+const BG_SOFT_FADE = 0.35;
 
 /** 当前台上的 CG：交叉淡入期间 #cgLayer 里可能同时有新/旧两张，取状态里记的那张 */
 function cgImg() { return VIS.cg.el || $('#cgLayer').querySelector('img'); }
@@ -1123,9 +1167,19 @@ function motionStand(m) {
        以前只吃了 Option1：3191 条「移動」里有 342 条带非 0 Option2
        （-50 / -100 / -150 / -200 / -500，还有 Option1=0 只上下移动的），
        漏掉后"后退半步 / 抬起来"这类位移只在横向上生效，立绘落点整体偏 ——
-       头顶气泡的锚点也就跟着错（2026-11-10 用户问「气泡位置是不是漏了参数」）。 */
+       头顶气泡的锚点也就跟着错（2026-11-10 用户问「气泡位置是不是漏了参数」）。
+
+       ⚠ 纵轴方向必须取反（2026-11-24 修）：剧本 Option2 是**向上为正**
+       （Unity localPosition 口径），而 CSS translate 是**向下为正**。
+       以前直接把它当 CSS dy，全站 300 条纵向位移都演反了 ——
+       char_416 第4段第145句「せつにゃは膝から崩れ落ちた」参数 -150，
+       被演成向上飘 150px。同一批剧本可以双向对账：
+         · 负值全是「倒下去」：char_106 -100 崩れ落ちる / char_211 -100 膝から崩れ落ちて
+           / char_268 -100 深々と頭を下げた（-100 后紧跟 +100 抬头）；
+         · 正值全是「起身」：char_249 +100 立ち上がる / char_268 +100 抬头。
+       Option1 横向不取反（+ = 右，两边一致）。 */
     const dx = num(m.Option1, 0);
-    const dy = num(m.Option2, 0);
+    const dy = -num(m.Option2, 0);
     const t = Math.max(num(m.Option3, 0.3) || 0.3, 0.1);
     const base = num(el.dataset.offx, 0) + dx;
     const baseY = num(el.dataset.offy, 0) + dy;
@@ -1138,11 +1192,32 @@ function motionStand(m) {
     return wait(t * 1000);
   }
   if (name === '座る' || name === '立つ') {
-    // 坐下/起身：整体下沉或抬回（不是抖动）；要叠在「移動」留下的位移上
+    /* 坐下/起身：整体下沉或抬回（不是抖动）；要叠在「移動」留下的位移上。
+       **下沉量在 Option1**（全站 46 条带值，全部为负；且与立绘高度强相关：
+       中位数 = 身高的 15%）。坐标系同「移動」的 Option2（Unity Y 向上为正），
+       所以 -100 = 向下 100px。以前完全忽略 Option1、一律硬编码 26px，
+       坐下的落差只有剧本给的一小部分（char_119 第5段「床にぺたりと
+       座り込む」、adv_event_39「ついに膝を付いた」都吃这个）。
+       立绘没有坐姿贴图，只能用整体下沉近似，量按剧本给；
+       累计进 offy（CSS 向下为正），这样「移動」的位移不会被覆盖，
+       气泡锚点（跟 head + offy 走）也不会脱节。 */
+    const sitNow = num(el.dataset.sitY, 0);
+    let sink = 0;
+    /* ShowStandAndSit 留下的 .sit 是 26px 的近似下沉；这里有剧本给的真实量，
+       撤掉 .sit 避免两份叠加（它的 !important 也会盖掉内联 transform）。 */
+    el.classList.remove('sit');
+    if (name === '座る') {
+      const opt = num(m.Option1, NaN);
+      sink = isFinite(opt) ? Math.abs(opt) : 26;   // 无参数的 76 条沿用旧观感
+    }
+    const delta = (name === '座る' ? sink : 0) - sitNow;
+    el.dataset.sitY = String(name === '座る' ? sink : 0);
+    const baseY = num(el.dataset.offy, 0) + delta;
+    el.dataset.offy = String(baseY);
+    el.style.setProperty('--offy', `${baseY}px`);
     el.style.transition = 'transform .3s ease';
     el.style.transform = `translateX(var(--tx,-50%)) ` +
-      `translate(${num(el.dataset.offx, 0)}px, ` +
-      `${num(el.dataset.offy, 0) + (name === '座る' ? 26 : 0)}px)`;
+      `translate(${num(el.dataset.offx, 0)}px, ${baseY}px)`;
     return wait(300);
   }
   const map = {
@@ -4099,7 +4174,11 @@ function showStandFull(m, instant) {
   img.onerror = () => wrap.remove();
   img.src = `media/img/standfull/${id}.png`;
   wrap.appendChild(img);
-  const to = num(m.PosY, 0);
+  /* PosY 同样是 Unity 口径（向上为正），CSS translateY 向下为正 → 取反。
+     全站 3 条都是 PosY=-400 / Move=700：结局大立绘从画面下方升起，
+     最终停在「下沉 400px」—— 这样露出的是头发/脸/上身；以前按 +(-400)
+     上移，脸被顶出画面只剩腰部（2026-11-24 参数排查）。 */
+  const to = -num(m.PosY, 0);
   /* instant：跳转/换段重放用。全屏立绘是**持续显示**的状态，重放只要
      落到最终位置，不能再从画面外滑 2.4 秒（会和新台词抢画面，
      而且 resetStage 已经把 #standLayer 清空过，这里必须补回来）。 */
@@ -4814,7 +4893,8 @@ function replayOne(m) {
     case 'ShowScreenEffect': showScreenEffect(m, false); break;
     case 'ShowScreenEffectBack': showScreenEffect(m, true); break;
     case 'ShowEventCg': setCg(m.EventImage, 0.01); break;
-    case 'HideEventCg': setCg(''); break;
+    /* Time 带上：Time=0 的 25 条仍是硬切，其余（882 条 0.75s）淡出 */
+    case 'HideEventCg': setCg('', num(m.Time, 0.3)); break;
     /* 镜头：跳转重放要**瞬时**落到该句应有的状态（不演 6 秒推镜、不等待） */
     case 'ZoomInEventCG':
     case 'FastZoomInEventCG': zoomCg(m, true); break;
@@ -4963,7 +5043,34 @@ async function seekTo(midx, opt) {
         }
       }
     }
-    if (lastBg) { try { replayOne(lastBg.m); } catch (e) { } }
+    /* 相邻句切句（opt.soft）：换背景也保留转场。
+       自动播放跑的是 ShowBackground 的 Time（32912 条里 21074 条 0.75s /
+       6300 条 0.5s；1775 条 Time=0 是剧本自己写的硬切，保持硬切）；
+       手动逐句走整段 seek 重放，被 fastForward 抹成一帧换掉，整个场景
+       "闪"一下 —— 和 CG 差分是同一类问题。这里只给**本段内那一条**
+       补转场（i<0 是从上一段借来的背景，属于恢复现场，照旧瞬时）。 */
+    const softStep = !!(opt && opt.soft);
+    /* HideEventCg 的淡出要抢在背景之前：setBackground 里的 dropCgForBg 会把
+       resetStage 标成 stale 的旧 CG 直接清掉，等到下面 CG 那一块再淡就已经
+       没图可淡了（HideEventCg → ShowBackground 的顺序很常见）。setCg('') 会
+       清掉 stale 标记，之后换背景就不会再抢这张正在淡出的图。 */
+    let cgSoftHidden = false;
+    if (softStep && lastCg && lastCg.m.Method === 'HideEventCg') {
+      try {
+        setCg('', Math.min(num(lastCg.m.Time, 0.3), CG_SOFT_FADE), true);
+        cgSoftHidden = true;
+      } catch (e) { }
+    }
+    if (lastBg) {
+      const bgT = num(lastBg.m.Time, 0);
+      const softBg = softStep && lastBg.i >= 0 && bgT > 0;
+      const bgM = softBg ? { ...lastBg.m, Time: Math.min(bgT, BG_SOFT_FADE) } : lastBg.m;
+      try {
+        if (softBg && lastBg.m.Method === 'ShowBackground') setBackground(bgM.BackImage, bgM, true);
+        else if (softBg && lastBg.m.Method === 'HideBackground') hideBackground(bgM, true);
+        else replayOne(lastBg.m);
+      } catch (e) { }
+    }
     for (const x of muls) {
       if (lastBg && x.i < lastBg.i) continue;   // 旧背景上的颜色乘算已被最终背景替代
       /* 这是**恢复状态**，不是重演演出：剧本 `Time:1` 的染色淡入在跳转/切句时
@@ -4974,7 +5081,22 @@ async function seekTo(midx, opt) {
          浏览器只绘制最终状态，中间那帧根本不会上屏。 */
       try { mulColorBg({ ...x.m, Time: 0 }); } catch (e) { }
     }
-    if (lastCg) { try { replayOne(lastCg.m); } catch (e) { } }
+    /* 相邻句切句（opt.soft）时，CG 换图保留一小段交叉淡入。
+       自动播放是逐条执行 runOne，差分切换带剧本里的 Time 淡入；手动逐句
+       却是整段 seek 重放，被 fastForward 的 instant 抹成硬切 —— 同一处差分
+       自动模式平滑、点一下"闪一下"（2026-11-24 用户反馈）。跳转 / 拖进度条
+       维护原样：直接就位。 */
+    if (lastCg && !cgSoftHidden) {
+      const softCg = !!(opt && opt.soft);
+      const isShowCg = lastCg.m.Method === 'ShowEventCg';
+      try {
+        if (softCg && isShowCg) setCg(lastCg.m.EventImage, CG_SOFT_FADE, true);
+        /* HideEventCg 同理：955 条里 882 条 Time=0.75，以前重放直接清空，
+           CG 一帧消失、背景硬切。Time=0 的仍按硬切。 */
+        else if (softCg) setCg('', Math.min(num(lastCg.m.Time, 0.3), CG_SOFT_FADE), true);
+        else replayOne(lastCg.m);
+      } catch (e) { }
+    }
     /* 镜头最后应用：它写的是台上那张 <img> 的内联 transform，得等 CG 定下来才有效。
        镜头指令是绝对赋值（scale 覆盖，不是叠加），所以只取最后一条就是该句的最终画面；
        落在最后一条 CG 指令之前说明那张图早被换掉，忽略。 */
@@ -5495,10 +5617,11 @@ function stepLine(dir) {
       if (n < S.data.parts.length) playPart(n);
       return;
     }
-    seekTo(nx);
+    /* soft：相邻切句，CG 换图仍走淡入（硬切会"闪一下"，见 seekTo） */
+    seekTo(nx, { soft: true });
   } else {
     const back = list.filter(i => i < cur);
-    seekTo(back.length ? back[back.length - 1] : list[0]);
+    seekTo(back.length ? back[back.length - 1] : list[0], { soft: true });
   }
 }
 
