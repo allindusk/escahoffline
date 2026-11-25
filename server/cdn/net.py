@@ -196,6 +196,30 @@ def fetch_bundle(name: str, size: int, dest: str | None = None,
     raise IOError(f"下载失败 {name}: {last}")
 
 
+def _apply_source_mtime(path: str, last_modified: str | None) -> None:
+    """把**源文件时间**（CDN 的 ``Last-Modified``）写到本地文件的 mtime 上。
+
+    下载器默认把"现在"写成本地时间，于是 ``os.stat`` 只能看到"我哪天下的"，
+    跟源文件毫无关系 —— 用户 2026-11-25 问"是不是只能查到本机相关的日期"，
+    答案本来是：源文件时间只有 HTTP 头里有，本地这份早就丢了。写回之后，
+    以后离线也能看出包的源文件时间（所有人一致）。
+
+    注意：只改 mtime。Windows 的 ctime 是"创建时间"、改不了，所以查源文件时间
+    请读 mtime（``os.path.getmtime``）。解析失败就什么都不做。
+    """
+    from email.utils import parsedate_to_datetime
+    if not last_modified:
+        return
+    try:
+        dt = parsedate_to_datetime(last_modified)
+        if dt is None:
+            return
+        ts = dt.timestamp()
+        os.utime(path, (ts, ts))
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def _download_stream(url: str, part: str, size: int, have: int = 0,
                      on_progress=None) -> int:
     """把 ``url`` 流式写进 ``part``（从 ``have`` 字节处续传），返回最终字节数。
@@ -207,10 +231,12 @@ def _download_stream(url: str, part: str, size: int, have: int = 0,
     if have:
         headers["Range"] = f"bytes={have}-"
     req = urllib.request.Request(url, headers=headers)
+    lm = ""
     with urllib.request.urlopen(req, timeout=IDLE_TIMEOUT) as r:
         status = getattr(r, "status", 200)
         if have and status != 206:
             have = 0
+        lm = r.headers.get("Last-Modified", "") or ""
         with open(part, "r+b" if have else "wb") as f:
             if have:
                 f.seek(have)
@@ -222,6 +248,8 @@ def _download_stream(url: str, part: str, size: int, have: int = 0,
                 have += len(buf)
                 if on_progress is not None:
                     on_progress(have)
+    # 源文件时间落到本地 mtime（改名前设置，os.replace 会保留它）
+    _apply_source_mtime(part, lm)
     return have
 
 

@@ -232,9 +232,9 @@
       e.name = nm || ('#' + numOf(e.num));
       e.sortName = e.name;
       e.idNum = parseInt(numOf(e.num), 10) || 0;
-      // 实装日期（公共素材清单里的 d 字段）：给"按实装日期"排序用，
-      // 以前立绘页没有这一项，跟 CG 页对不上（2026-11-15 反馈）
-      e.date = e.cid != null ? String((META[e.cid] || {}).d || '') : '';
+      // 排序键走 ESC.datePick（有实装日的一组 / 无实装日的一组；
+      // 编号 < 100 的包日期只在无日期组内部排）。本页不显示日期，只用于排序。
+      Object.assign(e, e.cid != null ? ESC.datePick(e.cid) : { date: '', nodate: true });
     });
     return out;
   }
@@ -256,7 +256,8 @@
     // 排序走 common.js 的统一实现（立绘页以前自己写了一套 cmp、选项也少两项，
     // 和 CG 页对不上；2026-11-15 反馈「搞那么多套」）
     list = ESC.sortItems(list, ST.sort, e => ({
-      id: e.idNum, name: e.name, count: e.imgs, date: e.date,
+      id: e.idNum, name: e.name, count: e.imgs,
+      date: e.date, nodate: e.nodate,
     }));
 
     const rows = [];
@@ -331,7 +332,9 @@
       name: c.title,
       // 立绘 = 这套服装的表情数
       count: c.files.length,
-      date: c.cid != null ? String((META[c.cid] || {}).d || '') : '',
+      // 排序键：同侧栏（见 buildData），有实装日组 / 无实装日组
+      date: c.cid != null ? ESC.datePick(c.cid).date : '',
+      nodate: c.cid == null ? true : ESC.datePick(c.cid).nodate,
     };
   }
 

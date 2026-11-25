@@ -3512,8 +3512,33 @@ function avStandNum(el) {
   const m = /^(?:stand|char)_(\d+)_/i.exec(String(el.dataset.stId || ''));
   return m ? m[1] : '';
 }
+/** 组名是不是这位话者本人（本名 / 简称 / 形态名都算）。
+ *
+ *  沿用旧的「互相包含」判定：斗羽 ⊂ 斗羽大洋、学生ランス ⊃ ランス、
+ *  キリカ ⊂ 報生キリカ水着、双葉 ⊂ 幻ノ川双葉反転 —— 这些是同一个人的
+ *  另一套衣服/形态，头像应当照常显示。
+ *
+ *  **只额外排除「影子 / 分身」**：名字夹在组名中间、组名又是「…影 / …分身」
+ *  这类复制体时，那张立绘不是说话人本人 —— 真トキサダ 的独白顶了白トキサダ
+ *  （n4079）的头像（2026-11-24 用户反馈，ビヨンドワールド・ダイビング 第2段第102句）。
+ *  影子/分身说话时名字本身就是完整组名（戦部トキサダ影 / 星分身），仍能正常匹配。 */
+function avGroupIsExact(gid, raw) {
+  const g0 = String(gid == null ? '' : gid).trim();
+  const g = avNorm(g0);
+  const nm = avNorm(raw);
+  if (!g || !nm) return false;
+  if (!(g === nm || g.indexOf(nm) >= 0 || nm.indexOf(g) >= 0)) return false;
+  if (/影|分身|コピー|複製|クローン/.test(g0)) {
+    /* 影子/分身：本名要正好是组名的开头/结尾（戦部トキサダ影 不行 =
+       另一个复制体），或者组名本身就是话者名的一部分
+       （话者「マヤエル＆怠惰魔影」对着「怠惰魔影」的立绘 —— 同一个人在场）。 */
+    return g === nm || g.startsWith(nm) || g.endsWith(nm)
+      || nm.startsWith(g) || nm.endsWith(g);
+  }
+  return true;
+}
 /** 当前说话人的立绘：优先取唯一亮着的那张（autoTalk 已经把其他人压暗）；
- *  多张同时亮时，再按名字挑最像的。 */
+ *  多张同时亮时，再按名字挑。 */
 function avStandFor(raw) {
   const nm = avNorm(raw);
   const lit = [];
@@ -3527,7 +3552,7 @@ function avStandFor(raw) {
        组名写法不同（王衣衣 / イーイー）时走编号级确认，仍是同一个人。 */
     const el = lit[0];
     const gid = avNorm(el.dataset.gid || '');
-    if (nm && gid && avScore(gid, nm) >= 500) return el;
+    if (nm && gid && avGroupIsExact(el.dataset.gid, raw) && avScore(gid, nm) >= 500) return el;
     if (nm && avIdIsName(avStandNum(el), raw)) return el;
     return null;
   }
@@ -3535,7 +3560,7 @@ function avStandFor(raw) {
     let best = null, bestScore = 0;
     lit.forEach(el => {
       const gid = avNorm(el.dataset.gid || '');
-      if (!gid) return;
+      if (!gid || !avGroupIsExact(el.dataset.gid, raw)) return;
       const s = avScore(gid, nm);
       if (s > bestScore) { bestScore = s; best = el; }
     });
@@ -3663,9 +3688,10 @@ function avStandId(el, side) {
  *  ↔ 话者「イーイー」）再看立绘编号：同一个编号的其它组名包含话者名
  *  就说明是同一个人，仍然是**先认人再看图**，不会张冠李戴。 */
 function avGroupIsName(group, key, raw) {
-  const nm = avNorm(raw);
-  const g = avNorm(group);
-  if (nm && g && (g === nm || g.indexOf(nm) >= 0 || nm.indexOf(g) >= 0)) return true;
+  /* 与 avStandFor 同一把尺：名字在组名末尾（形态前缀+名字），或名字后跟
+     分隔符的「名字+称号」；名字夹在中间、后面还挂着别的字的不算
+     （戦部トキサダ影 ≠ トキサダ，2026-11-24 用户反馈）。 */
+  if (avGroupIsExact(group, raw)) return true;
   const m = /^(?:stand|char)_(\d+)_/i.exec(String(key || ''));
   return !!(m && avIdIsName(m[1], raw));
 }
@@ -3806,6 +3832,11 @@ function avNameIsId(raw, id) {
   return !!full && hit(full);
 }
 function avResolve(raw) {
+  /* 合体/双人名（マヤエル＆怠惰魔影、ランス＆ヴィーカ…）没有单人头像：
+     一个头像代表不了两个人。全站 236 个带 ＆ 的话者名一律不显示
+     （2026-11-25 用户反馈：第3部 終章 第5段第170句 把 怠惰魔影 的 e5179
+     套给了「マヤエル＆怠惰魔影」，而 e5179 是 アル・ペオル 那一侧的图）。 */
+  if (/[＆&]/.test(String(raw || ''))) return null;
   const nm = avNorm(raw);
   if (!nm) return null;
   const cgChar = avCgCharId();
@@ -3849,6 +3880,13 @@ function avResolve(raw) {
       if (picked) id = picked;
     }
   }
+  /* n####（4xxx usericon）不是剧情头像 —— 同一编号和立绘完全对不上：
+       幻ノ川双葉反転 4025 = 黑发学生装，n4025 = 绿发少女；
+       四方堂リコリス拡大 4018 = 粉发白裙，n4018 = 蓝发红衣；
+       エスカチーム 4001 = 四个女学生，n4001 = 黑发男人。
+     4xxx 是另一套游戏头像，编号和立绘编号没有对应关系（2026-11-25 用户核对）。
+     无论从立绘、CG 最后一张、话者名映射来的，一律不放进剧情。 */
+  if (id && /^n\d+$/i.test(String(id))) id = null;
   /* 不再使用 othereps/part.c 做段级兜底：它只能说明本段主角色，
      不能证明当前 CG 一定属于该角色，容易把同段其他话者套错。 */
   /* 画外音/没有立绘时，才退回本篇主卡；名字对不上就不硬套主角头像。 */
@@ -5264,6 +5302,10 @@ async function seekTo(midx, opt) {
         $('#msgText').classList.remove('partNotice');
         renderMsg($('#msgText'), lineRich(m));
       }
+      /* 关掉自动播放后逐句点「下一句」走的就是这条分支：以前只渲染文字、
+         不记进度，整部剧情手动看完「播放记录」里还是空的（2026-11-25
+         用户反馈）。语义与自动播放每显示一句时一致。 */
+      noteProgress();
       seeking = false;
       return;
     }
@@ -7663,12 +7705,13 @@ function renderSidebarBody(filter = '') {
       (m.zh || '').toLowerCase().includes(f);
   });
 
-  // 排序走共用函数（common.js），和 CG 页、安装列表同一套规则
-  list = ESC.sortItems(list, SET.sortBy || 'id', c => ({
+  // 排序走共用函数（common.js），和 CG 页、安装列表同一套规则。
+  // 日期键 = ESC.datePick：有实装日的一组在前；没有实装日的按包日期在本组内排、
+  // 且整组沉底（编号 < 100 的包日期不会混进有实装日的那组）。
+  list = ESC.sortItems(list, SET.sortBy || 'id', c => Object.assign({
     id: String(c.id).padStart(6, '0'),
     name: NAMES[c.id] || '',
-    date: (CHARMETA[c.id] || {}).d || '',
-  }));
+  }, ESC.datePick(c.id)));
 
   /* 资源没下载的排到列表底部（稳定排序，各自内部顺序不变）。
      只有本地服务端在线时才有 status，否则一律当"未知"不折腾顺序。 */
@@ -7703,7 +7746,9 @@ function renderSidebarBody(filter = '') {
     /* 只写 aria-label，不写 title：行上已有 #bnrTip 详情卡，再给 title 会让
        浏览器并排弹一个白底气泡（2026-11-23 用户反馈"一白一黑两个浮窗"）。 */
     d.setAttribute('aria-label', `${nm}${m.zh ? ' / ' + m.zh : ''}`
-      + `\nID ${c.id} · ${m.r || '未收录'}${m.d ? ' · ' + m.d : ''}`
+      + `\nID ${c.id} · ${m.r || '未收录'}`
+      + `${m.d ? ' · 实装 ' + m.d
+        : (ESC.packDateLabel(c.id) ? ' · ' + ESC.packDateLabel(c.id) : '')}`
       + (st === 'missing' ? '\n资源未下载：点「资源管理」安装后即可播放' : '')
       + (st === 'soft-missing' ? '\n无语音：官方源未提供该语音包' : ''));
     /* 图片要不要请求，必须"能确定磁盘上有图"才发 —— 横幅和头像都不随程序分发，
@@ -7758,7 +7803,9 @@ function renderSidebarBody(filter = '') {
         : '')
         + `<div style="font-weight:600;margin-bottom:4px">${esc(nm)}</div>`
         + `<dl><dt>ID</dt><dd>${c.id}</dd>`
-        + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}${m.d ? ' · 实装 ' + esc(m.d) : ''}</dd>`
+        + `<dt>稀有度</dt><dd>${esc(m.r || '未收录')}`
+        + `${m.d ? ' · 实装 ' + esc(m.d)
+          : (ESC.packDateLabel(c.id) ? ' · ' + esc(ESC.packDateLabel(c.id)) : '')}</dd>`
         + `<dt>剧情</dt><dd>${parts} 段 · ${c.lines || 0} 句</dd>`
         + `<dt>状态</dt><dd>${stateText(st)}</dd>`
         + (rec ? `<dt>上次看到</dt><dd>第 ${rec.p + 1} 段 · 第 ${UD.lineNo(rec)}/${rec.n} 句`

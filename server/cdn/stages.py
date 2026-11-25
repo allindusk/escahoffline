@@ -35,7 +35,8 @@ from . import select
 from .config import (ARCHIVE_DIR, AUDIO, DATA, FILES_AUDIO, FILES_IMG,
                      FILES_STORY, IMG, IMG_X2, ROOT, SCRIPTS, STATE_DIR, WEB, WS,
                      add_scripts_to_path)
-from .net import _log, fetch_many, hint_for, summarize_fails
+from .net import (_log, bundle_url, fetch_many, head, hint_for,
+                  summarize_fails)
 
 add_scripts_to_path()          # 之后才能 import unityfs_probe / parse_script
 
@@ -2089,8 +2090,11 @@ def regen_avatarmap() -> dict:
                 entry["base"] = "battle" if entry.get("battle") else "daily"
             forms[raw] = entry
         elif b == "npc":
-            k = f"n{cid:04d}"
-            forms[raw] = {"b": "npc", "id": cid, "avatar": k if _has(k) else None}
+            # 4xxx usericon 与立绘编号不是一套：同一编号的图和立绘完全对不上
+            # （4025 黑发学生装 vs n4025 绿发少女，4018 粉发 vs n4018 蓝发，
+            # 4001 四个女学生 vs n4001 黑发男人）。2026-11-25 用户核对后确认
+            # 4xxx 不是剧情头像，这里不再给 npc 立绘挂 n####。
+            forms[raw] = {"b": "npc", "id": cid, "avatar": None}
         elif b == "enemy":
             k = f"e{cid:04d}"
             forms[raw] = {"b": "enemy", "id": cid, "avatar": k if _has(k) else None}
@@ -2115,9 +2119,8 @@ def regen_avatarmap() -> dict:
             if forms[raw].get("battle") is None:
                 forms[raw]["battle"] = f"b{cid:03d}"
         elif kind == "n":
-            raw = str(cid)
-            forms.setdefault(raw, {"b": "npc", "id": cid,
-                                   "avatar": f"n{cid:04d}"})
+            # 4xxx 不是剧情头像（见上面）：即使本机有 n 文件也不写进映射。
+            continue
         elif kind == "e":
             raw = str(cid)
             forms.setdefault(raw, {"b": "enemy", "id": cid,
@@ -2781,8 +2784,8 @@ def regen_charmeta() -> None:
 def _bind_meta_by_id(entries: dict) -> int:
     """按 id 把「名字键」元信息补进 ``charmeta`` 条目，返回补到的个数（原地改）。
 
-    只填**空着的**字段（稀有度 / 类型）；实装日以 Wiki 为准直接覆盖（推定值
-    ``dEst`` 本来就该被它顶掉）。已经在表里的不动。
+    只填**空着的**字段（稀有度 / 类型）；实装日只认 Wiki 的真日期 —— 旧版本留下
+    的推定值（``dEst``，其实是本机下载时间）不算数，不能贴到界面上。
     """
     from . import wiki as wiki_mod
     names = _load_names()
@@ -2804,62 +2807,170 @@ def _bind_meta_by_id(entries: dict) -> int:
         for k in ("r", "t"):
             if not cur.get(k) and m.get(k):
                 cur[k] = m[k]
-        if m.get("d"):
+        # 推定实装日（dEst）不是 Wiki 给的，不能当实装日用
+        if m.get("d") and not m.get("dEst"):
             cur["d"] = m["d"]
         if cur != before:
             filled += 1
     return filled
 
 
-def _pack_birth(path: str) -> str:
-    """文件创建时间（Windows 创建时间，退化到 mtime），格式 ``YYYY/MM/DD``。"""
+def _cdn_file_date(name: str) -> str:
+    """**资源包源文件**的日期（``YYYY/MM/DD``），查不到返回空串。
+
+    口径（用户 2026-11-25 明确）：要用"资源包源文件"的创建日期，**不是本机**
+    下载/解包出来的文件时间 —— 本机时间每个用户都不一样，拿它当实装日毫无意义。
+
+    源文件时间只能从资源 CDN 的响应头拿：``Last-Modified``（服务器上的文件时间，
+    对所有人一致）。它比真实「実装日」略早（包里是上架前打好的，实测新角色早
+    3~5 天），所以只作为**临时值**，Wiki 给出真日期时由 ``wiki.merge_meta`` 覆盖。
+
+    时区按 JST 换算：游戏与 Wiki 的日期都是日本时间，而 HTTP 头是 GMT。
+    """
+    from email.utils import parsedate_to_datetime
+    from datetime import timedelta
     try:
-        st = os.stat(path)
-    except OSError:
+        h = head(bundle_url(name))
+    except Exception as e:                                     # noqa: BLE001
+        _log(f"查源文件日期失败（{name}）：{str(e)[:100]}")
         return ""
-    ts = getattr(st, "st_birthtime", None) or st.st_mtime
-    return time.strftime("%Y/%m/%d", time.localtime(ts))
+    lm = (h or {}).get("Last-Modified") or ""
+    if not lm:
+        return ""
+    try:
+        dt = parsedate_to_datetime(lm)
+        if dt is None:
+            return ""
+        return (dt + timedelta(hours=9)).strftime("%Y/%m/%d")
+    except Exception:                                          # noqa: BLE001
+        return ""
 
 
-def ensure_char_date(cid: int) -> str:
-    """给「还没有实装日期」的新角色补一个**推定日期**（= 剧本资源包的创建时间）。
+def _ws_meta_path() -> str:
+    return os.path.join(WS, "char_meta.json")
 
-    场景：新角色刚上架，用户点「更新剧情」能装到包，但 Wiki 是第三方、通常延后
-    一两天才收录这个角色。这段时间稀有度/类型只能空着，日期也不必干等 ——
-    先用包自己的时间顶上，并用 ``dEst`` 标记它是推定值。
 
-    之后用户再点「更新角色信息」，wiki 给出真日期时由
-    :func:`wiki.merge_meta` 覆盖（它只在 wiki 有值时才覆盖），并清掉 ``dEst``。
+def _read_ws_meta() -> dict:
+    p = _ws_meta_path()
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:                                          # noqa: BLE001
+        return {}
 
-    只对**本次安装的角色**调用，不会给历史角色乱填。
+
+def _write_ws_meta(meta: dict) -> None:
+    """原子写 ``userdata/char_meta.json``（缩进 1，和 sync_wiki 一致）。"""
+    p = _ws_meta_path()
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+
+
+def ensure_pack_date(cid: int) -> str:
+    """给还没有实装日的角色记一个**包日期**（源包文件日期），返回写入值或空。
+
+    用户 2026-11-25 定的规则：
+      · 实装日只以 Wiki 为准（``d``）；
+      · Wiki 没有实装日时，才用「资源包**源文件**日期」顶上，存成 **``p``
+        （包日期）**，页面显示时必须写「包日期」而不是「实装日」；
+      · 源文件 = CDN 上那份包的时间（``Last-Modified``，对所有人一致），
+        绝不是本机下载文件的 ctime（旧实现就是这么错的，见
+        :func:`repair_est_char_dates`）；
+      · 编号 < 100 的老角色：``p`` 只用来参与"按实装日期"排序，页面上留空
+        （由前端按 id 判断，见 ``cg.js`` / ``storylist.js``）。
     """
     names = _load_names()
     nm = names.get(str(cid))
     if not nm:
         return ""
-    base = re.sub(r"\s*\(\d+\)$", "", nm)
-    path = os.path.join(WS, "char_meta.json")
-    meta = {}
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                meta = json.load(f) or {}
-        except Exception:                                      # noqa: BLE001
-            meta = {}
+    base = _NAME_SUFFIX_RE.sub("", nm)
+    meta = _read_ws_meta()
     cur = dict(meta.get(base) or {})
-    if cur.get("d"):
-        return ""                       # 已有日期（wiki 给的或上次推定），不覆盖
-    d = _pack_birth(os.path.join(FILES_STORY,
-                                 f"bundle_scenarioscript_char_{cid}"))
-    if not d:
+    if cur.get("d") or cur.get("p"):
+        return ""                       # 实装日已有，或包日期已经记过
+    p = _cdn_file_date(f"bundle_scenarioscript_char_{cid}")
+    if not p:
         return ""
-    cur["d"] = d
-    cur["dEst"] = 1
+    cur["p"] = p
     meta[base] = cur
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=1)
-    return d
+    _write_ws_meta(meta)
+    return p
+
+
+def fill_pack_dates(job=None, limit: int = 400) -> int:
+    """给「Wiki 没有实装日、也还没记包日期」的角色批量补 ``p``，返回补到几个。
+
+    只由**用户显式动作**（「更新角色信息」）触发：每个角色一个 HEAD 请求，
+    不下载包。连续 3 次查不到就认为网络/源不可用，直接停，下次再补（幂等）。
+    """
+    meta = _read_ws_meta()
+    names = _load_names()
+    rev: dict = {}
+    for cid, nm in names.items():
+        rev.setdefault(_NAME_SUFFIX_RE.sub("", nm), str(cid))
+    todo = [(nm, m) for nm, m in meta.items()
+            if isinstance(m, dict) and not m.get("d") and not m.get("p")]
+    if not todo:
+        return 0
+    n = fails = 0
+    for i, (nm, m) in enumerate(todo[:limit], 1):
+        cid = rev.get(_NAME_SUFFIX_RE.sub("", nm))
+        if not cid:
+            continue
+        p = _cdn_file_date(f"bundle_scenarioscript_char_{cid}")
+        if not p:
+            fails += 1
+            if fails >= 3:
+                if job is not None:
+                    job.log(f"   源包日期查询连续失败，先停在 {i}/{len(todo)}"
+                            "（下次「更新角色信息」继续补）")
+                break
+            continue
+        fails = 0
+        m["p"] = p
+        n += 1
+    if n:
+        _write_ws_meta(meta)
+        if job is not None:
+            job.log(f"   补了 {n} 个角色信息表的「包日期」（源包文件日期；"
+                    "Wiki 有实装日的不用它）")
+    return n
+
+
+def repair_est_char_dates() -> int:
+    """清掉**旧版错值**（``dEst``）、把旧 ``dSrc`` 迁到 ``p``，返回处理条数。
+
+    2026-10-30 的实现把「本机剧本包 ctime」当实装日写入（``dEst=1``），重装/补下
+    过的老角色因此被写成重下那天（2026-11-25 用户报的三个 2020 年老角色都是
+    2026/11/16）。这种值不可能对，一律清成空 =「未知」。
+
+    若表里还有过渡版本写的 ``dSrc``（源文件日期，写在了 ``d`` 上），搬到 ``p`` ——
+    那是「包日期」而不是实装日，不能再叫实装日。
+    """
+    meta = _read_ws_meta()
+    n = 0
+    for _name, m in list(meta.items()):
+        if not isinstance(m, dict):
+            continue
+        if m.get("dSrc"):
+            if m.get("d") and not m.get("p"):
+                m["p"] = m["d"]
+            m.pop("dSrc", None)
+            m.pop("d", None)
+            n += 1
+        if m.get("dEst"):
+            m.pop("dEst", None)
+            m.pop("d", None)
+            n += 1
+    if not n:
+        return 0
+    _write_ws_meta(meta)
+    return n
 
 
 def _load_names() -> dict:
@@ -3082,6 +3193,10 @@ def sync_wiki(job=None, proxy: str | None = None) -> dict:
     if adopted and job is not None:
         job.log("新角色名字已补上：" + "、".join(
             "{} {}".format(c, n) for c, n in adopted))
+    # Wiki 没有实装日的角色：补一个「包日期」（源包文件日期，不是实装日）。
+    # 这一步要联网（每个角色一个 HEAD），只在用户点「更新角色信息」时做，
+    # 不在启动/后台自己跑。
+    fill_pack_dates(job=job)
     regen_charmeta()
     return {"merged": len(merged), "scraped": len(scraped),
             "unmatched": len(unmatched),

@@ -93,10 +93,15 @@ _DATA_TABLES = (
 _data_stamp_cache = {"at": 0.0, "ver": {}}
 
 
-def data_ver() -> dict:
-    """数据表的「改没改」指纹：文件名 → ``修改时间-大小``（只 stat，3 秒缓存）。"""
+def data_ver(force: bool = False) -> dict:
+    """数据表的「改没改」指纹：文件名 → ``修改时间-大小``（只 stat，3 秒缓存）。
+
+    ``force=True`` = 跳过缓存，现 stat 一遍。任务刚收尾那一下前端会点名要
+    "这一刻"的值（见 common.js ``checkData(force, fresh)``）：缓存里还是任务
+    写文件之前的指纹，会让它误判"没变化"，用户就又得自己刷新。
+    """
     now = time.time()
-    if _data_stamp_cache["ver"] and now - _data_stamp_cache["at"] < 3:
+    if not force and _data_stamp_cache["ver"] and now - _data_stamp_cache["at"] < 3:
         return _data_stamp_cache["ver"]
     out: dict = {}
     for fn in _DATA_TABLES:
@@ -1328,7 +1333,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # 随包数据表（names / charmeta / index / cgmap / standmap …）的指纹。
             # 页面重新可见时比对一次，变了就原地重载并重画（见 common.js ESC.watchData）。
             # 只 stat 十来个文件 + 3 秒缓存，随便轮询都不心疼。
-            return self._json({"ver": data_ver()})
+            # ``?fresh=1`` = 跳过缓存：任务收尾/外壳点名时就用它，一次请求拿到
+            # 当下的指纹，而不是等缓存过期再看一遍。
+            return self._json({"ver": data_ver(force=bool(q.get("fresh")))})
         if path == "/api/manifest":
             return self._json(packs.manifest())
         if path == "/api/links":
@@ -2176,7 +2183,8 @@ class _QuietServer(http.server.ThreadingHTTPServer):
 #: 头像来源修复的内部修订号：改了修复逻辑就 +1，老用户升级后会重跑一次。
 #: rev 2（2026-11-23）：不再从立绘现裁 —— 官方没头像的一律删除、保持无头像。
 #: rev 3（2026-11-24）：恢复「官方图只有脸部 → 立绘裁」；名单外的官方没有的仍删除。
-AVATAR_REPAIR_REV = 3
+#: rev 4（2026-11-25）：4xxx（n####）不是剧情头像，映射里不再挂 n，启动时重建一次。
+AVATAR_REPAIR_REV = 4
 
 
 def _avatar_dirs_sig() -> list:
@@ -2219,11 +2227,11 @@ def _repair_avatar_sources() -> None:
         idx = cdn_install.config_manifest_index()
         # 清单缺失时也要跑：立绘脸裁不依赖清单，能先补上就补上（删除逻辑会自己跳过）。
         fixed, removed = cdn_stages.fix_enemy_avatars(idx or {})
+        # 映射口径也变了（rev 4 去掉 n####）：即使没有文件增删也要重建一次。
+        cdn_stages.regen_avatarmap()
         if fixed or removed:
-            # 头像文件变了 → 立绘组→头像的映射、媒体索引、高清图覆盖层都要同步重建，
-            # 否则前端还按旧表去请求已被删掉的 e5072（404），或者新裁的 e5246
-            # 被 ESC.media.has() 判成"没有这张图"而不显示。
-            cdn_stages.regen_avatarmap()
+            # 头像文件变了 → 媒体索引、高清图覆盖层也要同步重建，否则新裁的 e5246
+            # 会被 ESC.media.has() 判成"没有这张图"而不显示。
             try:
                 cdn_stages.regen_mediaindex()
             except Exception:                              # noqa: BLE001
@@ -2337,6 +2345,19 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> int:
         # 剧情目录/其他分组：老用户装过的剧情要能自动补上标题、漫画标记与入口分组
         # （否则「活动剧情 第99话」「其他剧情 第80话」这种没有名字的行永远不会变）。
         _repair_catalog()
+        # 旧版本把「本机剧本包 ctime」当实装日写进 char_meta（dEst = 每个用户重下
+        # 那天，2026-11-25 用户报的三个 2020 年老角色都显示 2026/11/16）。
+        # 这种值不可能对，启动时清成空；正确口径是源包文件的日期（dSrc），
+        # 只在安装角色时查一次 CDN（Last-Modified），不在启动时联网。
+        try:
+            _n_dest = cdn_stages.repair_est_char_dates()
+            if _n_dest:
+                cdn_stages.regen_charmeta()
+                applog.info("元数据：清掉 %d 个旧版「推定实装日」（那是本机下载时间，"
+                            "不是实装日；Wiki 有真日期的重新同步即可）" % _n_dest,
+                            tag="meta")
+        except Exception as e:                                 # noqa: BLE001
+            applog.debug("推定实装日清理跳过（不影响使用）：%s" % e, tag="boot")
     # 本机媒体清单：每次启动按磁盘重扫头像/剧情横幅（两次 listdir，毫秒级）。
     # 前端只请求清单里有的图 —— 纯净包刚启动、官方新角色还没装素材时，
     # 那一行直接画首字色块，不再对不存在的图发请求刷 404。

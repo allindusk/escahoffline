@@ -1566,6 +1566,18 @@
           } catch (e) { /* 忽略 */ }
         }
       }
+      /* 装/卸一部剧情、导出音声都会重写 data/voicemap.js（有原声集导出时还有
+         gallery.js）。用户可能正停在原声集页看列表 —— 那页的文档永远是"可见"
+         状态，收不到 visibilitychange，只能由这里点名。让外壳转给常驻播放器，
+         它自己比对指纹后原地重画（不整页重载，在听的那首不断）。
+         2026-11-25 反馈：新装一个角色后角色音声要 F5 才出现。 */
+      if (window.parent !== window
+        && ended.some(j => j.kind === 'install' || j.kind === 'uninstall'
+          || j.kind === 'export')) {
+        try {
+          window.parent.postMessage({ t: 'ost:metacheck' }, location.origin);
+        } catch (e) { /* 忽略 */ }
+      }
       if (!ST._refreshT) {
         ST._refreshT = setTimeout(() => {
           ST._refreshT = null;

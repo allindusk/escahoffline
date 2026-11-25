@@ -171,6 +171,7 @@ function buildIndex() {
         r: (META[c] && META[c].r) || '',
         t: (META[c] && META[c].t) || '',
         d: (META[c] && META[c].d) || '',
+        p: (META[c] && META[c].p) || '',
         groups: [],
         total: 0
       });
@@ -377,9 +378,10 @@ function renderCharList(box) {
   // 排序走共用函数（和播放器、安装列表同一套规则：
   // 按日期排时**没有日期的沉底**，以前 CG 页是自己写的，未下载的会混在中间）
   // 排序（含"按张数"）统一走 common.js —— 立绘页用的是同一份实现
-  list = ESC.sortItems(list, sortBy, c => ({
-    id: c.id, name: c.name, date: c.d, count: c.total,
-  }));
+  /* 排序键走 ESC.datePick：有实装日（或编号 >= 100 的包日期）的一组排前面，
+     编号 < 100 的包日期只在"没有实装日"的那一组内部排（用户 2026-11-25）。 */
+  list = ESC.sortItems(list, sortBy, c => Object.assign(
+    { id: c.id, name: c.name, count: c.total }, ESC.datePick(c.id)));
   // 未下载的沉底（播放器一直这么做，CG 页以前没有 → 同一个下拉两页结果不同）
   list = ESC.haveFirst(list, c => dlHave(c.id));
   /* 还没有 CG 组的角色（新实装、没装/没导出）再压到最底：
@@ -390,8 +392,13 @@ function renderCharList(box) {
 
   for (const c of list) {
     const d = el('div', 'char-btn' + (curChar === c.id ? ' on' : ''));
-    /* 按日期排序时把日期显示出来，否则看不出排序依据 */
-    const dTxt = (c.d && sortBy.startsWith('date')) ? ' · ' + c.d : '';
+    /* 按日期排序时把日期显示出来，否则看不出排序依据。
+       · 有 Wiki 实装日 → 直接显示日期（沿用原样）；
+       · 只有「包日期」→ 必须带上前缀，不能让人以为是实装日；
+         编号 < 100 的老角色一律不显示（只参与排序，用户 2026-11-25 要求）。 */
+    const packLb = ESC.packDateLabel(c.id);
+    const dTxt = !sortBy.startsWith('date') ? ''
+      : (c.d ? ' · ' + c.d : (packLb ? ' · ' + packLb : ''));
     // 头像看**头像素材**是否已下载（公共素材里 378 张），不能只看剧情装没装；
     // 否则只装少数角色时其余全变首字色块，像是"头像没加载"。
     // 但"整层下过"不等于"这个角色有图"：官方刚上新时 384/385 仍算齐，
@@ -509,11 +516,11 @@ function renderGrid() {
     // 未下载（没有日期）的沉底 —— 和播放器、安装列表一致
     const keyOf = (i) => {
       const c = chars.get(GROUPS[i].c);
-      return {
+      return Object.assign({
         id: String(GROUPS[i].c).padStart(6, '0'),
         name: c ? c.name : '',
-        date: (c && c.d) || '',
-      };
+        // 同侧栏：有实装日的组 / 无实装日的组（包日期只在组内排）
+      }, c ? ESC.datePick(c.id) : { date: '', nodate: true });
     };
     const sorted = ESC.sortItems(visible, sortBy, keyOf);
     visible.length = 0;

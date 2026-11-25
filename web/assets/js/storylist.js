@@ -130,7 +130,9 @@ window.SL = (() => {
       return {
         name: nm || ('ID ' + id),
         rar: (m.r === 'SSR' || m.r === 'SR' || m.r === 'R') ? m.r : '',
-        date: m.d || '',
+        cid: +id,
+        date: m.d || '',          // Wiki 实装日（真值）
+        p: m.p || '',             // 包日期（源包文件日期，不是实装日）
         cover: bnrPath('char_' + id),
         adv: false, parts: 0, lines: 0,
         order: '',
@@ -157,7 +159,7 @@ window.SL = (() => {
         ? 'media/img/story/' + a.kind + '_' + a.no + '.webp' : '');
       return {
         name: (alias && a.title) ? a.title : ESC.storyTitle(key),
-        rar: '', date: '', cover: bnrKeep(cov), adv: true,
+        rar: '', date: '', p: '', cid: 0, cover: bnrKeep(cov), adv: true,
         parts: a.parts || 0, lines: a.lines || 0,
         // 漫画式活动（零台词 + 有内容）：列表里挂「漫画」标签
         manga: !!(a.manga || (a.lines === 0 && a.parts > 0)),
@@ -183,7 +185,7 @@ window.SL = (() => {
        默认「最新在前」时把没装的新章节顶到已装章节上面（2026-11-24 审计）。 */
     return {
       name: ESC.storyTitle(key),
-      rar: '', date: '',
+      rar: '', date: '', p: '', cid: 0,
       cover: canBnr ? bnrPath(kind2 + '_' + no2) : '',
       adv: true, parts: 0, lines: 0,
       order: String(kind2 === 'main' && no2 !== null ? no2 * 10 : 99990)
@@ -268,8 +270,10 @@ window.SL = (() => {
          （2026-11-23 用户要求默认倒序，不然每次更新都要滚到底找新剧情）。 */
       return ESC.sortItems(keys, state.sort, k => {
         const i = info(k);
-        return { id: i.adv ? i.order : k, name: nameOf(k),
-                 date: i.adv ? i.order : i.date };
+        // 角色：ESC.datePick 的"有实装日组 / 无实装日组"两段排序
+        // （编号 < 100 的包日期只在无日期组内部排、整组沉底）
+        return Object.assign({ id: i.adv ? i.order : k, name: nameOf(k) },
+          i.adv ? { date: i.order, nodate: false } : ESC.datePick(i.cid));
       });
     }
 
@@ -394,7 +398,13 @@ window.SL = (() => {
       const showBnr = !!(bannersOn() && i.cover);
       const sub = [];
       if (i.rar) sub.push('<span class="sl-rar-i" data-r="' + i.rar + '">' + i.rar + '</span>');
+      /* 日期三分支（用户 2026-11-25 规则）：
+         · Wiki 有实装日 → 「实装 日期」；
+         · 没有实装日、但记了包日期、且编号 >= 100 → 必须写「包日期」，不能叫实装日；
+         · 编号 < 100 的老角色（或没有 p）→ 留空（只参与排序）。 */
+      const packLb = ESC.packDateLabel(i.cid);
       if (i.date) sub.push('<span>实装 ' + esc(i.date) + '</span>');
+      else if (packLb) sub.push('<span>' + esc(packLb) + '</span>');
       else if (!i.adv) sub.push('<span>实装日期未收录</span>');
       if (i.adv && i.parts) {
         sub.push('<span>' + i.parts + ' 段 · ' + i.lines + ' 句</span>');
@@ -417,7 +427,8 @@ window.SL = (() => {
       // 别名条目（adv_op 序章）用自己的标题，否则走页面覆盖名（其他分类的入口清单名）
       const label = (typeof item === 'object' && item.key) ? i.name : nameOf(key);
       const title = label
-        + (i.date ? '\n实装 ' + i.date : '')
+        + (i.date ? '\n实装 ' + i.date
+          : (packLb ? '\n' + packLb + '（资源包源文件日期，非实装日）' : ''))
         + (i.adv && i.parts ? '\n' + i.parts + ' 段 · ' + i.lines + ' 句' : '')
         + (extra.length ? '\n' + extra.join(' · ') : '')
         + (cfg.rowTitle ? '\n' + cfg.rowTitle(key) : '');

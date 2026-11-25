@@ -28,11 +28,15 @@
     + 'c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5'
     + 'c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
 
-  const GAL = window.__GALLERY || { tracks: [] };
-  const VMAP = window.__VOICEMAP || { units: [] };
-  const NAMES = window.__NAMES || {};
+  /* 数据表缺席时也把**全局那个对象**建出来，不要另起一个字面量。
+     区别很关键：第一次装音声之前 data/voicemap.js 根本不存在，热重载时
+     ESC.reloadData 是把新内容合并回 window.__VOICEMAP —— 如果这里持有的是
+     自己的 {units:[]}，合并进去的新单位就永远看不见（还是得 F5）。 */
+  const GAL = window.__GALLERY || (window.__GALLERY = { tracks: [] });
+  const VMAP = window.__VOICEMAP || (window.__VOICEMAP = { units: [] });
+  const NAMES = window.__NAMES || (window.__NAMES = {});
   // 角色元信息（稀有度 / 职业 / **实装日期 d**）：音声的「按收录顺序」就是按它排的
-  const META = window.__CHARMETA || {};
+  const META = window.__CHARMETA || (window.__CHARMETA = {});
   const MEDIA = window.__MEDIA || null;
   const UD = window.UD || null;
   const AU = $('#au');
@@ -42,25 +46,51 @@
     banner: stem => 'media/img/story/' + stem + '.webp',
   };
 
-  const TRACKS = (GAL.tracks || []).map(t => ({
-    no: +t.no || 0,
-    d: +t.d || 0,
-    j: t.j || '',
-    s: t.s || '',
-    t: t.t || '',
-    g: t.g || '其他',
-    // 详细浮窗要用的元信息：包侧事实 + 音频自带日期（丢了浮窗就只剩分类和时长）
-    o: t.o || '', bn: t.bn || '', sz: +t.sz || 0, dt: t.dt || '',
-    re: t.re === undefined ? null : +t.re,
-  }));
+  /* 曲目 / 语音单位都是从数据表（gallery.js / voicemap.js）**派生**出来的。
+     这两份表是本机反复重建的（装一部剧情、补全原声集都会变），所以派生成函数，
+     数据表原地更新后能重算一遍（见 rebuildData）。2026-11-25 反馈：新装一个
+     角色的剧情后，原声集-角色音声要刷新页面才出现（剧情/CG/立绘都不用）。 */
+  function trackList() {
+    return (GAL.tracks || []).map(t => ({
+      no: +t.no || 0,
+      d: +t.d || 0,
+      j: t.j || '',
+      s: t.s || '',
+      t: t.t || '',
+      g: t.g || '其他',
+      // 详细浮窗要用的元信息：包侧事实 + 音频自带日期（丢了浮窗就只剩分类和时长）
+      o: t.o || '', bn: t.bn || '', sz: +t.sz || 0, dt: t.dt || '',
+      re: t.re === undefined ? null : +t.re,
+    }));
+  }
 
   // 语音单位：{id, k, clips:[[name, path, dur, actCN]]}
   // 2026-11-16：只上线**角色**音声。NPC(1xxxx)/其他(2xxxx) 的语音编号与立绘
   // 是两套独立空间，项目里没有权威对照表（详见 music.js 旧注释），头像无法
   // 正确关联；用户要求连分类一起去掉，不再展示、也不让用户下载。
-  const VUNITS = (VMAP.units || []).filter(u =>
-    u.k === 'char' && (u.clips || []).length && NAMES[String(u.id)])
-    .sort((a, b) => a.id - b.id);
+  function unitList() {
+    return (VMAP.units || []).filter(u =>
+      u.k === 'char' && (u.clips || []).length && NAMES[String(u.id)])
+      .sort((a, b) => a.id - b.id);
+  }
+
+  const TRACKS = trackList();
+  const VUNITS = unitList();
+
+  /** 数据表被别处重写 → **原地**重算派生表。
+   *
+   *  必须原地（``length = 0`` + push）：TRACKS / VUNITS 是 const，buildOst /
+   *  buildVoice / 导出 / 播放队列都抓着这两条数组的引用，换引用等于它们继续看旧表。
+   *  正在播的那一项不受影响：AU 自己拿着 key 与 src，队列重建后按 key 还能找回
+   *  同一条，进度不会跳、也不会串曲（原来担心的"索引错位"只影响行的 data-i，
+   *  renderList 会连同事件一起重绑）。 */
+  function rebuildData() {
+    const t = trackList(), u = unitList();
+    TRACKS.length = 0;
+    t.forEach(x => TRACKS.push(x));
+    VUNITS.length = 0;
+    u.forEach(x => VUNITS.push(x));
+  }
 
   const GROUPS = ['全部', '战斗', '严肃', '日常', '角色曲', '系统', '主题歌', '其他'];
   // 2026-11-16：音声只剩「角色」一类，分类按钮栏（KINDS / renderKind）已删除。
@@ -284,7 +314,10 @@
        「按收录顺序」直接用 voicemap 的 id 序 —— 400~403（2026/11/18 实装）
        会排在 415（10/28）、416（11/04）前面，看着像日期取错了（2026-11-20 反馈）；
        「按时长」更是完全没实现（选了没反应）。 */
-    const dateOf = id => String((META[id] || {}).d || '');
+    /* 排序键走 ESC.datePick：有实装日（或编号 >= 100 的包日期）的一组分在前，
+       编号 < 100 的包日期只在"没有实装日"的组内部排、且整组沉底。
+       本页只用它排序，不显示日期。 */
+    const pickOf = id => ESC.datePick(id);
     const durOf = u => (u.clips || []).concat(u.home || [])
       .reduce((n, c) => n + (+c[2] || 0), 0);
     if (ST.sort === 'name') {
@@ -292,16 +325,15 @@
     } else if (ST.sort === 'dur') {
       units.sort((a, b) => (durOf(b) - durOf(a)) || (a.id - b.id));
     } else {
-      /* 「按实装顺序」= 角色实装日期（charmeta 的 d，与 CG 页"按实装日期"同源），
-         **新→旧**：刚实装的排最前面（2026-11-20 用户要求倒序）。
-         没日期的那 36 个是**开局就有的老角色**（charmeta 里 d 是空的，不是新角色），
-         所以按"最早"处理 → 倒序后自然沉到最后；但编号比所有有日期角色都大 =
-         只能是最新那批（CI 的 charmeta 偶尔晚一天才补上它），当成最新排最前。 */
-      const datedMax = units.reduce((m, u) => (dateOf(u.id) ? Math.max(m, u.id) : m), 0);
-      const keyOf = u => dateOf(u.id) || (u.id > datedMax ? '9999-99-99' : '');
+      /* 「按实装顺序」= 角色实装日期（charmeta 的 d），与 CG 页"按实装日期"同一口径。
+         没有实装日的：编号 >= 100 用包日期混进来一起排；编号 < 100 的包日期只在
+         无日期组内部排、且整组沉底（见 ESC.datePick）。**新→旧**：刚实装的排最前
+         （2026-11-20 用户要求倒序）。 */
       units.sort((a, b) => {
-        const ka = keyOf(a), kb = keyOf(b);
-        if (ka !== kb) return ka > kb ? -1 : 1;   // 日期大（新）的在前
+        const ka = pickOf(a.id), kb = pickOf(b.id);
+        // 无实装日的一组当"最早"：本页固定新→旧，所以它排最后
+        if (ka.nodate !== kb.nodate) return ka.nodate ? 1 : -1;
+        if (ka.date !== kb.date) return ka.date > kb.date ? -1 : 1;  // 日期大（新）的在前
         return b.id - a.id;                       // 同一天：编号大的（更晚）在前
       });
     }
@@ -513,7 +545,7 @@
     if (!ST.list.length) {
       box.innerHTML = '<div class="vempty">还没有导出角色音声。<br>' +
         '它们跟着角色剧情一起装（资源管理 → 剧情安装），' +
-        '装完刷新本页就能听。</div>';
+        '装完再回到本页就会自动出现。</div>';
       return;
     }
     const html = [];
@@ -1808,17 +1840,28 @@
     });
   }
 
-  /* 数据表被别处更新：曲目 / 音声是靠 GAL / VMAP 在加载时派生成 TRACKS / VUNITS 的，
-     原地换会两套索引错位（正在播的那首会跳到别的曲子），所以这里只重画现有列表
-     （名字能立刻更到最新），新增内容提示刷新。
-     另外外壳切回本页时会发 'metacheck'，见 shell.html / 下面的消息处理。 */
+  /* 数据表被别处更新（装完角色剧情补了 voicemap、补全原声集补了 gallery、更新目录
+     补了名字）→ 原地重算派生表并重画，**不再要求刷新页面**。
+     2026-11-25 反馈：新装一个角色的剧情后，只有角色音声要 F5 才出现，剧情/CG/立绘
+     都不用 —— 就是因为这里把 gallery.js / voicemap.js 当"结构变了、内存里换不掉"
+     的冷数据。现在 rebuildData 原地重建，正在播的那首按 key 还能找回。
+     另外外壳切回本页时会发 'metacheck'，见 shell.html / 上面的消息处理。 */
   if (window.ESC && ESC.watchData) {
     ESC.watchData({
-      hot: { 'names.js': '__NAMES' },
-      cold: ['gallery.js', 'voicemap.js'],
-      onReload: function () { renderLists(); },
-      onStale: function () {
-        if (ESC.askReload) ESC.askReload('原声集有新增内容，刷新后即可看到');
+      hot: {
+        'names.js': '__NAMES', 'charmeta.js': '__CHARMETA',
+        'gallery.js': '__GALLERY', 'voicemap.js': '__VOICEMAP',
+      },
+      onReload: function () {
+        rebuildData();
+        /* 只重画列表不够：播放列表下拉（renderLists）与分类按钮/计数都依赖新表，
+           以前这里写成 renderLists() 漏了列表本身（名字变了行里还是旧的）。
+           整表重绘会让滚动位置回到顶部，先记一下再放回去。 */
+        const box = $('#plList');
+        const top = box ? box.scrollTop : 0;
+        renderLists();
+        renderList();
+        if (box) box.scrollTop = top;
       },
     });
   }

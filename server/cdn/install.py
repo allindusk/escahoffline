@@ -3053,12 +3053,12 @@ def _install_char(mf, cid, job, workers, voice, image, maps, force,
                                 f"{str(e)[:160]}。重启程序后重试即可"
                                 "（已下载的资源不会重下）") from e
         stages.regen_names()
-        # 新角色 Wiki 可能还没收录：先把实装日期用剧本包创建时间顶上，
-        # 之后用户点「更新角色信息」拿到 wiki 数据会被自动覆盖。
-        d_est = stages.ensure_char_date(cid)
-        if d_est and job is not None:
-            job.log(f"   实装日期暂用资源包日期 {d_est}"
-                    "（Wiki 收录后会自动覆盖）")
+        # Wiki 还没收录实装日时，记一个「包日期」= 资源包**源文件**日期
+        # （CDN Last-Modified，对所有人一致）。它不写进实装日字段，页面上显示成
+        # 「包日期」；编号 < 100 的老角色只拿它排序、不显示。
+        p_src = stages.ensure_pack_date(cid)
+        if p_src and job is not None:
+            job.log(f"   包日期 {p_src}（资源包源文件日期；Wiki 收录实装日后以 Wiki 为准）")
         stages.regen_charmeta()
 
     chk = _self_check(job, f"char_{cid}")

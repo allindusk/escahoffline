@@ -63,8 +63,9 @@
    * @returns {Array} 新数组
    *
    * 规则（三页一致）：
-   *  - 日期排序时，**空日期按"最早"处理**（升序排最前、降序排最后），
-   *    空日期之间再按 ID 升序排；
+   *  - 日期排序时，``nodate: true`` 的一组（没有实装日）按"**最早**"处理 ——
+   *    升序（旧→新）排最前、降序（新→旧）排最后，组内按 ID；
+   *    其余"有日期但值为空"的同样按最早处理；
    *  - 名字用日文排序（あいうえお）；
    *  - ID 用自然序（char_2 在 char_10 前面）；
    *  - 传了 haveOf，**未下载的一律沉底**（以前只有播放器这么做，
@@ -83,6 +84,12 @@
       arr.sort(function (a, b) {
         const x = String(p(a).date || '');
         const y = String(p(b).date || '');
+        /* 「没有实装日」这一组当**最早**处理（用户 2026-11-25 明确）：
+           编号 < 100 的无实装日角色都是开局那批老角色，所以 旧→新 时排最前、
+           新→旧 时排最后 —— 和原来"空日期 = 最早"的约定一致。
+           组内再按包日期排（见 ESC.datePick），不跟有实装日的那组混。 */
+        const na = !!p(a).nodate, nb = !!p(b).nodate;
+        if (na !== nb) return na ? -dir : dir;
         // 都没日期：同一档，内部按 ID 升序
         if (!x && !y) return byId(a, b);
         // 空日期当作"早于任何有日期的"：升序排最前、降序排最后
@@ -151,8 +158,49 @@
 
   /** 取实装日期（CHARMETA 里是 d 字段），没有返回 '' */
   ESC.dateOf = function (unit) {
-    const meta = (window.CHARMETA || {})[ESC.charId(unit)] || {};
-    return meta.d || '';
+    return ESC.charMeta(ESC.charId(unit)).d || '';
+  };
+
+  /* ------------------------------------------------------------ 包日期（p）
+   * Wiki 有时候**没有**实装日（尤其是开局那批老角色）。按用户 2026-11-25 的规则，
+   * 这种角色记一个「包日期」= 资源包**源文件**的日期（CDN Last-Modified，对所有
+   * 人一致；绝不是本机下载时间），存进 CHARMETA 的 ``p``。
+   *
+   * 它是"参考日期"，**不是实装日**，所以：
+   *   · 编号 < 100 的老角色：页面上留空，只拿它参与「按实装日期」排序；
+   *   · 编号 >= 100：可以显示，但文案必须写「包日期」，不能写成实装日。
+   */
+  /* 元信息表的全局名是 **window.__CHARMETA**（charmeta.js 写的就是这个）；
+     以前这里只认 window.CHARMETA —— 那个名字根本没人定义，于是所有角色都查成
+     空对象：日期排序退化成 ID 排序（2026-11-25 用户看到 神騎プラチネル/id 1
+     排在最前就是它）、「包日期」也永远显示不出来。两个名字都认，别只认一个。 */
+  ESC.charMeta = function (cid) {
+    const t = (typeof window !== 'undefined')
+      ? (window.__CHARMETA || window.CHARMETA || {}) : {};
+    return t[cid] || {};
+  };
+  /** 「按日期」排序用的 ``{date, nodate}``（配合 :func:`ESC.sortItems`）。
+   *
+   *  分成两组（用户 2026-11-25）：
+   *    · **有实装日组**（nodate=false）= 有 Wiki 实装日 ``d``；编号 >= 100 的角色
+   *      还可以用「包日期」``p`` 混进这一组一起排（新角色 Wiki 常晚几天才收录）；
+   *    · **无实装日组**（nodate=true）= 其余：编号 < 100 的包日期**不许**冒充实装日，
+   *      只能在本组内部按包日期排；连包日期都没有的排组末、内部按 ID。
+   *
+   *  排序时「无实装日组」按**最早**处理：旧→新排最前（这批都是开局老角色）、
+   *  新→旧排最后；组内按包日期排，绝不与有实装日的一组混排。
+   *  日期是 ``YYYY/MM/DD``，字符串序=时间序。
+   */
+  ESC.datePick = function (cid) {
+    const m = ESC.charMeta(cid);
+    const canMix = !!m.p && +cid >= 100;
+    return { date: m.d || m.p || '', nodate: !(m.d || canMix) };
+  };
+  /** 该角色的「包日期」显示文案；没有、或编号 < 100 时返回 ''（页面留空） */
+  ESC.packDateLabel = function (cid) {
+    const m = ESC.charMeta(cid);
+    if (m.d || !m.p) return '';
+    return (+cid >= 100) ? ('包日期 ' + m.p) : '';
   };
 
   /* ------------------------------------------------------------ 剧情标题
@@ -532,8 +580,11 @@
    *    · 素材指纹（/api/mediaver）——「公共素材补全 / 提高 CG 画质」改的是图片
    *      文件本身，数据表可能一个字都没变。2026-11-18 用户反馈：补全跑完，别的
    *      页面 F5 之后横幅和头像还是出不来，要 Ctrl+F5 才行。
-   */
-  ESC.checkData = function (force) {
+   *
+   *  ``fresh``：要求服务端现 stat、不吃它那 3 秒指纹缓存。任务刚结束那一下必须
+   *  用它 —— 后端缓存里还是写文件之前的指纹，普通请求会让页面误判"没变化"。
+   *  事件驱动的一次请求，不需要任何补查/定时重试。 */
+  ESC.checkData = function (force, fresh) {
     if (!_watch.groups.length) return Promise.resolve(false);
     if (!force && document.hidden) return Promise.resolve(false);
     const now = Date.now();
@@ -541,7 +592,10 @@
     _watch.at = now;
     const getJson = url => fetch(url, { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : null)).catch(() => null);
-    return Promise.all([getJson(DATA_STAMP_URL), getJson('api/mediaver')])
+    return Promise.all([
+      getJson(DATA_STAMP_URL + (fresh ? '?fresh=1' : '')),
+      getJson('api/mediaver'),
+    ])
       .then(function (res) {
         const v = res[0] && res[0].ver;
         const mv = res[1] && res[1].ver;
@@ -640,7 +694,8 @@
       if (ev.origin !== location.origin) return;
       if (!ev.data || ev.data.t !== 'esc:metacheck') return;
       _watch.at = 0;                     // 外壳点名 = 强制比对一次（跳过节流）
-      ESC.checkData(true);
+      /* 一定是「刚有事件发生」（切页 / 任务结束），要现 stat 的指纹，别吃 3 秒缓存。 */
+      ESC.checkData(true, true);
     });
     poke();                              // 记一次基准
   };

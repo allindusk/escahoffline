@@ -444,8 +444,15 @@ def merge_meta(existing: dict, scraped: dict) -> dict:
         merged["r"] = _wr if _wr in valid_r else (
             merged.get("r") if merged.get("r") in valid_r else "")
         if m.get("d"):
-            # wiki 给出真日期 → 之前用资源包时间填的推定值作废
+            # wiki 给出真日期 → 之前"暂用源文件日期"/本机时间的标示全部作废
+            merged["d"] = m["d"]
             merged.pop("dEst", None)
+            merged.pop("dSrc", None)
+        elif merged.get("dEst"):
+            # 旧版本留下的是**本机下载时间**（不是实装日）：清掉，宁可空着 = 未知
+            # （2026-11-25 用户报的错日期就是这么来的）。dSrc 是源文件日期，保留。
+            merged.pop("dEst", None)
+            merged.pop("d", None)
         if merged["r"] in valid_r:
             out[name] = merged
     for name, m in existing.items():

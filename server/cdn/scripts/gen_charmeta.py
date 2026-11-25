@@ -17,6 +17,14 @@ import io
 import json
 import os
 import re
+import sys
+
+# 手动在 GBK 控制台跑时，最后那条「⚠ Wiki 有、names.js 没有…」会抛
+# UnicodeEncodeError（文件其实已经写完，exit code 却是 1，容易被当成失败）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:                                          # noqa: BLE001
+    pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
@@ -71,7 +79,16 @@ for cid, nm in NAMES.items():
     _r = m.get("r", "")
     if _r not in ("SSR", "SR", "R"):
         _r = ""
-    out[cid] = {"r": _r, "d": m.get("d", ""), "t": m.get("t", "")}
+    # dEst = 旧版本写错的「本机下载时间」，不是实装日，绝不随包发出去
+    # （用户重装过哪个老角色，那个角色就会永久显示成重装那天，2026-11-25 反馈）。
+    _d = "" if m.get("dEst") else m.get("d", "")
+    rec = {"r": _r, "d": _d, "t": m.get("t", "")}
+    # p = 「包日期」= 资源包**源文件**的日期（CDN Last-Modified，对所有人一致）。
+    # 只在没有真实装日时才有意义；前端必须把它显示成「包日期」，不能叫实装日。
+    _p = m.get("p") or ""
+    if _p and not _d:
+        rec["p"] = _p
+    out[cid] = rec
 
 js = "window.__CHARMETA=" + json.dumps(out, ensure_ascii=False,
                                        separators=(",", ":")) + ";"

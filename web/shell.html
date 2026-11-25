@@ -357,6 +357,11 @@ body.wfs-hide #gBar{display:none !important}
     var m = ev.data;
     if (!m) return;
     if (m.t === 'ost:reload-music') { reloadMusic(); return; }
+    /* 只是数据表变了（装/卸一部剧情、导出音声都会重写 voicemap.js / gallery.js）：
+       点名让常驻原声集自己去比对并原地重画，比整页重载轻 —— 正在听的那首、滚动
+       位置都不受影响。点名那一次走 /api/dataver?fresh=1（不吃 3 秒指纹缓存），
+       所以一次就够，不需要再补查。 */
+    if (m.t === 'ost:metacheck') { metaCheck(fM); return; }
     if (m.t === 'ost:cfg') { applyCfg(m.d); return; }
     if (m.t === 'ost:storyplay') { if (cfg.pauseOnStory) send('pause'); return; }
     /* 播放器的「网页全屏」只隐藏它自己 iframe 里的菜单，这条常驻播放条
